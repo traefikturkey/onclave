@@ -1,0 +1,34 @@
+# Build artifacts
+build/
+dist/
+out/
+
+# Dependencies
+node_modules/
+vendor/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Editor files
+*.swo
+*.swp
+*~
+.idea/
+.vscode/
+
+# Logs
+*.log
+logs/
+
+# OS files
+.DS_Store
+Desktop.ini
+Thumbs.db
+
+# Temporary files
+*.tmp
+temp/
+tmp/
