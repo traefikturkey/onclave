@@ -9,7 +9,7 @@ status: draft
 
 Pi can already support local and networked agent communication through extension patterns, but LAN-based multi-machine coordination needs a secure discovery and authentication layer before it is safe to expose agent messaging. A random Pi instance on the LAN must not be able to discover an existing Pi hub and command its agents.
 
-The goal is to create a new `coms-lan.ts` system that makes Pi agents network-aware on a trusted LAN while keeping authorization explicit, auditable, and scoped to authenticated remote machine hubs.
+The goal is to create a new `onclave.ts` system that makes Pi agents network-aware on a trusted LAN while keeping authorization explicit, auditable, and scoped to authenticated remote machine hubs.
 
 ## Users / Jobs To Be Done
 
@@ -19,13 +19,13 @@ The goal is to create a new `coms-lan.ts` system that makes Pi agents network-aw
 
 ## Goals
 
-1. Build a new `coms-lan.ts` Pi communication system with one machine-level hub per machine and multiple local Pi instances registered to that hub.
+1. Build a new `onclave.ts` Pi communication system with one machine-level hub per machine and multiple local Pi instances registered to that hub.
 2. Support UDP LAN discovery so hubs can find each other without static configuration.
 3. Require authenticated hub-to-hub communication before any messaging using `authorized_keys`-style Ed25519 public keys.
 4. Use `wss://` WebSocket over self-signed TLS for direct hub-to-hub transport after authentication.
 5. Keep unknown discovered hubs visible as untrusted, with no messaging or communication privileges.
 6. Provide audit logs for discovery, authentication, trust changes, inbound messages, and outbound messages.
-7. Reuse the relevant design lessons from Joyride Docker cluster discovery and Pi `coms`/`coms-net` while building a separate `coms-lan.ts` implementation.
+7. Reuse the relevant design lessons from Joyride Docker cluster discovery and Pi `coms`/`coms-net` while building a separate `onclave.ts` implementation.
 
 ## Non-Goals
 
@@ -41,11 +41,11 @@ The goal is to create a new `coms-lan.ts` system that makes Pi agents network-aw
 
 ### Functional Requirements
 
-- Implement a new Pi extension/system named `coms-lan.ts`.
+- Implement a new Pi extension/system named `onclave.ts`.
 - Use one hub per machine.
 - Allow multiple local Pi instances to register with the local hub.
 - Local Pi instances must discover an existing local hub before attempting to start one.
-- Local hub discovery must use state under `~/.pi/coms-lan/`, including a hub state file and a lock to avoid startup races.
+- Local hub discovery must use state under `~/.pi/onclave/`, including a hub state file and a lock to avoid startup races.
 - If no live local hub exists, one Pi instance may start the hub and publish its local hub state.
 - The hub must bind without fixed-port conflicts, using an available local port and publishing the selected endpoint.
 - LAN discovery must use UDP broadcast similar to the Joyride Docker cluster discovery model.
@@ -54,7 +54,7 @@ The goal is to create a new `coms-lan.ts` system that makes Pi agents network-aw
 - Untrusted hubs must not be allowed to send messages, list local agents, or open authenticated communication beyond the discovery/auth attempt.
 - Remote hub authorization must be based on Ed25519 public keys from an imported or configured `authorized_keys` file.
 - Public keys are authorization credentials, not node identity.
-- Persistent node/hub identity must use generated IDs stored under `~/.pi/coms-lan/`.
+- Persistent node/hub identity must use generated IDs stored under `~/.pi/onclave/`.
 - Running hub and Pi process identity must use runtime instance IDs.
 - Pi instance registration must include session ID, process/runtime instance ID, project label, and local delivery endpoint.
 - Project display label must use git worktree branch name when available.
@@ -67,7 +67,7 @@ The goal is to create a new `coms-lan.ts` system that makes Pi agents network-aw
 - Reject stale or replayed handshakes.
 - Trusted keys may send messages according to v1 policy.
 - V1 includes full prompt send/await gated behind trusted-key authentication and audit logging.
-- All state, config, runtime files, and audit logs must live under `~/.pi/coms-lan/`.
+- All state, config, runtime files, and audit logs must live under `~/.pi/onclave/`.
 - Audit logging must include discovery, authentication success/failure, trust changes, inbound messages, and outbound messages.
 
 ### Non-Functional Requirements
@@ -100,7 +100,7 @@ Use Joyride Docker cluster as the primary reference for LAN discovery shape, lif
 - Config tests: https://github.com/traefikturkey/joyride/blob/main/plugins/docker-cluster/cluster_config_test.go
 - Delegate tests: https://github.com/traefikturkey/joyride/blob/main/plugins/docker-cluster/delegate_test.go
 
-Planning must compare the proposed `coms-lan` design against Joyride before coding, especially UDP packet format, discovery interval, peer cache behavior, config defaults, startup/shutdown lifecycle, and test coverage patterns.
+Planning must compare the proposed `Onclave` design against Joyride before coding, especially UDP packet format, discovery interval, peer cache behavior, config defaults, startup/shutdown lifecycle, and test coverage patterns.
 
 ### Pi Communication Prior Art
 
@@ -142,12 +142,12 @@ Use these as references for Pi extension shape, tool UX, local agent registratio
 - The parser should ignore blank lines and comments, accept only `ssh-ed25519`, base64-decode the OpenSSH wire payload, parse the `ssh-ed25519` key type and 32-byte public key, and reject everything else.
 - Add parser fixtures generated by `ssh-keygen -t ed25519`.
 - Do not read or modify private keys under `~/.ssh/`.
-- Generate app-specific hub signing keys under `~/.pi/coms-lan/`.
+- Generate app-specific hub signing keys under `~/.pi/onclave/`.
 
 ## Acceptance Criteria
 
 1. [ ] A local Pi instance can discover or start the single local machine hub without port conflicts.
-   - Verify: Start multiple Pi instances on the same machine with `coms-lan.ts` enabled.
+   - Verify: Start multiple Pi instances on the same machine with `onclave.ts` enabled.
    - Pass: Exactly one local hub is active and each Pi instance registers with it.
    - Fail: Multiple hubs race unnecessarily, fixed port conflicts occur, or instances cannot register.
 
@@ -173,7 +173,7 @@ Use these as references for Pi extension shape, tool UX, local agent registratio
 
 6. [ ] Audit logging captures required events.
    - Verify: Trigger discovery, failed auth, successful auth, trust change, inbound message, and outbound message.
-   - Pass: Each event type appears in `~/.pi/coms-lan/` audit logs with useful non-secret metadata.
+   - Pass: Each event type appears in `~/.pi/onclave/` audit logs with useful non-secret metadata.
    - Fail: Required events are missing or logs include secrets/private key material.
 
 7. [ ] Project labels are generated from git context with fallback behavior.
@@ -185,7 +185,7 @@ Use these as references for Pi extension shape, tool UX, local agent registratio
 
 | Option | Pros | Cons | Decision |
 |--------|------|------|----------|
-| Extend `coms-net.ts` | Reuses existing network comms shape | Risks breaking existing behavior and mixes security model into prior extension | Rejected for v1; build `coms-lan.ts` separately |
+| Extend `coms-net.ts` | Reuses existing network comms shape | Risks breaking existing behavior and mixes security model into prior extension | Rejected for v1; build `onclave.ts` separately |
 | One network listener per Pi instance | Simple direct mapping from agent to endpoint | Port conflicts, harder firewall/auth story, poor multi-instance UX | Rejected |
 | One hub per machine | Avoids per-instance port conflicts, centralizes LAN auth, lets local Pi instances register | Requires local hub lifecycle and registration | Accepted |
 | Full SWIM/memberlist in v1 | Strong membership/failure model | More complexity than needed for small LAN agent pools | Deferred |
@@ -203,18 +203,26 @@ Use these as references for Pi extension shape, tool UX, local agent registratio
 | `authorized_keys` parsing edge cases | Valid keys rejected or malformed keys accepted | Support only `ssh-ed25519` in v1, reject unsupported options/types, use `ssh-keygen` fixtures |
 | UDP broadcast blocked by network or firewall | Discovery does not work on some LANs | Keep static/manual endpoint configuration as a possible fallback during planning if needed |
 | Self-signed TLS trust friction | WSS connection setup may be awkward | Use app-level key auth as the trust mechanism and document certificate handling clearly |
-| Multiple local hubs race on startup | Port conflicts or split local registry | Use hub state file, health check, and lock file under `~/.pi/coms-lan/` |
+| Multiple local hubs race on startup | Port conflicts or split local registry | Use hub state file, health check, and lock file under `~/.pi/onclave/` |
 | Prompt loops between trusted agents | Token/cost waste | Require message IDs, response correlation, TTL/hop limit, and audit logs |
 | Sensitive data in discovery or audit logs | Credential or path leakage | Redact secrets, avoid raw cwd in discovery, log metadata not payload bodies unless explicitly needed |
 | Dependency risk in crypto/auth libraries | Supply chain or runtime compatibility issues | Prefer minimal dependencies, verify Bun/Pi compatibility, pin versions, and test core paths |
 
-## Open Questions
+## Resolved Questions
 
-- Should v1 include a manual static peer endpoint fallback if UDP broadcast is unavailable?
-- Should prompt payload bodies be included in audit logs, redacted, summarized, or omitted by default?
-- How should trust changes be performed in the user interface: manual file edits only, slash commands, or both?
-- Should `authorized_keys` options be rejected outright or ignored for `ssh-ed25519` lines in v1?
-- What WebSocket library or Pi runtime primitive should be used for `wss://`?
+- V1 includes manual peer fallback through explicit remote tool parameters and
+  persistent static peers in `~/.pi/onclave/config.json` when UDP broadcast is
+  unavailable.
+- Prompt and response payload bodies are omitted from audit logs by default.
+- Trust changes are file-based through `~/.pi/onclave/authorized_keys`, with
+  commands/tools for displaying the local public key line, showing the trust file
+  path, and validating/deduping/appending public key lines.
+- `authorized_keys` options are rejected outright for v1; only plain
+  `ssh-ed25519` public key lines are accepted.
+- WSS uses Node `https` plus `ws` for compatibility with the Pi extension
+  runtime, with app-level Ed25519 authentication as the trust gate.
+- V1 keeps the hub in-process inside the first Pi instance that wins the local
+  hub lock; a spawned hub process is deferred as a post-v1 hardening option.
 
 ## Plan Handoff
 
