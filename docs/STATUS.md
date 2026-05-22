@@ -133,7 +133,7 @@ Project/config files:
 - State path helpers rooted under `~/.pi/coms-lan/`.
 - Atomic JSON writes.
 - App-specific Ed25519 identity and signing key generation.
-- Persistent self-signed TLS material loading/generation under `~/.pi/coms-lan/`.
+- Persistent self-signed TLS material loading/generation under `~/.pi/coms-lan/` without requiring an external OpenSSL binary.
 - Authorized key trust loading from `~/.pi/coms-lan/authorized_keys`.
 - Public key export formatting for operator trust setup.
 - Trust append helper validates and dedupes public `ssh-ed25519` key lines.

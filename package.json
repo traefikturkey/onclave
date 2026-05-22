@@ -9,7 +9,8 @@
     "coms-lan:acceptance-host": "bun scripts/coms-lan-acceptance-host.ts"
   },
   "dependencies": {
-    "@noble/ed25519": "^3.0.0"
+    "@noble/ed25519": "^3.0.0",
+    "selfsigned": "^5.5.0"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.75.4",

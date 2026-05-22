@@ -1,13 +1,8 @@
-import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { promisify } from "node:util";
+import { readFile, writeFile } from "node:fs/promises";
+import selfsigned from "selfsigned";
 import type { ComsLanPaths } from "./state";
 import { ensureComsLanRoot } from "./state";
 import type { TlsMaterial } from "./wss-transport";
-
-const execFileAsync = promisify(execFile);
 
 export type TlsMaterialGenerator = () => Promise<TlsMaterial>;
 
@@ -44,39 +39,28 @@ async function readExistingTls(paths: ComsLanPaths): Promise<TlsMaterial | null>
 }
 
 async function generateSelfSignedTlsMaterial(): Promise<TlsMaterial> {
-  const dir = await mkdtemp(join(tmpdir(), "coms-lan-tls-"));
-  try {
-    await execFileAsync(
-      "openssl",
-      [
-        "req",
-        "-x509",
-        "-newkey",
-        "rsa:2048",
-        "-nodes",
-        "-keyout",
-        "key.pem",
-        "-out",
-        "cert.pem",
-        "-subj",
-        "/CN=localhost",
-        "-days",
-        "365",
+  const now = new Date();
+  const notAfterDate = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000);
+  const material = await selfsigned.generate(
+    [{ name: "commonName", value: "localhost" }],
+    {
+      notBeforeDate: now,
+      notAfterDate,
+      keySize: 2048,
+      algorithm: "sha256",
+      extensions: [
+        { name: "basicConstraints", cA: false },
+        { name: "keyUsage", digitalSignature: true, keyEncipherment: true },
+        { name: "extKeyUsage", serverAuth: true, clientAuth: true },
+        { name: "subjectAltName", altNames: [{ type: 2, value: "localhost" }, { type: 7, ip: "127.0.0.1" }] },
       ],
-      {
-        cwd: dir,
-        env: { ...process.env, MSYS_NO_PATHCONV: "1" },
-        windowsHide: true,
-      }
-    );
+    }
+  );
 
-    return {
-      cert: await readFile(join(dir, "cert.pem"), "utf8"),
-      key: await readFile(join(dir, "key.pem"), "utf8"),
-    };
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
+  return {
+    cert: material.cert,
+    key: material.private,
+  };
 }
 
 function validateTlsMaterial(material: TlsMaterial): void {
