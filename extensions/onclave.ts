@@ -10,6 +10,7 @@ import { createLocalAgentRegistration } from "../src/onclave/extension-helpers";
 import { loadIdentityPrivateKeyHex } from "../src/onclave/identity";
 import { createRemoteHubClient, RemoteHubAuthError } from "../src/onclave/remote-client";
 import type { DeliveredPrompt } from "../src/onclave/messages";
+import { renderOnclavePeerWidget } from "../src/onclave/peer-widget";
 import type { LocalAgentRegistration } from "../src/onclave/local-registry";
 import {
   assertAsyncReplyablePrompt,
@@ -57,6 +58,7 @@ export default function (pi: ExtensionAPI) {
   let localRegistration: LocalAgentRegistration | null = null;
   let sessionUi: ExtensionContext["ui"] | null = null;
   let peerWidgetTimer: ReturnType<typeof setInterval> | null = null;
+  const peerDisplayCache = new Map<string, { model?: string }>();
   const inboundPrompts = new Map<string, DeliveredPrompt>();
 
   pi.on("session_start", async (_event, ctx) => {
@@ -79,9 +81,9 @@ export default function (pi: ExtensionAPI) {
       await registerWithLocalHub(bootstrap.state.endpoint, localRegistration);
     }
 
-    await refreshOnclaveUi(sessionUi, bootstrap, paths);
+    await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
     peerWidgetTimer = setInterval(() => {
-      void refreshOnclaveUi(sessionUi, bootstrap, paths);
+      void refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
     }, 5_000);
     peerWidgetTimer.unref?.();
   });
@@ -107,6 +109,7 @@ export default function (pi: ExtensionAPI) {
     localSessionId = null;
     localRegistration = null;
     sessionUi = null;
+    peerDisplayCache.clear();
     inboundPrompts.clear();
   });
 
@@ -368,7 +371,8 @@ export default function (pi: ExtensionAPI) {
       try {
         const agents = await client.listAgents();
         bootstrap.runtime?.markPeerAuthenticated?.(remote.nodeId);
-        await refreshOnclaveUi(sessionUi, bootstrap, paths);
+        cachePeerDisplay(peerDisplayCache, remote.nodeId, agents);
+        await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
         const agentList = buildOnclaveAgentList({ heading: "remote_agents", agents });
         return {
           content: [{ type: "text" as const, text: agentList.text }],
@@ -377,7 +381,7 @@ export default function (pi: ExtensionAPI) {
       } catch (error) {
         if (error instanceof RemoteHubAuthError) {
           bootstrap.runtime?.markPeerAuthFailed?.(remote.nodeId);
-          await refreshOnclaveUi(sessionUi, bootstrap, paths);
+          await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
         }
         throw error;
       }
@@ -425,7 +429,7 @@ export default function (pi: ExtensionAPI) {
           }),
         });
         bootstrap.runtime?.markPeerAuthenticated?.(remote.nodeId);
-        await refreshOnclaveUi(sessionUi, bootstrap, paths);
+        await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
         if (response.type !== "send_accepted") {
           throw new Error(`remote send failed: ${JSON.stringify(response)}`);
         }
@@ -452,7 +456,7 @@ export default function (pi: ExtensionAPI) {
       } catch (error) {
         if (error instanceof RemoteHubAuthError) {
           bootstrap.runtime?.markPeerAuthFailed?.(remote.nodeId);
-          await refreshOnclaveUi(sessionUi, bootstrap, paths);
+          await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
         }
         throw error;
       }
@@ -478,7 +482,7 @@ export default function (pi: ExtensionAPI) {
       try {
         const result = await client.getResponse(params.msg_id);
         bootstrap.runtime?.markPeerAuthenticated?.(remote.nodeId);
-        await refreshOnclaveUi(sessionUi, bootstrap, paths);
+        await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
         return {
           content: [{ type: "text" as const, text: formatResponseResult(result) }],
           details: { msg_id: params.msg_id, result, endpoint: remote.endpoint },
@@ -486,7 +490,7 @@ export default function (pi: ExtensionAPI) {
       } catch (error) {
         if (error instanceof RemoteHubAuthError) {
           bootstrap.runtime?.markPeerAuthFailed?.(remote.nodeId);
-          await refreshOnclaveUi(sessionUi, bootstrap, paths);
+          await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
         }
         throw error;
       }
@@ -538,7 +542,7 @@ export default function (pi: ExtensionAPI) {
           }),
         });
         bootstrap.runtime?.markPeerAuthenticated?.(remote.nodeId);
-        await refreshOnclaveUi(sessionUi, bootstrap, paths);
+        await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
         if (response.type !== "send_accepted") {
           throw new Error(`onclave reply failed: ${JSON.stringify(response)}`);
         }
@@ -567,7 +571,7 @@ export default function (pi: ExtensionAPI) {
       } catch (error) {
         if (error instanceof RemoteHubAuthError) {
           bootstrap.runtime?.markPeerAuthFailed?.(remote.nodeId);
-          await refreshOnclaveUi(sessionUi, bootstrap, paths);
+          await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
         }
         throw error;
       }
@@ -674,7 +678,9 @@ function formatAsyncReplyPrompt(
 async function refreshOnclaveUi(
   ui: ExtensionContext["ui"] | null,
   bootstrap: BootstrapLocalHubResult | null,
-  paths: ReturnType<typeof getOnclavePaths>
+  paths: ReturnType<typeof getOnclavePaths>,
+  localRegistration: LocalAgentRegistration | null,
+  peerDisplayCache: Map<string, { model?: string }>
 ): Promise<void> {
   if (!ui) return;
   if (!bootstrap) {
@@ -688,23 +694,52 @@ async function refreshOnclaveUi(
   const peerNames = new Map(config.staticPeers.filter((peer) => peer.name).map((peer) => [peer.nodeId, peer.name as string]));
   const trustedCount = peers.filter((peer) => peer.trustState === "trusted").length;
   const authenticatedCount = peers.filter((peer) => peer.authState === "authenticated").length;
-  const lines = [
-    `Onclave peers: ${peers.length} discovered / ${trustedCount} trusted / ${authenticatedCount} authenticated`,
-  ];
+  const widgetPeers = peers.slice(0, 6).map((peer) => ({
+    ...peer,
+    displayName: peerNames.get(peer.nodeId) ?? shortNodeId(peer.nodeId),
+    model: peerDisplayCache.get(peer.nodeId)?.model,
+  }));
 
-  for (const peer of peers.slice(0, 4)) {
-    const label = peerNames.get(peer.nodeId) ?? peer.nodeId;
-    lines.push(`• ${label} ${peer.trustState}/${peer.authState} ${shortEndpoint(peer.endpoint)}`);
-  }
-  if (peers.length > 4) {
-    lines.push(`… ${peers.length - 4} more peer(s)`);
-  }
-  if (peers.length === 0) {
-    lines.push("• no remote peers discovered yet");
-  }
+  ui.setWidget?.(
+    "onclave-peers",
+    (_tui, theme) => ({
+      invalidate() {},
+      render(width: number): string[] {
+        return renderOnclavePeerWidget(
+          width,
+          {
+            localLabel: widgetLocalLabel(localRegistration, bootstrap.state.nodeId),
+            localColor: localRegistration?.color,
+            peers: widgetPeers,
+          },
+          theme
+        );
+      },
+    }),
+    { placement: "belowEditor" }
+  );
+  ui.setStatus?.("onclave", `onclave ${peers.length} peer(s) · ${trustedCount} trusted · ${authenticatedCount} auth`);
+}
 
-  ui.setWidget?.("onclave-peers", lines, { placement: "belowEditor" });
-  ui.setStatus?.("onclave", `onclave ${peers.length} peer(s)`);
+function cachePeerDisplay(
+  peerDisplayCache: Map<string, { model?: string }>,
+  nodeId: string,
+  agents: Array<{ model: string; status: string }>
+): void {
+  const preferred = agents.find((agent) => agent.status === "online") ?? agents[0];
+  if (!preferred) return;
+  peerDisplayCache.set(nodeId, { model: preferred.model });
+}
+
+function shortNodeId(nodeId: string): string {
+  return nodeId.startsWith("node_") ? nodeId.slice(5, 13) : nodeId.slice(0, 8);
+}
+
+function widgetLocalLabel(localRegistration: LocalAgentRegistration | null, nodeId: string): string {
+  if (!localRegistration?.name || localRegistration.name.startsWith("agent-")) {
+    return shortNodeId(nodeId);
+  }
+  return localRegistration.name;
 }
 
 function createOriginMetadata(input: {
@@ -724,15 +759,6 @@ function createOriginMetadata(input: {
     projectLabel: input.localRegistration.projectLabel,
     ...(input.inReplyToMsgId ? { inReplyToMsgId: input.inReplyToMsgId } : {}),
   };
-}
-
-function shortEndpoint(endpoint: string): string {
-  try {
-    const url = new URL(endpoint);
-    return `${url.hostname}:${url.port}${url.pathname}`;
-  } catch {
-    return endpoint;
-  }
 }
 
 function extractLastAssistantText(ctx: ExtensionContext): string {
