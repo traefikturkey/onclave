@@ -9,12 +9,10 @@ implementation_plan: ./IMPLEMENTATION_PLAN.md
 
 ## Current State
 
-Initial planning, security foundation, and local hub state/lock flow are in
-place for `coms-lan`.
-
-The repository now has a Bun/TypeScript scaffold, unit tests, core modules, and
-an initial Pi extension entrypoint. Remote send/get/await tools and full
-multi-process local registration are not implemented yet.
+The `coms-lan` implementation now covers the core secure LAN communication
+flow: local hub startup/reuse, local WSS registration and messaging, explicit
+Ed25519 trust, trusted remote WSS listing/send, metadata-only discovery, Pi tool
+surface, and audit-safe runtime events.
 
 ## Verification
 
@@ -27,7 +25,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 103 passing tests
+- `bun test`: 105 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -36,11 +34,11 @@ Result:
 |---|---|---|
 | Phase 0: Project Scaffold | Complete | Bun test/typecheck scaffold added. |
 | Phase 1: State, Identity, Audit, Authorized Keys | Complete | Core security/state helpers implemented and tested. |
-| Phase 2: Local Hub Lifecycle and Registration | Mostly complete | Hub state, health-check reuse, stale replacement, lock-protected start flow, dynamic local service binding, local registry, and local WSS registration frames implemented; broader multi-process acceptance remains. |
-| Phase 3: UDP Discovery | Mostly complete | Packet validation, untrusted peer cache, broadcast/listen lifecycle, and Node UDP adapter implemented; hub integration remains. |
-| Phase 4: WSS Transport and Mutual Authentication | Mostly complete | Bun WSS spike passed; signed handshake verifier, transport auth gate, frame processor, minimal WSS server/client wrapper, and composed hub runtime implemented; extension integration remains. |
-| Phase 5: Messaging and Tool Surface | Mostly complete | Local message routing, response correlation, timeout cleanup, WSS send_prompt delivery, Pi status/list/send/get/await tools, `agent_end` response submission, trusted remote client helpers, and explicit trusted remote list/send/get tools are implemented. |
-| Phase 6: Acceptance Hardening | Partial | Audit helper is wired into hub runtime for key registration/message/response paths; manual multi-process and LAN checks remain. |
+| Phase 2: Local Hub Lifecycle and Registration | Complete | Hub state, health-check reuse, stale replacement, lock-protected start flow, dynamic local service binding, local registry, local WSS registration frames, and bootstrap reuse acceptance are covered. |
+| Phase 3: UDP Discovery | Complete | Packet validation, untrusted peer cache, broadcast/listen lifecycle, Node UDP adapter, runtime broadcast integration, and metadata-only acceptance coverage are in place. |
+| Phase 4: WSS Transport and Mutual Authentication | Complete | Bun WSS transport, signed handshake verifier, transport auth gate, frame processor, hub runtime integration, and trusted remote acceptance coverage are in place. |
+| Phase 5: Messaging and Tool Surface | Mostly complete | Local message routing, response correlation, timeout cleanup, WSS send_prompt delivery, Pi status/list/send/get/await tools, `agent_end` response submission, trust info, trusted remote client helpers, and explicit trusted remote list/send/get tools are implemented. |
+| Phase 6: Acceptance Hardening | Partial | Automated acceptance covers local bootstrap reuse, local WSS register/send/get, metadata-only discovery packets, and trusted remote WSS list/send with exchanged keys; manual multi-host LAN checks remain. |
 
 ## Implemented Files
 
@@ -74,6 +72,7 @@ Runtime modules:
 
 Tests:
 
+- `tests/coms-lan/acceptance.test.ts`
 - `tests/coms-lan/audit.test.ts`
 - `tests/coms-lan/audited-runtime.test.ts`
 - `tests/coms-lan/authorized-keys.test.ts`
@@ -84,6 +83,7 @@ Tests:
 - `tests/coms-lan/extension-helpers.test.ts`
 - `tests/coms-lan/handshake.test.ts`
 - `tests/coms-lan/hub-runtime.test.ts`
+- `tests/coms-lan/identity-key.test.ts`
 - `tests/coms-lan/identity.test.ts`
 - `tests/coms-lan/local-hub.test.ts`
 - `tests/coms-lan/local-registry.test.ts`
@@ -167,6 +167,9 @@ Project/config files:
   without prompt/response bodies.
 - Hub runtime emits audit metadata for local registration, unregister, prompt
   routing, and response submission paths.
+- Automated acceptance coverage verifies first hub startup, second bootstrap
+  reuse, local WSS registration/send/response lookup, metadata-only discovery
+  packets, and trusted remote WSS listing/send after public key exchange.
 
 ## Security Notes
 
@@ -186,15 +189,16 @@ Project/config files:
 
 ## Open Implementation Decisions
 
-1. Hub lifetime: decide whether the hub runs in-process in the first Pi instance
-   or as a spawned child process.
+1. Hub lifetime: decide whether the hub remains in-process in the first Pi
+   instance or moves to a spawned child process.
 2. Static peers: decide whether v1 includes manual peer endpoints as a fallback
    when UDP broadcast is unavailable.
-3. Trust UX: decide whether v1 is file-edit only for `authorized_keys` or also
-   includes a command to import keys.
+3. Trust import UX: decide whether to add an append/import command in addition
+   to the current trust info command/tool.
 
 ## Next Actions
 
-1. Add end-to-end acceptance checks for local hub startup and trusted remote
-   listing.
+1. Run manual multi-host LAN checks with two Pi sessions on the same network.
 2. Expand audit wiring to discovery/auth transport paths if needed.
+3. Decide whether to add a trusted-key import command or keep v1 file-edit
+   based trust setup.
