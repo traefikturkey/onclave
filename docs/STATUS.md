@@ -27,7 +27,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 66 passing tests
+- `bun test`: 67 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -38,7 +38,7 @@ Result:
 | Phase 1: State, Identity, Audit, Authorized Keys | Complete | Core security/state helpers implemented and tested. |
 | Phase 2: Local Hub Lifecycle and Registration | Mostly complete | Hub state, health-check reuse, stale replacement, lock-protected start flow, dynamic local service binding, and local registry implemented; integration into extension remains. |
 | Phase 3: UDP Discovery | Mostly complete | Packet validation, untrusted peer cache, broadcast/listen lifecycle, and Node UDP adapter implemented; hub integration remains. |
-| Phase 4: WSS Transport and Mutual Authentication | Mostly complete | Bun WSS spike passed; signed handshake verifier, transport auth gate, frame processor, and minimal WSS server/client wrapper implemented; hub integration remains. |
+| Phase 4: WSS Transport and Mutual Authentication | Mostly complete | Bun WSS spike passed; signed handshake verifier, transport auth gate, frame processor, minimal WSS server/client wrapper, and composed hub runtime implemented; extension integration remains. |
 | Phase 5: Messaging and Tool Surface | Not started | Needs routing, response correlation, and Pi tools. |
 | Phase 6: Acceptance Hardening | Not started | Manual multi-process and LAN checks remain. |
 
@@ -51,6 +51,7 @@ Runtime modules:
 - `src/coms-lan/canonical-json.ts`
 - `src/coms-lan/discovery.ts`
 - `src/coms-lan/handshake.ts`
+- `src/coms-lan/hub-runtime.ts`
 - `src/coms-lan/identity.ts`
 - `src/coms-lan/local-hub.ts`
 - `src/coms-lan/local-registry.ts`
@@ -68,6 +69,7 @@ Tests:
 - `tests/coms-lan/discovery-service.test.ts`
 - `tests/coms-lan/discovery.test.ts`
 - `tests/coms-lan/handshake.test.ts`
+- `tests/coms-lan/hub-runtime.test.ts`
 - `tests/coms-lan/identity.test.ts`
 - `tests/coms-lan/local-hub.test.ts`
 - `tests/coms-lan/local-registry.test.ts`
@@ -121,6 +123,8 @@ Project/config files:
   send frames.
 - Minimal Bun WSS server/client wrapper handles frame exchange over self-signed
   TLS.
+- Composed hub runtime starts WSS transport, broadcasts discovery, registers
+  local agents, and exposes auth-gated remote listing.
 
 ## Security Notes
 
@@ -150,9 +154,9 @@ Project/config files:
 
 ## Next Actions
 
-1. Add integration tests that compose local hub lifecycle, registry, discovery,
-   and auth gating.
-2. Start the Pi extension entrypoint once composed hub behavior is covered.
-3. Add message routing tests after transport auth gates are in place.
-4. Implement message routing behind those tests.
-5. Add Pi tool surface after routing has a tested module boundary.
+1. Add message routing tests after transport auth gates are in place.
+2. Implement message routing behind those tests.
+3. Start the Pi extension entrypoint once routing has a tested module boundary.
+4. Add Pi tool surface after extension bootstrap works.
+5. Add end-to-end acceptance checks for local hub startup and trusted remote
+   listing.

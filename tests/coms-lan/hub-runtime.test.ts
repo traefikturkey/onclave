@@ -1,0 +1,194 @@
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { keygenAsync } from "@noble/ed25519";
+import { parseAuthorizedKeys } from "../../src/coms-lan/authorized-keys";
+import type { DiscoveryUdpSocket, UdpRemoteInfo } from "../../src/coms-lan/discovery";
+import { signHandshakePayload, type HandshakePayload } from "../../src/coms-lan/handshake";
+import { ComsLanHubRuntime } from "../../src/coms-lan/hub-runtime";
+import type { LocalAgentRegistration } from "../../src/coms-lan/local-registry";
+import type { ClientAuthFrame } from "../../src/coms-lan/transport";
+import { sendWssFrames, type TlsMaterial } from "../../src/coms-lan/wss-transport";
+
+const NOW = "2026-05-21T00:00:00.000Z";
+let tempDir: string | null = null;
+let tls: TlsMaterial;
+
+beforeAll(async () => {
+  const generated = await generateSelfSignedTls();
+  tempDir = generated.tempDir;
+  tls = generated.tls;
+});
+
+afterAll(async () => {
+  if (tempDir) await rm(tempDir, { recursive: true, force: true });
+});
+
+describe("ComsLanHubRuntime", () => {
+  it("starts WSS transport, broadcasts discovery, registers local agents, and gates remote listing", async () => {
+    const discoverySocket = new FakeUdpSocket();
+    const auth = await createClientAuthFrame();
+    const runtime = new ComsLanHubRuntime({
+      nodeId: "node_server",
+      hubInstanceId: "hub_server",
+      host: "127.0.0.1",
+      tls,
+      authorizedKeys: auth.authorizedKeys,
+      discoverySocket,
+      discoveryPort: 48889,
+      broadcastAddress: "255.255.255.255",
+      startedAt: NOW,
+      now: () => NOW,
+      staleAfterMs: 30_000,
+      offlineAfterMs: 60_000,
+    });
+
+    await runtime.start();
+    try {
+      const state = runtime.hubState();
+      expect(state.endpoint).toBe(`https://127.0.0.1:${runtime.wssPort()}`);
+      expect(discoverySocket.sent).toHaveLength(1);
+      expect(JSON.parse(discoverySocket.sent[0]?.data.toString("utf8") ?? "{}")).toMatchObject({
+        node_id: "node_server",
+        hub_instance_id: "hub_server",
+        wss_port: runtime.wssPort(),
+      });
+
+      const agent = runtime.registerLocalAgent(createRegistration());
+      const responses = await sendWssFrames(runtime.wssUrl(), [auth.frame, { type: "list_agents" }], {
+        rejectUnauthorized: false,
+      });
+
+      expect(responses[0]).toMatchObject({ type: "auth_ok" });
+      expect(responses[1]).toEqual({ type: "agents", agents: [agent] });
+    } finally {
+      await runtime.stop();
+    }
+
+    expect(discoverySocket.closed).toBe(true);
+  });
+});
+
+class FakeUdpSocket implements DiscoveryUdpSocket {
+  boundPort: number | null = null;
+  broadcastEnabled = false;
+  closed = false;
+  sent: Array<{ data: Buffer; port: number; address: string }> = [];
+
+  async bind(port: number): Promise<void> {
+    this.boundPort = port;
+  }
+
+  setBroadcast(enabled: boolean): void {
+    this.broadcastEnabled = enabled;
+  }
+
+  onMessage(_handler: (data: Buffer, remote: UdpRemoteInfo) => void): void {}
+
+  async send(data: Buffer, port: number, address: string): Promise<void> {
+    this.sent.push({ data, port, address });
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
+  }
+}
+
+async function generateSelfSignedTls(): Promise<{ tempDir: string; tls: TlsMaterial }> {
+  const dir = await mkdtemp(join(tmpdir(), "coms-lan-runtime-"));
+  execFileSync(
+    "openssl",
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-keyout",
+      "key.pem",
+      "-out",
+      "cert.pem",
+      "-subj",
+      "/CN=localhost",
+      "-days",
+      "1",
+    ],
+    {
+      cwd: dir,
+      env: { ...process.env, MSYS_NO_PATHCONV: "1" },
+      stdio: "ignore",
+    }
+  );
+
+  return {
+    tempDir: dir,
+    tls: {
+      cert: await readFile(join(dir, "cert.pem"), "utf8"),
+      key: await readFile(join(dir, "key.pem"), "utf8"),
+    },
+  };
+}
+
+async function createClientAuthFrame(): Promise<{
+  frame: ClientAuthFrame;
+  authorizedKeys: ReturnType<typeof parseAuthorizedKeys>;
+}> {
+  const keyPair = await keygenAsync();
+  const publicKeyHex = Buffer.from(keyPair.publicKey).toString("hex");
+  const privateKeyHex = Buffer.from(keyPair.secretKey).toString("hex");
+  const authorizedKeys = parseAuthorizedKeys(
+    `ssh-ed25519 ${encodeOpenSshEd25519PublicKey(keyPair.publicKey)} test@example`
+  );
+  const payload: HandshakePayload = {
+    protocol: "coms-lan",
+    version: 1,
+    client_node_id: "node_client",
+    server_node_id: "node_server",
+    client_instance_id: "hub_client",
+    server_instance_id: "hub_server",
+    client_endpoint: "wss://192.168.1.10:4444/v1/hub",
+    server_endpoint: "wss://127.0.0.1:4444/v1/hub",
+    client_nonce: "client-nonce",
+    server_nonce: "server-nonce",
+    timestamp: NOW,
+  };
+
+  return {
+    authorizedKeys,
+    frame: {
+      type: "client_auth",
+      payload,
+      publicKeyHex,
+      signatureHex: await signHandshakePayload(payload, privateKeyHex),
+    },
+  };
+}
+
+function createRegistration(): LocalAgentRegistration {
+  return {
+    sessionId: "session-1",
+    instanceId: "pi-instance-1",
+    name: "agent-one",
+    projectLabel: "onclave@main",
+    model: "test-model",
+    purpose: "testing",
+    color: "#336699",
+    explicit: false,
+    deliveryEndpoint: "local://session-1",
+  };
+}
+
+function encodeOpenSshEd25519PublicKey(publicKey: Uint8Array): string {
+  return Buffer.concat([
+    encodeSshString(Buffer.from("ssh-ed25519", "utf8")),
+    encodeSshString(Buffer.from(publicKey)),
+  ]).toString("base64");
+}
+
+function encodeSshString(value: Buffer): Buffer {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(value.length, 0);
+  return Buffer.concat([length, value]);
+}
