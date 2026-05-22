@@ -7,8 +7,9 @@ import { keygenAsync } from "@noble/ed25519";
 import { parseAuthorizedKeys } from "../../src/coms-lan/authorized-keys";
 import type { DiscoveryUdpSocket, UdpRemoteInfo } from "../../src/coms-lan/discovery";
 import { signHandshakePayload, type HandshakePayload } from "../../src/coms-lan/handshake";
+import type { RemoteHubClient } from "../../src/coms-lan/remote-client";
 import { ComsLanHubRuntime } from "../../src/coms-lan/hub-runtime";
-import type { LocalAgentRegistration } from "../../src/coms-lan/local-registry";
+import type { LocalAgent, LocalAgentRegistration } from "../../src/coms-lan/local-registry";
 import type { ClientAuthFrame } from "../../src/coms-lan/transport";
 import { sendWssFrames, type TlsMaterial } from "../../src/coms-lan/wss-transport";
 
@@ -27,6 +28,51 @@ afterAll(async () => {
 });
 
 describe("ComsLanHubRuntime", () => {
+  it("lists trusted remote agents through remote clients", async () => {
+    const remoteAgent = createAgent();
+    const runtime = new ComsLanHubRuntime({
+      nodeId: "node_server",
+      hubInstanceId: "hub_server",
+      host: "127.0.0.1",
+      tls,
+      authorizedKeys: [],
+      discoverySocket: new FakeUdpSocket(),
+      discoveryPort: 48889,
+      broadcastAddress: "255.255.255.255",
+      startedAt: NOW,
+      now: () => NOW,
+      staleAfterMs: 30_000,
+      offlineAfterMs: 60_000,
+      remoteClientFactory: (peer) => {
+        expect(peer.nodeId).toBe("node_remote");
+        return {
+          listAgents: async () => [remoteAgent],
+        } as Pick<RemoteHubClient, "listAgents">;
+      },
+    });
+
+    expect(
+      await runtime.listTrustedRemoteAgents([
+        {
+          nodeId: "node_remote",
+          hubInstanceId: "hub_remote",
+          endpoint: "wss://192.168.1.20:4444/v1/hub",
+          lastSeenAt: NOW,
+          trustState: "trusted",
+          authState: "not_attempted",
+        },
+        {
+          nodeId: "node_untrusted",
+          hubInstanceId: "hub_untrusted",
+          endpoint: "wss://192.168.1.30:4444/v1/hub",
+          lastSeenAt: NOW,
+          trustState: "untrusted",
+          authState: "not_attempted",
+        },
+      ])
+    ).toEqual([{ peerNodeId: "node_remote", agent: remoteAgent }]);
+  });
+
   it("starts WSS transport, broadcasts discovery, registers local agents, and gates remote listing", async () => {
     const discoverySocket = new FakeUdpSocket();
     const delivered: unknown[] = [];
@@ -190,6 +236,17 @@ async function createClientAuthFrame(): Promise<{
       publicKeyHex,
       signatureHex: await signHandshakePayload(payload, privateKeyHex),
     },
+  };
+}
+
+function createAgent(): LocalAgent {
+  return {
+    ...createRegistration(),
+    status: "online",
+    queueDepth: 0,
+    contextUsedPct: 0,
+    registeredAt: NOW,
+    lastSeenAt: NOW,
   };
 }
 

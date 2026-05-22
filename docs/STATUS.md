@@ -27,7 +27,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 93 passing tests
+- `bun test`: 97 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -39,7 +39,7 @@ Result:
 | Phase 2: Local Hub Lifecycle and Registration | Mostly complete | Hub state, health-check reuse, stale replacement, lock-protected start flow, dynamic local service binding, local registry, and local WSS registration frames implemented; broader multi-process acceptance remains. |
 | Phase 3: UDP Discovery | Mostly complete | Packet validation, untrusted peer cache, broadcast/listen lifecycle, and Node UDP adapter implemented; hub integration remains. |
 | Phase 4: WSS Transport and Mutual Authentication | Mostly complete | Bun WSS spike passed; signed handshake verifier, transport auth gate, frame processor, minimal WSS server/client wrapper, and composed hub runtime implemented; extension integration remains. |
-| Phase 5: Messaging and Tool Surface | Partial | Local message routing, response correlation, timeout cleanup, WSS send_prompt delivery, initial Pi status/list/send/get/await tools, and `agent_end` response submission are implemented; trusted remote send remains. |
+| Phase 5: Messaging and Tool Surface | Partial | Local message routing, response correlation, timeout cleanup, WSS send_prompt delivery, initial Pi status/list/send/get/await tools, `agent_end` response submission, and trusted remote client helpers are implemented; remote tools remain. |
 | Phase 6: Acceptance Hardening | Not started | Manual multi-process and LAN checks remain. |
 
 ## Implemented Files
@@ -64,6 +64,7 @@ Runtime modules:
 - `src/coms-lan/local-service.ts`
 - `src/coms-lan/messages.ts`
 - `src/coms-lan/project-label.ts`
+- `src/coms-lan/remote-client.ts`
 - `src/coms-lan/state.ts`
 - `src/coms-lan/tls.ts`
 - `src/coms-lan/transport.ts`
@@ -87,6 +88,7 @@ Tests:
 - `tests/coms-lan/local-service.test.ts`
 - `tests/coms-lan/messages.test.ts`
 - `tests/coms-lan/project-label.test.ts`
+- `tests/coms-lan/remote-client.test.ts`
 - `tests/coms-lan/state.test.ts`
 - `tests/coms-lan/tls.test.ts`
 - `tests/coms-lan/transport-frame.test.ts`
@@ -155,6 +157,9 @@ Project/config files:
   local agents directly or through local WSS registration frames, exposes
   status/peer/agent listing plus local send/get/await tools, injects inbound
   prompts, and submits `agent_end` responses.
+- Remote client helper authenticates to trusted WSS peers for agent listing,
+  prompt send, and response lookup.
+- Hub runtime can aggregate agent listings from trusted remote peers.
 
 ## Security Notes
 
@@ -183,7 +188,7 @@ Project/config files:
 
 ## Next Actions
 
-1. Add trusted remote send behavior beyond local hub routing.
+1. Add Pi tool surface for trusted remote agent listing/send behavior.
 2. Add end-to-end acceptance checks for local hub startup and trusted remote
    listing.
 3. Add audit integration around discovery, auth, and messaging events.

@@ -1,6 +1,7 @@
 import type { AuthorizedSshEd25519Key } from "./authorized-keys";
 import { DiscoveryService, type DiscoveredPeer, type DiscoveryUdpSocket } from "./discovery";
 import type { HubState } from "./local-hub";
+import { createRemoteHubClient, type RemoteHubClient, type RemoteHubClientIdentity } from "./remote-client";
 import {
   LocalAgentRegistry,
   type LocalAgent,
@@ -34,6 +35,13 @@ export type ComsLanHubRuntimeOptions = {
   messageTtlMs?: number;
   maxHops?: number;
   deliverPrompt?: (prompt: DeliveredPrompt) => Promise<void>;
+  remoteIdentity?: RemoteHubClientIdentity;
+  remoteClientFactory?: (peer: DiscoveredPeer) => Pick<RemoteHubClient, "listAgents">;
+};
+
+export type RemoteAgentListing = {
+  peerNodeId: string;
+  agent: LocalAgent;
 };
 
 export class ComsLanHubRuntime {
@@ -133,6 +141,17 @@ export class ComsLanHubRuntime {
     return this.discovery?.peers() ?? [];
   }
 
+  async listTrustedRemoteAgents(peers: DiscoveredPeer[] = this.discoveredPeers()): Promise<RemoteAgentListing[]> {
+    const trusted = peers.filter((peer) => peer.trustState === "trusted");
+    const listings: RemoteAgentListing[] = [];
+    for (const peer of trusted) {
+      const client = this.remoteClientFor(peer);
+      const agents = await client.listAgents();
+      listings.push(...agents.map((agent) => ({ peerNodeId: peer.nodeId, agent })));
+    }
+    return listings;
+  }
+
   private createFrameProcessor(): HubFrameProcessor {
     return new HubFrameProcessor({
       gate: new HubTransportAuthGate({
@@ -151,6 +170,23 @@ export class ComsLanHubRuntime {
 
   private async handleSendPrompt(frame: SendPromptFrame) {
     return this.messages.sendPrompt(frame);
+  }
+
+  private remoteClientFor(peer: DiscoveredPeer): Pick<RemoteHubClient, "listAgents"> {
+    if (this.options.remoteClientFactory) return this.options.remoteClientFactory(peer);
+    if (!this.options.remoteIdentity) {
+      throw new Error("remote identity is required to list trusted remote agents");
+    }
+    return createRemoteHubClient({
+      identity: this.options.remoteIdentity,
+      remote: {
+        nodeId: peer.nodeId,
+        hubInstanceId: peer.hubInstanceId,
+        endpoint: peer.endpoint,
+      },
+      now: this.options.now,
+      rejectUnauthorized: false,
+    });
   }
 }
 
