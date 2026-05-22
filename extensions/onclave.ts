@@ -12,7 +12,7 @@ import { createRemoteHubClient, RemoteHubAuthError } from "../src/onclave/remote
 import type { DeliveredPrompt } from "../src/onclave/messages";
 import type { LocalAgentRegistration } from "../src/onclave/local-registry";
 import { getOnclavePaths } from "../src/onclave/state";
-import { buildOnclaveStatus } from "../src/onclave/status";
+import { buildOnclaveAgentList, buildOnclavePeers, buildOnclaveStatus } from "../src/onclave/status";
 import { addAuthorizedKeyLine } from "../src/onclave/trust";
 import { sendWssFrames } from "../src/onclave/wss-transport";
 
@@ -192,6 +192,8 @@ export default function (pi: ExtensionAPI) {
       const status = buildOnclaveStatus({
         endpoint: bootstrap.state.endpoint,
         started: bootstrap.started,
+        nodeId: bootstrap.state.nodeId,
+        hubInstanceId: bootstrap.state.hubInstanceId,
         publicAuthorizedKeyLine: bootstrap.publicAuthorizedKeyLine,
         networkInterfaces: networkInterfaces(),
       });
@@ -206,6 +208,8 @@ export default function (pi: ExtensionAPI) {
           state: bootstrap.state,
           started: bootstrap.started,
           publicAuthorizedKeyLine: bootstrap.publicAuthorizedKeyLine,
+          nodeId: status.details.nodeId,
+          hubInstanceId: status.details.hubInstanceId,
           remoteEndpoints: status.details.remoteEndpoints,
         },
       };
@@ -220,11 +224,12 @@ export default function (pi: ExtensionAPI) {
     async execute() {
       const peers = bootstrap?.runtime?.discoveredPeers?.() ?? [];
       const config = await loadOnclaveConfig(paths);
+      const peerList = buildOnclavePeers({ discoveredPeers: peers, staticPeers: config.staticPeers });
       return {
         content: [
           {
             type: "text" as const,
-            text: `${peers.length} discovered peer(s), ${config.staticPeers.length} static peer(s)`,
+            text: peerList.text,
           },
         ],
         details: { peers, staticPeers: config.staticPeers },
@@ -340,8 +345,9 @@ export default function (pi: ExtensionAPI) {
       try {
         const agents = await client.listAgents();
         bootstrap.runtime?.markPeerAuthenticated?.(remote.nodeId);
+        const agentList = buildOnclaveAgentList({ heading: "remote_agents", agents });
         return {
-          content: [{ type: "text" as const, text: `${agents.length} remote agent(s)` }],
+          content: [{ type: "text" as const, text: agentList.text }],
           details: { agents, endpoint: remote.endpoint, node_id: remote.nodeId },
         };
       } catch (error) {
@@ -434,8 +440,9 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({}),
     async execute() {
       const agents = bootstrap?.runtime?.localAgents?.() ?? [];
+      const agentList = buildOnclaveAgentList({ heading: "local_agents", agents });
       return {
-        content: [{ type: "text" as const, text: `${agents.length} local agent(s)` }],
+        content: [{ type: "text" as const, text: agentList.text }],
         details: { agents },
       };
     },
