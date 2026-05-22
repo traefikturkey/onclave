@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import { formatPeerState, renderOnclavePeerWidget } from "../../src/onclave/peer-widget";
 
+const stripAnsi = (value: string) => value.replace(/\x1b\[[0-9;]*m/g, "");
+
 describe("renderOnclavePeerWidget", () => {
   const theme = {
     fg: (_name: string, text: string) => text,
@@ -33,23 +35,53 @@ describe("renderOnclavePeerWidget", () => {
       theme
     );
 
-    expect(lines[0]).toContain("onclave peers");
-    expect(lines[0]).toContain("host-a");
-    expect(lines[1]).toContain("host-b");
-    expect(lines[1]).toContain("gpt-5.4");
-    expect(lines[1]).toContain("trusted/auth");
-    expect(lines[1]).toContain("172.30.20.51:39207");
-    expect(lines[2]).toContain("lab-node");
-    expect(lines[2]).toContain("untrusted/seen");
-    expect(lines[2]).toContain("192.168.1.44:4444");
-    expect(lines.at(-1)).toContain("┛");
+    const normalized = lines.map(stripAnsi);
+
+    expect(normalized[0]).toContain("onclave peers");
+    expect(normalized[0]).toContain("host-a");
+    expect(normalized[0]).not.toContain(" ━host-a");
+    expect(normalized[0]).toContain("━ host-a ━┓");
+    expect(normalized[1]).toContain("●");
+    expect(normalized[1]).toContain("host-b");
+    expect(normalized[1]).toContain("gpt-5.4");
+    expect(normalized[1]).toContain("trusted/auth");
+    expect(normalized[1]).toContain("172.30.20.51:39207");
+    expect(normalized[2]).toContain("◆");
+    expect(normalized[2]).toContain("lab-node");
+    expect(normalized[2]).toContain("untrusted/seen");
+    expect(normalized[2]).toContain("192.168.1.44:4444");
+    expect(normalized.at(-1)).toContain("┛");
+  });
+
+  it("does not truncate the model name when there is enough width", () => {
+    const lines = renderOnclavePeerWidget(
+      150,
+      {
+        localLabel: "host-a",
+        peers: [
+          {
+            nodeId: "node_01KS8ABYE3Y9RV4NMF35YXCXX9",
+            displayName: "agent-dev1",
+            endpoint: "wss://172.30.20.50:41047/v1/hub",
+            trustState: "trusted",
+            authState: "authenticated",
+            model: "claude-sonnet-4.6",
+          },
+        ],
+      },
+      theme
+    );
+
+    const normalized = stripAnsi(lines[1]);
+    expect(normalized).toContain("claude-sonnet-4.6");
+    expect(normalized).not.toContain("claude-sonnet…");
   });
 
   it("renders an empty-state panel when no peers are available", () => {
     const lines = renderOnclavePeerWidget(40, { localLabel: "host-a", peers: [] }, theme);
 
     expect(lines).toHaveLength(3);
-    expect(lines[1]).toContain("no peers discovered");
+    expect(stripAnsi(lines[1])).toContain("no peers discovered");
   });
 });
 
