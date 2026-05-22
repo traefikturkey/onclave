@@ -38,7 +38,7 @@ Result:
 | Phase 3: UDP Discovery | Complete | Packet validation, untrusted peer cache, broadcast/listen lifecycle, Node UDP adapter, runtime broadcast integration, and metadata-only acceptance coverage are in place. |
 | Phase 4: WSS Transport and Mutual Authentication | Complete | Bun WSS transport, signed handshake verifier, transport auth gate, frame processor, hub runtime integration, and trusted remote acceptance coverage are in place. |
 | Phase 5: Messaging and Tool Surface | Mostly complete | Local message routing, response correlation, timeout cleanup, WSS send_prompt delivery, Pi status/list/send/get/await tools, `agent_end` response submission, trust info, trusted remote client helpers, and explicit trusted remote list/send/get tools are implemented. |
-| Phase 6: Acceptance Hardening | Partial | Automated acceptance covers local bootstrap reuse, local WSS register/send/get, metadata-only discovery packets, and trusted remote WSS list/send with exchanged keys; manual multi-host LAN checks remain. |
+| Phase 6: Acceptance Hardening | Partial | Automated acceptance covers local bootstrap reuse, local WSS register/send/get, metadata-only discovery packets, and trusted remote WSS list/send with exchanged keys. Manual multi-host LAN runbook is documented; physical LAN execution remains. |
 
 ## Implemented Files
 
@@ -104,6 +104,8 @@ Project/config files:
 - `bun.lock`
 - `bunfig.toml`
 - `tsconfig.json`
+- `docs/COMS_LAN_DECISIONS.md`
+- `docs/COMS_LAN_MANUAL_ACCEPTANCE.md`
 - `docs/IMPLEMENTATION_PLAN.md`
 
 ## Completed Capabilities
@@ -170,6 +172,8 @@ Project/config files:
 - Automated acceptance coverage verifies first hub startup, second bootstrap
   reuse, local WSS registration/send/response lookup, metadata-only discovery
   packets, and trusted remote WSS listing/send after public key exchange.
+- Manual multi-host LAN acceptance runbook is documented in
+  `docs/COMS_LAN_MANUAL_ACCEPTANCE.md`.
 
 ## Security Notes
 
@@ -187,18 +191,23 @@ Project/config files:
   native `WebSocket` using self-signed TLS with certificate verification disabled
   at the WebSocket layer. App-level Ed25519 auth remains the trust gate.
 
-## Open Implementation Decisions
+## Resolved Implementation Decisions
 
-1. Hub lifetime: decide whether the hub remains in-process in the first Pi
-   instance or moves to a spawned child process.
-2. Static peers: decide whether v1 includes manual peer endpoints as a fallback
-   when UDP broadcast is unavailable.
-3. Trust import UX: decide whether to add an append/import command in addition
-   to the current trust info command/tool.
+1. Hub lifetime: v1 keeps the hub in-process inside the first Pi instance that
+   wins the local hub lock. A spawned child process remains a post-v1 hardening
+   option.
+2. Static/manual peers: v1 supports manual fallback through explicit remote tool
+   parameters (`endpoint`, `node_id`, `hub_instance_id`) instead of persistent
+   static peer configuration.
+3. Trust import UX: v1 keeps trust changes file-based through
+   `~/.pi/coms-lan/authorized_keys`, with `/coms-lan-trust` and
+   `coms_lan_trust_info` for public-key setup guidance.
+
+See `docs/COMS_LAN_DECISIONS.md` for rationale and consequences.
 
 ## Next Actions
 
-1. Run manual multi-host LAN checks with two Pi sessions on the same network.
+1. Execute the documented manual multi-host LAN runbook on two physical hosts.
 2. Expand audit wiring to discovery/auth transport paths if needed.
-3. Decide whether to add a trusted-key import command or keep v1 file-edit
-   based trust setup.
+3. Decide whether post-v1 should add persistent static peer config or a trusted
+   key import command.

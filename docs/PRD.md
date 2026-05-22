@@ -208,13 +208,20 @@ Use these as references for Pi extension shape, tool UX, local agent registratio
 | Sensitive data in discovery or audit logs | Credential or path leakage | Redact secrets, avoid raw cwd in discovery, log metadata not payload bodies unless explicitly needed |
 | Dependency risk in crypto/auth libraries | Supply chain or runtime compatibility issues | Prefer minimal dependencies, verify Bun/Pi compatibility, pin versions, and test core paths |
 
-## Open Questions
+## Resolved Questions
 
-- Should v1 include a manual static peer endpoint fallback if UDP broadcast is unavailable?
-- Should prompt payload bodies be included in audit logs, redacted, summarized, or omitted by default?
-- How should trust changes be performed in the user interface: manual file edits only, slash commands, or both?
-- Should `authorized_keys` options be rejected outright or ignored for `ssh-ed25519` lines in v1?
-- What WebSocket library or Pi runtime primitive should be used for `wss://`?
+- V1 includes manual peer fallback through explicit remote tool parameters when
+  UDP broadcast is unavailable; persistent static peer configuration is
+  deferred.
+- Prompt and response payload bodies are omitted from audit logs by default.
+- Trust changes are file-based through `~/.pi/coms-lan/authorized_keys`, with a
+  command/tool for displaying the local public key line and trust file path.
+- `authorized_keys` options are rejected outright for v1; only plain
+  `ssh-ed25519` public key lines are accepted.
+- WSS uses Bun native `Bun.serve({ tls, websocket })` and native `WebSocket`,
+  with app-level Ed25519 authentication as the trust gate.
+- V1 keeps the hub in-process inside the first Pi instance that wins the local
+  hub lock; a spawned hub process is deferred as a post-v1 hardening option.
 
 ## Plan Handoff
 

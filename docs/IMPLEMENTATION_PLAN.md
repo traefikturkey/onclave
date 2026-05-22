@@ -488,25 +488,30 @@ Exit criteria:
 
 - All PRD acceptance criteria are demonstrably covered.
 
-## Open Questions to Resolve Before Coding
+## Resolved Planning Questions
 
-1. Should v1 include static peer endpoints as a fallback when UDP broadcast is
-   unavailable?
-2. Should audit logs always omit prompt/response bodies, or should an explicit
-   opt-in payload logging mode exist?
-3. Should trust changes be file edits only in v1, or should a command also append
-   public keys to `authorized_keys`?
-4. Should `authorized_keys` lines with options be rejected or ignored when the key
-   type is `ssh-ed25519`?
-5. Which WebSocket/TLS primitive should be used in the Pi/Bun runtime for stable
-   `wss://` support?
-6. Should the hub run in-process with the first Pi instance or as a spawned child
-   process for better lifetime independence?
+1. **Static peer fallback:** v1 supports manual peer fallback through explicit
+   remote tool parameters (`endpoint`, `node_id`, `hub_instance_id`). Persistent
+   static peer configuration is deferred.
+2. **Audit payloads:** audit logs omit prompt and response bodies by default.
+   Payload logging is not part of v1.
+3. **Trust changes:** v1 keeps trust changes file-based through
+   `~/.pi/coms-lan/authorized_keys`, with a command/tool that displays the local
+   public key line and trust file path. Automatic key import is deferred.
+4. **`authorized_keys` options:** options are rejected in v1. Only plain
+   `ssh-ed25519` public key lines are accepted.
+5. **WSS primitive:** v1 uses Bun native `Bun.serve({ tls, websocket })` and the
+   native `WebSocket` client, with app-level Ed25519 authentication as the trust
+   gate.
+6. **Hub lifetime:** v1 keeps the hub in-process inside the first Pi instance
+   that wins the local hub lock. A spawned child process remains a post-v1
+   hardening option.
 
-## Immediate Next Steps
+Detailed rationale is recorded in `docs/COMS_LAN_DECISIONS.md`.
 
-1. Resolve the WebSocket/TLS primitive choice with a small runtime spike.
-2. Resolve whether the hub should be in-process or a spawned child process.
-3. Add the minimal test scaffold.
-4. Start with Phase 1 tests for authorized keys, canonical JSON, identity, and
-   audit logging.
+## Remaining Next Steps
+
+1. Execute `docs/COMS_LAN_MANUAL_ACCEPTANCE.md` on two physical LAN hosts.
+2. Expand audit wiring to discovery/auth transport paths if needed.
+3. Consider post-v1 persistent static peer config or trusted-key import UX after
+   manual LAN validation.
