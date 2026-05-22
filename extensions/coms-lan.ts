@@ -49,7 +49,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     bootstrap = await bootstrapLocalHub(paths, {
-      host: "127.0.0.1",
+      host: "0.0.0.0",
       discoveryPort: DEFAULT_DISCOVERY_PORT,
       broadcastAddress: DEFAULT_BROADCAST_ADDRESS,
       now: () => new Date().toISOString(),

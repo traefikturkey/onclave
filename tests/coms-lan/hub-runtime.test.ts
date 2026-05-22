@@ -132,7 +132,7 @@ describe("ComsLanHubRuntime", () => {
     const runtime = new ComsLanHubRuntime({
       nodeId: "node_server",
       hubInstanceId: "hub_server",
-      host: "127.0.0.1",
+      host: "0.0.0.0",
       tls,
       authorizedKeys: auth.authorizedKeys,
       discoverySocket,
