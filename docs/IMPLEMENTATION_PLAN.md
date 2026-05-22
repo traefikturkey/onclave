@@ -1,6 +1,6 @@
 ---
 created: 2026-05-21
-status: draft
+status: active
 source_prd: ./PRD.md
 ---
 
@@ -483,10 +483,13 @@ Exit criteria:
 - Inspect audit logs for required events and absence of secrets/private material.
 - Document minimal operator setup for importing public keys and starting Pi with
   the extension.
+- Validate the end-to-end flow on two physical LAN hosts.
 
 Exit criteria:
 
 - All PRD acceptance criteria are demonstrably covered.
+- Physical two-host LAN validation confirms discovery, trust exchange,
+  authenticated remote listing, trusted remote send/get, and clean audit scans.
 
 ## Resolved Planning Questions
 
@@ -510,8 +513,25 @@ Exit criteria:
 
 Detailed rationale is recorded in `docs/COMS_LAN_DECISIONS.md`.
 
+## Implementation Status Update
+
+As of 2026-05-22, the documented manual LAN acceptance flow has been executed on two physical hosts on the same subnet.
+
+Observed result:
+
+- peer discovery succeeded,
+- explicit trust exchange succeeded,
+- trusted remote agent listing succeeded,
+- trusted remote send/get succeeded,
+- audit scans passed on both hosts.
+
+This moves the implementation plan to functionally complete for the PRD v1
+scope.
+
 ## Remaining Next Steps
 
-1. Execute `docs/COMS_LAN_MANUAL_ACCEPTANCE.md` on two physical LAN hosts.
-2. Consider post-v1 trust removal UX or automatic static peer aggregation if
-   manual LAN validation shows they are needed.
+1. Improve operator-facing endpoint reporting so `coms_lan_status` better
+   distinguishes loopback bind metadata from LAN-reachable peer endpoints.
+2. Consider post-v1 trust removal UX, reverse-direction acceptance helpers, or
+   automatic static peer aggregation if future operator testing shows they are
+   needed.

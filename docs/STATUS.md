@@ -12,7 +12,7 @@ implementation_plan: ./IMPLEMENTATION_PLAN.md
 The `coms-lan` implementation now covers the core secure LAN communication
 flow: local hub startup/reuse, local WSS registration and messaging, explicit
 Ed25519 trust, trusted remote WSS listing/send, metadata-only discovery, Pi tool
-surface, and audit-safe runtime events.
+surface, audit-safe runtime events, and physical two-host LAN acceptance.
 
 ## Verification
 
@@ -23,10 +23,17 @@ bun test
 bun run typecheck
 ```
 
+Manual verification:
+
+- 2026-05-22: two physical LAN hosts on the same subnet completed the manual
+  trust exchange, discovery, trusted remote agent listing, trusted remote
+  send/get, and audit scan checks.
+
 Result:
 
 - `bun test`: 118 passing tests
 - `bun run typecheck`: passing
+- manual LAN acceptance: passed on two physical hosts
 
 ## Phase Progress
 
@@ -37,8 +44,8 @@ Result:
 | Phase 2: Local Hub Lifecycle and Registration | Complete | Hub state, health-check reuse, stale replacement, lock-protected start flow, dynamic local service binding, local registry, local WSS registration frames, and bootstrap reuse acceptance are covered. |
 | Phase 3: UDP Discovery | Complete | Packet validation, untrusted peer cache, broadcast/listen lifecycle, Node UDP adapter, runtime broadcast integration, and metadata-only acceptance coverage are in place. |
 | Phase 4: WSS Transport and Mutual Authentication | Complete | Bun WSS transport, signed handshake verifier, transport auth gate, frame processor, hub runtime integration, and trusted remote acceptance coverage are in place. |
-| Phase 5: Messaging and Tool Surface | Mostly complete | Local message routing, response correlation, timeout cleanup, WSS send_prompt delivery, Pi status/list/send/get/await tools, `agent_end` response submission, trust info/add, static peer listing, trusted remote client helpers, and explicit/static trusted remote list/send/get tools are implemented. |
-| Phase 6: Acceptance Hardening | Partial | Automated acceptance covers local bootstrap reuse, local WSS register/send/get, metadata-only discovery packets, and trusted remote WSS list/send with exchanged keys. Manual multi-host LAN runbook is documented; physical LAN execution remains. |
+| Phase 5: Messaging and Tool Surface | Complete | Local message routing, response correlation, timeout cleanup, WSS send_prompt delivery, Pi status/list/send/get/await tools, `agent_end` response submission, trust info/add, static peer listing, trusted remote client helpers, and explicit/static trusted remote list/send/get tools are implemented. |
+| Phase 6: Acceptance Hardening | Complete | Automated acceptance passes, the manual multi-host LAN runbook is documented, prompt-template helpers reduce operator friction, and a two-physical-host LAN run completed successfully with passing audit scans. |
 
 ## Implemented Files
 
@@ -195,9 +202,17 @@ Project/config files:
   packets, and trusted remote WSS listing/send after public key exchange.
 - Manual multi-host LAN acceptance runbook is documented in
   `docs/COMS_LAN_MANUAL_ACCEPTANCE.md`.
+- Project prompt templates under `.pi/prompts/` reduce manual operator
+  copy/paste during two-host acceptance runs.
 - Host-side acceptance helper script initializes local identity when needed,
   prints local public key/endpoint metadata, writes optional static peers, and
   scans audit logs for obvious secret markers.
+- Physical two-host LAN acceptance completed successfully with:
+    - UDP peer discovery,
+    - explicit trust exchange,
+    - authenticated remote agent listing,
+    - trusted remote send/get response correlation,
+    - passing audit scans on both hosts.
 
 ## Security Notes
 
@@ -231,6 +246,8 @@ See `docs/COMS_LAN_DECISIONS.md` for rationale and consequences.
 
 ## Next Actions
 
-1. Execute the documented manual multi-host LAN runbook on two physical hosts.
-2. Consider post-v1 trust removal UX or automatic static peer aggregation if
-   manual validation shows they are needed.
+1. Improve operator clarity around LAN-reachable endpoints in `coms_lan_status`
+   so the tool does not imply that `127.0.0.1` is the cross-host address.
+2. Consider post-v1 trust removal UX, reverse-direction acceptance helpers, or
+   automatic static peer aggregation if further operator testing shows they are
+   needed.

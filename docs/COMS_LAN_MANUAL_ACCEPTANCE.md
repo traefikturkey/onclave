@@ -1,6 +1,6 @@
 ---
 created: 2026-05-21
-status: pending-manual-run
+status: active
 source_prd: ./PRD.md
 ---
 
@@ -8,6 +8,12 @@ source_prd: ./PRD.md
 
 This runbook covers the manual multi-host checks that cannot be fully proven by
 single-machine unit/integration tests.
+
+Manual status:
+
+- 2026-05-22: executed successfully on two physical hosts on the same subnet.
+- Discovery, trust exchange, trusted remote list/send/get, and audit scans all
+  passed.
 
 ## Prerequisites
 
