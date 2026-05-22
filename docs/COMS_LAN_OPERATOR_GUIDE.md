@@ -34,6 +34,40 @@ tls.key.pem          # local TLS private key; do not copy
 Do not copy private key files between machines. Do not use or modify private
 keys under `~/.ssh/` for this system.
 
+## Acceptance Helper Script
+
+From this repository on each host, run:
+
+```bash
+bun run coms-lan:acceptance-host -- --host-name host-a
+```
+
+The helper prints:
+
+- local identity and hub state if Pi has already started `coms-lan`
+- the public key line to copy to the peer
+- `coms_lan_trust_add` command for the peer
+- endpoint, node ID, and hub instance ID values for remote tools
+- suggested Pi tool commands for the acceptance flow
+
+After you know the peer's endpoint and IDs, you can also write a static peer:
+
+```bash
+bun run coms-lan:acceptance-host -- \
+  --host-name host-a \
+  --peer-name host-b \
+  --peer-node-id node_... \
+  --peer-hub-instance-id hub_... \
+  --peer-endpoint wss://HOST_B_IP:PORT/v1/hub \
+  --write-static-peer
+```
+
+Optional audit check:
+
+```bash
+bun run coms-lan:acceptance-host -- --audit-scan
+```
+
 ## First Run
 
 Start Pi with the `extensions/coms-lan.ts` extension enabled.

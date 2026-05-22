@@ -30,6 +30,30 @@ Default discovery port: `48889/udp`.
   tool.
 - Do not paste prompt or response bodies into audit logs or trust files.
 
+## Helper Script
+
+From this repository on each host, run:
+
+```bash
+bun run coms-lan:acceptance-host -- --host-name host-a
+```
+
+Run it once before starting Pi to see prerequisites, then again after
+`coms_lan_status` has created local state. The helper prints the local public
+key line, peer trust command, local endpoint/IDs, and suggested Pi tool calls.
+
+After collecting peer endpoint metadata, you can write a static peer entry:
+
+```bash
+bun run coms-lan:acceptance-host -- \
+  --host-name host-a \
+  --peer-name host-b \
+  --peer-node-id node_... \
+  --peer-hub-instance-id hub_... \
+  --peer-endpoint wss://HOST_B_IP:PORT/v1/hub \
+  --write-static-peer
+```
+
 ## Check 1: One Local Hub per Machine
 
 1. Start one Pi session with `coms-lan` enabled on Host A.

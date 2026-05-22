@@ -1,0 +1,258 @@
+#!/usr/bin/env bun
+import { access, readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { loadComsLanConfig, writeComsLanConfig, type ComsLanConfig, type StaticPeerConfig } from "../src/coms-lan/config";
+import type { ComsLanIdentity } from "../src/coms-lan/identity";
+import type { HubState } from "../src/coms-lan/local-hub";
+import { getComsLanPaths } from "../src/coms-lan/state";
+import { formatAuthorizedKeyLine } from "../src/coms-lan/trust";
+
+export type AcceptanceHostOptions = {
+  root: string;
+  hostName: string;
+  peer?: StaticPeerConfig;
+  writeStaticPeer: boolean;
+  auditScan: boolean;
+};
+
+type LocalAcceptanceState = {
+  root: string;
+  identity: ComsLanIdentity | null;
+  hub: HubState | null;
+  authorizedKeyLine: string | null;
+  config: ComsLanConfig | null;
+  auditLogExists: boolean;
+};
+
+const DEFAULT_HOST_NAME = "this-host";
+
+export async function loadLocalAcceptanceState(root: string): Promise<LocalAcceptanceState> {
+  const paths = getComsLanPaths(root);
+  const identity = await readJsonFile<ComsLanIdentity>(paths.identity);
+  const hub = await readJsonFile<HubState>(paths.hubState);
+  const config = await loadComsLanConfig(paths).catch(() => null);
+  const auditLogExists = await fileExists(paths.auditLog);
+  return {
+    root,
+    identity,
+    hub,
+    authorizedKeyLine: identity ? formatAuthorizedKeyLine(identity) : null,
+    config,
+    auditLogExists,
+  };
+}
+
+export function upsertStaticPeer(config: ComsLanConfig, peer: StaticPeerConfig): ComsLanConfig {
+  const peers = config.staticPeers.filter((item) => item.name !== peer.name);
+  return { version: 1, staticPeers: [...peers, peer] };
+}
+
+export function renderAcceptanceHostReport(state: LocalAcceptanceState, options: AcceptanceHostOptions): string {
+  const peerName = options.peer?.name ?? "peer-host";
+  const lines: string[] = [];
+  lines.push(`# coms-lan acceptance helper: ${options.hostName}`);
+  lines.push("");
+  lines.push(`State root: ${state.root}`);
+  lines.push("");
+  lines.push("## Local status");
+  lines.push(`- identity: ${state.identity ? state.identity.nodeId : "missing; start Pi with coms-lan first"}`);
+  lines.push(`- hub: ${state.hub ? `${state.hub.endpoint} (${state.hub.hubInstanceId})` : "missing; run coms_lan_status in Pi first"}`);
+  lines.push(`- config static peers: ${state.config ? state.config.staticPeers.length : "unreadable"}`);
+  lines.push(`- audit log: ${state.auditLogExists ? "present" : "not present yet"}`);
+  lines.push("");
+
+  lines.push("## Step A: copy this public key line to the other host");
+  lines.push("```text");
+  lines.push(state.authorizedKeyLine ?? "Start Pi with coms-lan first, then rerun this script.");
+  lines.push("```");
+  lines.push("");
+
+  lines.push("## Step B: in Pi on the other host, trust this host");
+  lines.push("```text");
+  lines.push(state.authorizedKeyLine ? `coms_lan_trust_add public_key_line=\"${state.authorizedKeyLine}\"` : "coms_lan_trust_info");
+  lines.push("```");
+  lines.push("");
+
+  if (state.hub && state.identity) {
+    lines.push("## Step C: values the other host can use to reach this host");
+    lines.push("```text");
+    lines.push(`endpoint=${state.hub.endpoint.replace(/^https:/, "wss:")}/v1/hub`);
+    lines.push(`node_id=${state.identity.nodeId}`);
+    lines.push(`hub_instance_id=${state.hub.hubInstanceId}`);
+    lines.push("```");
+    lines.push("");
+  }
+
+  if (options.peer) {
+    lines.push("## Step D: test this host reaching the configured peer in Pi");
+    lines.push("```text");
+    lines.push(`coms_lan_remote_agents peer_name=\"${peerName}\"`);
+    lines.push(`coms_lan_remote_send peer_name=\"${peerName}\" target_session_id=\"REMOTE_SESSION_ID\" prompt=\"Reply with: coms-lan acceptance ok\"`);
+    lines.push(`coms_lan_remote_get peer_name=\"${peerName}\" msg_id=\"MSG_ID\"`);
+    lines.push("```");
+  } else {
+    lines.push("## Step D: after you know the other host endpoint, rerun with peer details");
+    lines.push("```bash");
+    lines.push("bun run coms-lan:acceptance-host -- --host-name host-a \\");
+    lines.push("  --peer-name host-b \\");
+    lines.push("  --peer-node-id node_... \\");
+    lines.push("  --peer-hub-instance-id hub_... \\");
+    lines.push("  --peer-endpoint wss://HOST_B_IP:PORT/v1/hub \\");
+    lines.push("  --write-static-peer");
+    lines.push("```");
+  }
+  lines.push("");
+
+  lines.push("## Step E: checks to run in Pi on this host");
+  lines.push("```text");
+  lines.push("coms_lan_status");
+  lines.push("coms_lan_peers");
+  lines.push("coms_lan_static_peers");
+  lines.push("coms_lan_agents");
+  lines.push("```");
+  return lines.join("\n");
+}
+
+async function main(): Promise<void> {
+  const options = parseArgs(process.argv.slice(2));
+  const paths = getComsLanPaths(options.root);
+  if (options.peer && options.writeStaticPeer) {
+    const config = await loadComsLanConfig(paths);
+    await writeComsLanConfig(paths, upsertStaticPeer(config, options.peer));
+    console.log(`[OK] wrote static peer '${options.peer.name ?? options.peer.nodeId}' to ${paths.config}`);
+  }
+
+  const state = await loadLocalAcceptanceState(options.root);
+  console.log(renderAcceptanceHostReport(state, options));
+
+  if (options.auditScan) {
+    await scanAuditLog(paths.auditLog);
+  }
+}
+
+function parseArgs(args: string[]): AcceptanceHostOptions {
+  const options: AcceptanceHostOptions = {
+    root: process.env.COMS_LAN_ROOT ?? join(homedir(), ".pi", "coms-lan"),
+    hostName: DEFAULT_HOST_NAME,
+    writeStaticPeer: false,
+    auditScan: false,
+  };
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    switch (arg) {
+      case "--help":
+      case "-h":
+        usage();
+        process.exit(0);
+      case "--root":
+        options.root = requireValue(args, ++index, arg);
+        break;
+      case "--host-name":
+        options.hostName = requireValue(args, ++index, arg);
+        break;
+      case "--peer-name":
+        options.peer = { ...emptyPeer(options.peer), name: requireValue(args, ++index, arg) };
+        break;
+      case "--peer-node-id":
+        options.peer = { ...emptyPeer(options.peer), nodeId: requireValue(args, ++index, arg) };
+        break;
+      case "--peer-hub-instance-id":
+        options.peer = { ...emptyPeer(options.peer), hubInstanceId: requireValue(args, ++index, arg) };
+        break;
+      case "--peer-endpoint":
+        options.peer = { ...emptyPeer(options.peer), endpoint: requireValue(args, ++index, arg) };
+        break;
+      case "--write-static-peer":
+        options.writeStaticPeer = true;
+        break;
+      case "--audit-scan":
+        options.auditScan = true;
+        break;
+      default:
+        throw new Error(`unknown argument: ${arg}`);
+    }
+  }
+
+  if (options.peer) validatePeer(options.peer);
+  return options;
+}
+
+function emptyPeer(peer?: Partial<StaticPeerConfig>): StaticPeerConfig {
+  return {
+    nodeId: peer?.nodeId ?? "",
+    hubInstanceId: peer?.hubInstanceId ?? "",
+    endpoint: peer?.endpoint ?? "",
+    name: peer?.name,
+  };
+}
+
+function validatePeer(peer: StaticPeerConfig): void {
+  if (!peer.nodeId || !peer.hubInstanceId || !peer.endpoint) {
+    throw new Error("peer details require --peer-node-id, --peer-hub-instance-id, and --peer-endpoint");
+  }
+  if (!/^wss:\/\/[^\s]+\/v1\/hub$/.test(peer.endpoint)) {
+    throw new Error("--peer-endpoint must be wss://.../v1/hub");
+  }
+}
+
+function requireValue(args: string[], index: number, flag: string): string {
+  const value = args[index];
+  if (!value || value.startsWith("--")) throw new Error(`${flag} requires a value`);
+  return value;
+}
+
+async function scanAuditLog(path: string): Promise<void> {
+  if (!(await fileExists(path))) {
+    console.log(`\n[WARN] audit log not found: ${path}`);
+    return;
+  }
+  const contents = await readFile(path, "utf8");
+  const markers = ["-----" + "BEGIN", "private" + "Key", "key_" + "material", "pass" + "word", "credential", "token"];
+  const risky = contents
+    .split(/\r?\n/)
+    .filter((line) => markers.some((marker) => line.toLowerCase().includes(marker.toLowerCase())));
+  console.log(`\nAudit scan: ${risky.length === 0 ? "no obvious secret markers" : `${risky.length} suspicious line(s)`}`);
+  for (const line of risky.slice(0, 10)) console.log(line);
+}
+
+async function readJsonFile<T>(path: string): Promise<T | null> {
+  try {
+    return JSON.parse(await readFile(path, "utf8")) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function usage(): void {
+  console.log(`Usage: bun run coms-lan:acceptance-host -- [options]
+
+Options:
+  --root PATH                  Override coms-lan state root. Default: ~/.pi/coms-lan
+  --host-name NAME             Label used in the printed report.
+  --peer-name NAME             Static peer name to write/use.
+  --peer-node-id ID            Peer node_id from coms_lan_status.
+  --peer-hub-instance-id ID    Peer hub_instance_id from coms_lan_status.
+  --peer-endpoint URL          Peer wss://host:port/v1/hub endpoint.
+  --write-static-peer          Write/update the peer in config.json.
+  --audit-scan                 Scan audit.log.jsonl for obvious secret markers.
+  -h, --help                   Show this help.
+`);
+}
+
+if (import.meta.main) {
+  main().catch((error) => {
+    console.error(`[ERROR] ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  });
+}

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "coms-lan:acceptance-host": "bun scripts/coms-lan-acceptance-host.ts"
   },
   "dependencies": {
     "@noble/ed25519": "^3.0.0"

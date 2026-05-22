@@ -25,7 +25,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 115 passing tests
+- `bun test`: 117 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -73,6 +73,7 @@ Runtime modules:
 
 Tests:
 
+- `tests/coms-lan/acceptance-host-script.test.ts`
 - `tests/coms-lan/acceptance.test.ts`
 - `tests/coms-lan/audit.test.ts`
 - `tests/coms-lan/audited-runtime.test.ts`
@@ -109,6 +110,10 @@ Documentation:
 - `docs/IMPLEMENTATION_PLAN.md`
 - `docs/PRD.md`
 - `docs/STATUS.md`
+
+Scripts:
+
+- `scripts/coms-lan-acceptance-host.ts`
 
 Project/config files:
 
@@ -190,6 +195,8 @@ Project/config files:
   packets, and trusted remote WSS listing/send after public key exchange.
 - Manual multi-host LAN acceptance runbook is documented in
   `docs/COMS_LAN_MANUAL_ACCEPTANCE.md`.
+- Host-side acceptance helper script prints local public key/endpoint metadata,
+  writes optional static peers, and scans audit logs for obvious secret markers.
 
 ## Security Notes
 
