@@ -16,7 +16,7 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
-describe("coms-lan acceptance host script", () => {
+describe("Onclave acceptance host script", () => {
   it("renders local key and peer commands without private material", () => {
     const report = renderAcceptanceHostReport(
       {
@@ -44,7 +44,7 @@ describe("coms-lan acceptance host script", () => {
       createOptions()
     );
 
-    expect(report).toContain("coms_lan_trust_add");
+    expect(report).toContain("onclave_trust_add");
     expect(report).toContain("wss://127.0.0.1:4444/v1/hub");
     expect(report).not.toContain("identity.key");
     expect(report).not.toContain("privateKey");

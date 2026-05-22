@@ -8,7 +8,7 @@ source_prd: ./PRD.md
 
 ## Scope
 
-Build a separate `coms-lan.ts` Pi extension/system that provides secure LAN
+Build a separate `onclave.ts` Pi extension/system that provides secure LAN
 hub discovery, explicit hub authorization, local Pi instance registration, and
 trusted prompt/response messaging.
 
@@ -47,15 +47,15 @@ Design lessons to reuse:
 
 Differences required by this PRD:
 
-- Joyride uses discovery as a join helper for a memberlist cluster; `coms-lan`
+- Joyride uses discovery as a join helper for a memberlist cluster; `Onclave`
   must not join or trust discovered peers automatically.
-- Joyride discovery stores peers by node ID to endpoint only; `coms-lan` also
+- Joyride discovery stores peers by node ID to endpoint only; `Onclave` also
   needs trust state, auth state, last-seen timestamps, runtime instance IDs,
   protocol version, and audit events.
-- Joyride uses a fixed default discovery port. `coms-lan` may use a default UDP
+- Joyride uses a fixed default discovery port. `Onclave` may use a default UDP
   discovery port, but the local hub service port must be dynamically selected
   and published in hub state.
-- Joyride does not perform app-level public-key authentication. `coms-lan` must
+- Joyride does not perform app-level public-key authentication. `Onclave` must
   require Ed25519 challenge-response before remote listing or messaging.
 
 ### Pi `coms` and `coms-net`
@@ -82,13 +82,13 @@ Design lessons to reuse:
 
 Differences required by this PRD:
 
-- `coms` is same-machine peer-to-peer. `coms-lan` needs a machine-level hub.
-- `coms-net` uses bearer-token HTTP/SSE to a configured hub. `coms-lan` needs
+- `coms` is same-machine peer-to-peer. `Onclave` needs a machine-level hub.
+- `coms-net` uses bearer-token HTTP/SSE to a configured hub. `Onclave` needs
   hub discovery, local hub bootstrap, `wss://`, and Ed25519 hub auth.
-- Existing agent cards include raw `cwd`; `coms-lan` should avoid exposing raw
+- Existing agent cards include raw `cwd`; `Onclave` should avoid exposing raw
   local paths across discovery and should prefer safe project labels in remote
   views.
-- Existing networked comms trusts a configured server. `coms-lan` must show
+- Existing networked comms trusts a configured server. `Onclave` must show
   unknown discovered hubs as untrusted and block listing/messaging.
 
 ## Proposed Repository Shape
@@ -98,7 +98,7 @@ minimal runtime and test scaffolding needed for a Pi extension:
 
 ```text
 extensions/
-  coms-lan.ts
+  onclave.ts
 scripts/
   coms-lan-hub.ts        # only if the hub cannot safely live inside extension code
 src/coms-lan/
@@ -124,7 +124,7 @@ tests/
     project-label.test.ts
 ```
 
-Planning bias: start with `extensions/coms-lan.ts` plus small `src/coms-lan/*`
+Planning bias: start with `extensions/onclave.ts` plus small `src/coms-lan/*`
 modules. Add `scripts/coms-lan-hub.ts` only if process lifecycle or Bun server
 startup is cleaner outside the extension.
 
@@ -274,16 +274,16 @@ behind.
 Use distinct tool names to avoid surprising existing `coms` and `coms-net`
 users:
 
-- `coms_lan_peers`: list discovered hubs with trust/auth state.
-- `coms_lan_agents`: list local and trusted remote agents.
-- `coms_lan_send`: send prompt to a trusted local or remote agent.
-- `coms_lan_get`: poll response for an outbound message.
-- `coms_lan_await`: await response for an outbound message.
+- `onclave_peers`: list discovered hubs with trust/auth state.
+- `onclave_agents`: list local and trusted remote agents.
+- `onclave_send`: send prompt to a trusted local or remote agent.
+- `onclave_get`: poll response for an outbound message.
+- `onclave_await`: await response for an outbound message.
 
 Potential later commands, depending on open-question resolution:
 
-- `coms-lan trust`: show key import instructions or trust status.
-- `coms-lan audit`: summarize recent audit events.
+- `onclave trust`: show key import instructions or trust status.
+- `onclave audit`: summarize recent audit events.
 
 Trust changes should initially be file-based through `authorized_keys` to keep v1
 simple and auditable.
@@ -463,8 +463,8 @@ Exit criteria:
 - Implement hub message model and response correlation.
 - Implement local delivery to registered Pi instances.
 - Implement remote delivery over authenticated hub links.
-- Implement `coms_lan_peers`, `coms_lan_agents`, `coms_lan_send`,
-  `coms_lan_get`, and `coms_lan_await`.
+- Implement `onclave_peers`, `onclave_agents`, `onclave_send`,
+  `onclave_get`, and `onclave_await`.
 - Hook inbound prompts into `pi.sendMessage`.
 - Hook responses from `agent_end`.
 - Enforce TTL and hop limit.
@@ -563,7 +563,7 @@ Resolved in documentation.
 
 Resolved.
 
-- `coms_lan_status` now includes LAN-reachable `remote_endpoints` hints derived
+- `onclave_status` now includes LAN-reachable `remote_endpoints` hints derived
   from non-loopback local interfaces;
 - tests cover the status output for both loopback-only and LAN-reachable hosts.
 
@@ -576,7 +576,9 @@ protocol or security implementation.
     - add a trust removal or revocation workflow so operators do not need to
       edit `authorized_keys` manually for common key-removal cases;
     - consider richer trust inspection/status output if operators need a more
-      guided trust-management loop.
+      guided trust-management loop;
+    - evaluate a future trust request / approval flow as described in
+      `docs/COMS_LAN_TRUST_UX_FUTURE.md`.
 2. Reverse-direction and orchestration UX
     - add a reverse-direction acceptance helper so Host B can initiate the same
       validation flow back to Host A with the same low-friction workflow;

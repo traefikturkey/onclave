@@ -4,7 +4,7 @@ status: active
 source_prd: ./PRD.md
 ---
 
-# COMS LAN Manual LAN Acceptance
+# Onclave Manual LAN Acceptance
 
 This runbook covers the manual multi-host checks that cannot be fully proven by
 single-machine unit/integration tests.
@@ -18,13 +18,13 @@ Manual status:
 ## Prerequisites
 
 - Two machines on the same LAN, referred to as **Host A** and **Host B**.
-- Pi installed with the `extensions/coms-lan.ts` extension available on both
+- Pi installed with the `extensions/onclave.ts` extension available on both
   machines.
 - Firewalls allow UDP broadcast on the discovery port and inbound TCP for the
   selected WSS hub port.
 - No private key material is copied between hosts.
 - Trust is established only by exchanging public key lines from
-  `coms_lan_trust_info` or `/coms-lan-trust`.
+  `onclave_trust_info` or `/onclave-trust`.
 
 Default discovery port: `48889/udp`.
 
@@ -41,18 +41,18 @@ Default discovery port: `48889/udp`.
 From this repository on each host, run:
 
 ```bash
-bun run coms-lan:acceptance-host -- --host-name host-a
+bun run onclave:acceptance-host -- --host-name host-a
 ```
 
-Run it once before starting Pi to create the local coms-lan identity and print
-this host's public key line. Then start Pi, run `coms_lan_status`, and rerun the
+Run it once before starting Pi to create the local Onclave identity and print
+this host's public key line. Then start Pi, run `onclave_status`, and rerun the
 helper to print local endpoint/IDs and suggested Pi tool calls. If the hub line
 says `not started yet` on the first run, that is expected.
 
 After collecting peer endpoint metadata, you can write a static peer entry:
 
 ```bash
-bun run coms-lan:acceptance-host -- \
+bun run onclave:acceptance-host -- \
   --host-name host-a \
   --peer-name host-b \
   --peer-node-id node_... \
@@ -63,22 +63,22 @@ bun run coms-lan:acceptance-host -- \
 
 ## Check 1: One Local Hub per Machine
 
-1. Start one Pi session with `coms-lan` enabled on Host A.
-2. Run `coms_lan_status`.
-3. Start a second Pi session with `coms-lan` enabled on Host A.
-4. Run `coms_lan_status` in the second session.
-5. Run `coms_lan_agents` from either session.
+1. Start one Pi session with `Onclave` enabled on Host A.
+2. Run `onclave_status`.
+3. Start a second Pi session with `Onclave` enabled on Host A.
+4. Run `onclave_status` in the second session.
+5. Run `onclave_agents` from either session.
 
 Expected result:
 
 - The first session reports `started_here: true`.
 - The second session reports `started_here: false`.
 - Both sessions show the same hub endpoint and hub instance ID.
-- `coms_lan_agents` lists both local agents.
+- `onclave_agents` lists both local agents.
 
 ## Check 2: Discovery Packets Are Metadata Only
 
-1. Start one Pi session with `coms-lan` enabled.
+1. Start one Pi session with `Onclave` enabled.
 2. Capture or inspect a UDP discovery packet on port `48889`.
 3. Confirm the packet fields match the allowed discovery shape.
 
@@ -101,10 +101,10 @@ Expected result:
 
 ## Check 3: Unknown LAN Hubs Are Visible but Untrusted
 
-1. Start one Pi session with `coms-lan` enabled on Host A.
-2. Start one Pi session with `coms-lan` enabled on Host B.
+1. Start one Pi session with `Onclave` enabled on Host A.
+2. Start one Pi session with `Onclave` enabled on Host B.
 3. Do not exchange public keys yet.
-4. Run `coms_lan_peers` on both hosts.
+4. Run `onclave_peers` on both hosts.
 5. Attempt a remote list or remote send using the other host endpoint and IDs.
 
 Expected result:
@@ -116,13 +116,13 @@ Expected result:
 
 ## Check 4: Exchange Public Keys
 
-1. On Host A, run `coms_lan_trust_info` or `/coms-lan-trust`.
+1. On Host A, run `onclave_trust_info` or `/onclave-trust`.
 2. Copy Host A's public `ssh-ed25519 ...` line.
 3. Append that line to Host B's `~/.pi/coms-lan/authorized_keys`.
-4. On Host B, run `coms_lan_trust_info` or `/coms-lan-trust`.
+4. On Host B, run `onclave_trust_info` or `/onclave-trust`.
 5. Copy Host B's public `ssh-ed25519 ...` line.
 6. Append that line to Host A's `~/.pi/coms-lan/authorized_keys`, or use
-   `coms_lan_trust_add` on Host A.
+   `onclave_trust_add` on Host A.
 7. Restart both Pi sessions, or start new sessions, so the trust file is loaded.
 
 Expected result:
@@ -132,14 +132,14 @@ Expected result:
 
 ## Check 5: Trusted Remote Agent Listing
 
-1. On Host A, run `coms_lan_status` and record Host A's endpoint, node ID, and
+1. On Host A, run `onclave_status` and record Host A's endpoint, node ID, and
    hub instance ID.
-2. On Host B, run `coms_lan_status` and record Host B's endpoint, node ID, and
+2. On Host B, run `onclave_status` and record Host B's endpoint, node ID, and
    hub instance ID.
-3. From Host A, call `coms_lan_remote_agents` with Host B's endpoint, node ID,
+3. From Host A, call `onclave_remote_agents` with Host B's endpoint, node ID,
    and hub instance ID, or with a `peer_name` configured in Host A's
    `config.json`.
-4. From Host B, call `coms_lan_remote_agents` with Host A's endpoint, node ID,
+4. From Host B, call `onclave_remote_agents` with Host A's endpoint, node ID,
    and hub instance ID, or with a `peer_name` configured in Host B's
    `config.json`.
 
@@ -150,12 +150,12 @@ Expected result:
 
 ## Check 6: Trusted Remote Send/Get
 
-1. Use `coms_lan_remote_agents` to choose a remote target session ID.
-2. Call `coms_lan_remote_send` with the trusted remote endpoint, node ID, hub
+1. Use `onclave_remote_agents` to choose a remote target session ID.
+2. Call `onclave_remote_send` with the trusted remote endpoint, node ID, hub
    instance ID, target session ID, and a harmless test prompt.
 3. Record the returned message ID.
 4. Wait for the remote session to produce an assistant response.
-5. Call `coms_lan_remote_get` with the same trusted remote endpoint metadata and
+5. Call `onclave_remote_get` with the same trusted remote endpoint metadata and
    message ID.
 
 Expected result:
@@ -188,7 +188,7 @@ Forbidden content:
 1. Identify which local Pi session started the hub.
 2. Close that session.
 3. Start another Pi session on the same host.
-4. Run `coms_lan_status` and `coms_lan_agents`.
+4. Run `onclave_status` and `onclave_agents`.
 
 Expected result:
 
@@ -202,7 +202,7 @@ For each host, record:
 
 - OS and shell.
 - Pi version.
-- Local endpoint from `coms_lan_status`.
+- Local endpoint from `onclave_status`.
 - Whether UDP discovery succeeded.
 - Whether explicit remote tools succeeded.
 - Any firewall or network changes required.

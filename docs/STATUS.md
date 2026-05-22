@@ -9,7 +9,7 @@ implementation_plan: ./IMPLEMENTATION_PLAN.md
 
 ## Current State
 
-The `coms-lan` implementation now covers the core secure LAN communication
+The `Onclave` implementation now covers the core secure LAN communication
 flow: local hub startup/reuse, local WSS registration and messaging, explicit
 Ed25519 trust, trusted remote WSS listing/send, metadata-only discovery, Pi tool
 surface, audit-safe runtime events, and physical two-host LAN acceptance.
@@ -51,7 +51,7 @@ Result:
 
 Extension:
 
-- `extensions/coms-lan.ts`
+- `extensions/onclave.ts`
 
 Runtime modules:
 
@@ -241,8 +241,8 @@ Project/config files:
    parameters (`endpoint`, `node_id`, `hub_instance_id`) and persistent static
    peers in `~/.pi/coms-lan/config.json`.
 3. Trust import UX: v1 supports file-based trust through
-   `~/.pi/coms-lan/authorized_keys`, with `/coms-lan-trust`,
-   `coms_lan_trust_info`, and `coms_lan_trust_add` for public-key setup.
+   `~/.pi/coms-lan/authorized_keys`, with `/onclave-trust`,
+   `onclave_trust_info`, and `onclave_trust_add` for public-key setup.
 
 See `docs/COMS_LAN_DECISIONS.md` for rationale and consequences.
 
@@ -253,7 +253,9 @@ The remaining work is post-v1 operator polish:
 1. Trust management UX
     - add a trust removal or revocation helper so operators do not need to edit
       `authorized_keys` manually for common removal cases;
-    - consider richer trust inspection/status output if operators need it.
+    - consider richer trust inspection/status output if operators need it;
+    - use `docs/COMS_LAN_TRUST_UX_FUTURE.md` as the future design reference for
+      a trust request / approval workflow.
 2. Reverse-direction and orchestration UX
     - add a reverse-direction acceptance helper so either host can run the
       initiator flow with minimal operator coordination;

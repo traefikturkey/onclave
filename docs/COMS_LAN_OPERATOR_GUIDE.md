@@ -4,9 +4,9 @@ status: active
 source_prd: ./PRD.md
 ---
 
-# COMS LAN Operator Guide
+# Onclave Operator Guide
 
-`coms-lan` lets Pi sessions on a LAN discover local machine hubs, explicitly
+`Onclave` lets Pi sessions on a LAN discover local machine hubs, explicitly
 trust remote hubs with Ed25519 public keys, and exchange prompt/response
 messages over authenticated WSS.
 
@@ -17,6 +17,9 @@ All runtime state lives under:
 ```text
 ~/.pi/coms-lan/
 ```
+
+The directory name remains `coms-lan` in v1 for state compatibility even
+though the user-facing extension and tool names are now `Onclave`.
 
 Important files:
 
@@ -39,25 +42,25 @@ keys under `~/.ssh/` for this system.
 From this repository on each host, run:
 
 ```bash
-bun run coms-lan:acceptance-host -- --host-name host-a
+bun run onclave:acceptance-host -- --host-name host-a
 ```
 
-The helper creates the local coms-lan identity if needed, then prints:
+The helper creates the local Onclave identity if needed, then prints:
 
 - local identity and hub state when available
 - the public key line to copy to the peer
-- `coms_lan_trust_add` command for the peer
+- `onclave_trust_add` command for the peer
 - endpoint, node ID, and hub instance ID values for remote tools
 - suggested Pi tool commands for the acceptance flow
 
 If the hub line says `not started yet`, that is expected before the first Pi
-session starts `coms-lan`. Start Pi, run `coms_lan_status`, then rerun the
+session starts `Onclave`. Start Pi, run `onclave_status`, then rerun the
 helper to print endpoint metadata.
 
 After you know the peer's endpoint and IDs, you can also write a static peer:
 
 ```bash
-bun run coms-lan:acceptance-host -- \
+bun run onclave:acceptance-host -- \
   --host-name host-a \
   --peer-name host-b \
   --peer-node-id node_... \
@@ -69,7 +72,7 @@ bun run coms-lan:acceptance-host -- \
 Optional audit check:
 
 ```bash
-bun run coms-lan:acceptance-host -- --audit-scan
+bun run onclave:acceptance-host -- --audit-scan
 ```
 
 ## Project Prompt Templates
@@ -77,25 +80,25 @@ bun run coms-lan:acceptance-host -- --audit-scan
 This repository includes two project prompt templates under `.pi/prompts/` to
 reduce manual copy/paste during LAN acceptance runs:
 
-- `/coms-lan-acceptance-host-b` prepares Host B as the responder and surfaces
+- `/onclave-acceptance-host-b` prepares Host B as the responder and surfaces
   its local `sessionId` from tool details.
-- `/coms-lan-acceptance-host-a` discovers Host B from `coms_lan_peers`, picks a
-  remote `sessionId` from `coms_lan_remote_agents`, sends the acceptance prompt,
+- `/onclave-acceptance-host-a` discovers Host B from `onclave_peers`, picks a
+  remote `sessionId` from `onclave_remote_agents`, sends the acceptance prompt,
   and polls for the response.
 
 Recommended order:
 
-1. Open Pi with `extensions/coms-lan.ts` on Host B and run
-   `/coms-lan-acceptance-host-b`.
-2. Open Pi with `extensions/coms-lan.ts` on Host A and run
-   `/coms-lan-acceptance-host-a`.
+1. Open Pi with `extensions/onclave.ts` on Host B and run
+   `/onclave-acceptance-host-b`.
+2. Open Pi with `extensions/onclave.ts` on Host A and run
+   `/onclave-acceptance-host-a`.
 
 The templates are intentionally asymmetric so Host B stays available to answer
 Host A's inbound test prompt instead of both hosts blocking on outbound waits.
 
 ## First Run
 
-Start Pi with the `extensions/coms-lan.ts` extension enabled.
+Start Pi with the `extensions/onclave.ts` extension enabled.
 
 The first local Pi session starts the machine hub. Later local Pi sessions reuse
 that live hub and register as local agents.
@@ -103,7 +106,7 @@ that live hub and register as local agents.
 Use:
 
 ```text
-coms_lan_status
+onclave_status
 ```
 
 Expected fields:
@@ -118,13 +121,13 @@ Expected fields:
 On each host, run either:
 
 ```text
-/coms-lan-trust
+/onclave-trust
 ```
 
 or:
 
 ```text
-coms_lan_trust_info
+onclave_trust_info
 ```
 
 Copy only the printed public line that begins with `ssh-ed25519`.
@@ -132,7 +135,7 @@ Copy only the printed public line that begins with `ssh-ed25519`.
 On the peer host, add it with either:
 
 ```text
-coms_lan_trust_add public_key_line="ssh-ed25519 ..."
+onclave_trust_add public_key_line="ssh-ed25519 ..."
 ```
 
 or by manually appending it to:
@@ -149,7 +152,7 @@ trust file.
 Use:
 
 ```text
-coms_lan_peers
+onclave_peers
 ```
 
 This reports:
@@ -197,7 +200,7 @@ Example:
 List configured static peers:
 
 ```text
-coms_lan_static_peers
+onclave_static_peers
 ```
 
 Remote tools accept either a `peer_name` from static config or explicit
@@ -208,25 +211,25 @@ Remote tools accept either a `peer_name` from static config or explicit
 List local agents:
 
 ```text
-coms_lan_agents
+onclave_agents
 ```
 
 Send to a local agent:
 
 ```text
-coms_lan_send target_session_id="session-id" prompt="..."
+onclave_send target_session_id="session-id" prompt="..."
 ```
 
 Poll a response:
 
 ```text
-coms_lan_get msg_id="msg_..."
+onclave_get msg_id="msg_..."
 ```
 
 Wait for a response:
 
 ```text
-coms_lan_await msg_id="msg_..." timeout_ms=30000
+onclave_await msg_id="msg_..." timeout_ms=30000
 ```
 
 ## Trusted Remote Messaging
@@ -234,25 +237,25 @@ coms_lan_await msg_id="msg_..." timeout_ms=30000
 List remote agents with explicit peer metadata:
 
 ```text
-coms_lan_remote_agents endpoint="wss://host:port/v1/hub" node_id="node_..." hub_instance_id="hub_..."
+onclave_remote_agents endpoint="wss://host:port/v1/hub" node_id="node_..." hub_instance_id="hub_..."
 ```
 
 Or with a configured static peer:
 
 ```text
-coms_lan_remote_agents peer_name="bench"
+onclave_remote_agents peer_name="bench"
 ```
 
 Send to a remote agent:
 
 ```text
-coms_lan_remote_send peer_name="bench" target_session_id="session-id" prompt="..."
+onclave_remote_send peer_name="bench" target_session_id="session-id" prompt="..."
 ```
 
 Poll the remote response:
 
 ```text
-coms_lan_remote_get peer_name="bench" msg_id="msg_..."
+onclave_remote_get peer_name="bench" msg_id="msg_..."
 ```
 
 Remote list/send/get requires successful Ed25519 authentication against the
@@ -264,6 +267,8 @@ The current v1 workflow is complete, but the remaining planned operator-facing
 work is:
 
 - trust removal or revocation helpers beyond manual `authorized_keys` edits;
+- a future trust request / approval workflow reference in
+  `docs/COMS_LAN_TRUST_UX_FUTURE.md`;
 - reverse-direction acceptance helpers so either host can run the initiator
   workflow with the same low-friction prompt-template flow;
 - richer static-peer convenience or aggregation when UDP discovery is blocked.
@@ -306,7 +311,7 @@ Do not paste sensitive prompt or response content into manual audit notes.
   host.
 - Restart sessions after trust changes.
 - Confirm endpoint uses `wss://.../v1/hub`.
-- Confirm node ID and hub instance ID match current `coms_lan_status` output.
+- Confirm node ID and hub instance ID match current `onclave_status` output.
 
 ### Local hub appears stale
 

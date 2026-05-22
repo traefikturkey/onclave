@@ -4,10 +4,10 @@ status: active
 source_prd: ./PRD.md
 ---
 
-# COMS LAN v1 Decisions
+# Onclave v1 Decisions
 
 This document records the remaining v1 product/architecture decisions for
-`coms-lan`.
+`Onclave`.
 
 ## Decision 1: Hub Lifetime
 
@@ -52,10 +52,10 @@ The supported v1 manual fallback is to call remote tools with either:
 
 Existing tools using this model:
 
-- `coms_lan_remote_agents`
-- `coms_lan_remote_send`
-- `coms_lan_remote_get`
-- `coms_lan_static_peers`
+- `onclave_remote_agents`
+- `onclave_remote_send`
+- `onclave_remote_get`
+- `onclave_static_peers`
 
 ### Rationale
 
@@ -91,15 +91,15 @@ for v1.
 
 Current support:
 
-- `/coms-lan-trust`
-- `coms_lan_trust_info`
-- `coms_lan_trust_add`
+- `/onclave-trust`
+- `onclave_trust_info`
+- `onclave_trust_add`
 - local trust file: `~/.pi/coms-lan/authorized_keys`
 
 ### Rationale
 
 - Manual file edits remain available for operators who prefer direct review.
-- `coms_lan_trust_add` validates the line, rejects unsupported options/key
+- `onclave_trust_add` validates the line, rejects unsupported options/key
   types, dedupes existing keys, appends only public key lines, and audits
   metadata without private material.
 - Sessions should be restarted after trust changes so active runtimes reload the
@@ -109,7 +109,8 @@ Current support:
 
 A trust removal tool can be added later if operators need managed key revocation
 without editing `authorized_keys`. Richer trust inspection UX also remains a
-post-v1 operator improvement.
+post-v1 operator improvement. A future trust request / approval workflow should
+be planned against `docs/COMS_LAN_TRUST_UX_FUTURE.md`.
 
 ## Decision 4: WSS Transport Stack
 

@@ -6,6 +6,7 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
+    "onclave:acceptance-host": "bun scripts/coms-lan-acceptance-host.ts",
     "coms-lan:acceptance-host": "bun scripts/coms-lan-acceptance-host.ts"
   },
   "dependencies": {

@@ -9,7 +9,7 @@ status: draft
 
 Pi can already support local and networked agent communication through extension patterns, but LAN-based multi-machine coordination needs a secure discovery and authentication layer before it is safe to expose agent messaging. A random Pi instance on the LAN must not be able to discover an existing Pi hub and command its agents.
 
-The goal is to create a new `coms-lan.ts` system that makes Pi agents network-aware on a trusted LAN while keeping authorization explicit, auditable, and scoped to authenticated remote machine hubs.
+The goal is to create a new `onclave.ts` system that makes Pi agents network-aware on a trusted LAN while keeping authorization explicit, auditable, and scoped to authenticated remote machine hubs.
 
 ## Users / Jobs To Be Done
 
@@ -19,13 +19,13 @@ The goal is to create a new `coms-lan.ts` system that makes Pi agents network-aw
 
 ## Goals
 
-1. Build a new `coms-lan.ts` Pi communication system with one machine-level hub per machine and multiple local Pi instances registered to that hub.
+1. Build a new `onclave.ts` Pi communication system with one machine-level hub per machine and multiple local Pi instances registered to that hub.
 2. Support UDP LAN discovery so hubs can find each other without static configuration.
 3. Require authenticated hub-to-hub communication before any messaging using `authorized_keys`-style Ed25519 public keys.
 4. Use `wss://` WebSocket over self-signed TLS for direct hub-to-hub transport after authentication.
 5. Keep unknown discovered hubs visible as untrusted, with no messaging or communication privileges.
 6. Provide audit logs for discovery, authentication, trust changes, inbound messages, and outbound messages.
-7. Reuse the relevant design lessons from Joyride Docker cluster discovery and Pi `coms`/`coms-net` while building a separate `coms-lan.ts` implementation.
+7. Reuse the relevant design lessons from Joyride Docker cluster discovery and Pi `coms`/`coms-net` while building a separate `onclave.ts` implementation.
 
 ## Non-Goals
 
@@ -41,7 +41,7 @@ The goal is to create a new `coms-lan.ts` system that makes Pi agents network-aw
 
 ### Functional Requirements
 
-- Implement a new Pi extension/system named `coms-lan.ts`.
+- Implement a new Pi extension/system named `onclave.ts`.
 - Use one hub per machine.
 - Allow multiple local Pi instances to register with the local hub.
 - Local Pi instances must discover an existing local hub before attempting to start one.
@@ -100,7 +100,7 @@ Use Joyride Docker cluster as the primary reference for LAN discovery shape, lif
 - Config tests: https://github.com/traefikturkey/joyride/blob/main/plugins/docker-cluster/cluster_config_test.go
 - Delegate tests: https://github.com/traefikturkey/joyride/blob/main/plugins/docker-cluster/delegate_test.go
 
-Planning must compare the proposed `coms-lan` design against Joyride before coding, especially UDP packet format, discovery interval, peer cache behavior, config defaults, startup/shutdown lifecycle, and test coverage patterns.
+Planning must compare the proposed `Onclave` design against Joyride before coding, especially UDP packet format, discovery interval, peer cache behavior, config defaults, startup/shutdown lifecycle, and test coverage patterns.
 
 ### Pi Communication Prior Art
 
@@ -147,7 +147,7 @@ Use these as references for Pi extension shape, tool UX, local agent registratio
 ## Acceptance Criteria
 
 1. [ ] A local Pi instance can discover or start the single local machine hub without port conflicts.
-   - Verify: Start multiple Pi instances on the same machine with `coms-lan.ts` enabled.
+   - Verify: Start multiple Pi instances on the same machine with `onclave.ts` enabled.
    - Pass: Exactly one local hub is active and each Pi instance registers with it.
    - Fail: Multiple hubs race unnecessarily, fixed port conflicts occur, or instances cannot register.
 

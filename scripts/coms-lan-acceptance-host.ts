@@ -52,32 +52,32 @@ export function upsertStaticPeer(config: ComsLanConfig, peer: StaticPeerConfig):
 export function renderAcceptanceHostReport(state: LocalAcceptanceState, options: AcceptanceHostOptions): string {
   const peerName = options.peer?.name ?? "peer-host";
   const lines: string[] = [];
-  lines.push(`# coms-lan acceptance helper: ${options.hostName}`);
+  lines.push(`# onclave acceptance helper: ${options.hostName}`);
   lines.push("");
   lines.push(`State root: ${state.root}`);
   lines.push("");
   lines.push("## Local status");
   lines.push(`- identity: ${state.identity ? state.identity.nodeId : "missing; rerun without --no-init to create it"}`);
-  lines.push(`- hub: ${state.hub ? `${state.hub.endpoint} (${state.hub.hubInstanceId})` : "not started yet; run coms_lan_status in Pi, then rerun this script"}`);
+  lines.push(`- hub: ${state.hub ? `${state.hub.endpoint} (${state.hub.hubInstanceId})` : "not started yet; run onclave_status in Pi, then rerun this script"}`);
   lines.push(`- config static peers: ${state.config ? state.config.staticPeers.length : "unreadable"}`);
   lines.push(`- audit log: ${state.auditLogExists ? "present" : "not present yet"}`);
   lines.push("");
 
   lines.push("## Step A: copy this public key line to the other host");
   lines.push("```text");
-  lines.push(state.authorizedKeyLine ?? "Rerun without --no-init to create the local coms-lan identity.");
+  lines.push(state.authorizedKeyLine ?? "Rerun without --no-init to create the local Onclave identity.");
   lines.push("```");
   lines.push("");
 
   lines.push("## Step B: in Pi on the other host, trust this host");
   lines.push("```text");
-  lines.push(state.authorizedKeyLine ? `coms_lan_trust_add public_key_line=\"${state.authorizedKeyLine}\"` : "bun run coms-lan:acceptance-host -- --host-name host-a");
+  lines.push(state.authorizedKeyLine ? `onclave_trust_add public_key_line=\"${state.authorizedKeyLine}\"` : "bun run onclave:acceptance-host -- --host-name host-a");
   lines.push("```");
   lines.push("");
 
   if (!state.hub) {
-    lines.push("## Step C: start Pi with coms-lan on this host");
-    lines.push("Run `coms_lan_status` inside Pi to start or discover the local hub, then rerun this helper to print endpoint metadata.");
+    lines.push("## Step C: start Pi with Onclave on this host");
+    lines.push("Run `onclave_status` inside Pi to start or discover the local hub, then rerun this helper to print endpoint metadata.");
     lines.push("");
   }
 
@@ -94,14 +94,14 @@ export function renderAcceptanceHostReport(state: LocalAcceptanceState, options:
   if (options.peer) {
     lines.push("## Step D: test this host reaching the configured peer in Pi");
     lines.push("```text");
-    lines.push(`coms_lan_remote_agents peer_name=\"${peerName}\"`);
-    lines.push(`coms_lan_remote_send peer_name=\"${peerName}\" target_session_id=\"REMOTE_SESSION_ID\" prompt=\"Reply with: coms-lan acceptance ok\"`);
-    lines.push(`coms_lan_remote_get peer_name=\"${peerName}\" msg_id=\"MSG_ID\"`);
+    lines.push(`onclave_remote_agents peer_name=\"${peerName}\"`);
+    lines.push(`onclave_remote_send peer_name=\"${peerName}\" target_session_id=\"REMOTE_SESSION_ID\" prompt=\"Reply with: onclave acceptance ok\"`);
+    lines.push(`onclave_remote_get peer_name=\"${peerName}\" msg_id=\"MSG_ID\"`);
     lines.push("```");
   } else {
     lines.push("## Step D: after you know the other host endpoint, rerun with peer details");
     lines.push("```bash");
-    lines.push("bun run coms-lan:acceptance-host -- --host-name host-a \\");
+    lines.push("bun run onclave:acceptance-host -- --host-name host-a \\");
     lines.push("  --peer-name host-b \\");
     lines.push("  --peer-node-id node_... \\");
     lines.push("  --peer-hub-instance-id hub_... \\");
@@ -113,10 +113,10 @@ export function renderAcceptanceHostReport(state: LocalAcceptanceState, options:
 
   lines.push("## Step E: checks to run in Pi on this host");
   lines.push("```text");
-  lines.push("coms_lan_status");
-  lines.push("coms_lan_peers");
-  lines.push("coms_lan_static_peers");
-  lines.push("coms_lan_agents");
+  lines.push("onclave_status");
+  lines.push("onclave_peers");
+  lines.push("onclave_static_peers");
+  lines.push("onclave_agents");
   lines.push("```");
   return lines.join("\n");
 }
@@ -246,18 +246,18 @@ async function fileExists(path: string): Promise<boolean> {
 }
 
 function usage(): void {
-  console.log(`Usage: bun run coms-lan:acceptance-host -- [options]
+  console.log(`Usage: bun run onclave:acceptance-host -- [options]
 
 Options:
-  --root PATH                  Override coms-lan state root. Default: ~/.pi/coms-lan
+  --root PATH                  Override Onclave state root. Default: ~/.pi/coms-lan
   --host-name NAME             Label used in the printed report.
   --peer-name NAME             Static peer name to write/use.
-  --peer-node-id ID            Peer node_id from coms_lan_status.
-  --peer-hub-instance-id ID    Peer hub_instance_id from coms_lan_status.
+  --peer-node-id ID            Peer node_id from onclave_status.
+  --peer-hub-instance-id ID    Peer hub_instance_id from onclave_status.
   --peer-endpoint URL          Peer wss://host:port/v1/hub endpoint.
   --write-static-peer          Write/update the peer in config.json.
   --audit-scan                 Scan audit.log.jsonl for obvious secret markers.
-  --no-init                    Do not create the local coms-lan identity if missing.
+  --no-init                    Do not create the local Onclave identity if missing.
   -h, --help                   Show this help.
 `);
 }
