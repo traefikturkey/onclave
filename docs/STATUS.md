@@ -27,7 +27,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 102 passing tests
+- `bun test`: 103 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -40,7 +40,7 @@ Result:
 | Phase 3: UDP Discovery | Mostly complete | Packet validation, untrusted peer cache, broadcast/listen lifecycle, and Node UDP adapter implemented; hub integration remains. |
 | Phase 4: WSS Transport and Mutual Authentication | Mostly complete | Bun WSS spike passed; signed handshake verifier, transport auth gate, frame processor, minimal WSS server/client wrapper, and composed hub runtime implemented; extension integration remains. |
 | Phase 5: Messaging and Tool Surface | Mostly complete | Local message routing, response correlation, timeout cleanup, WSS send_prompt delivery, Pi status/list/send/get/await tools, `agent_end` response submission, trusted remote client helpers, and explicit trusted remote list/send/get tools are implemented. |
-| Phase 6: Acceptance Hardening | Partial | Audit event helper coverage added; manual multi-process and LAN checks remain. |
+| Phase 6: Acceptance Hardening | Partial | Audit helper is wired into hub runtime for key registration/message/response paths; manual multi-process and LAN checks remain. |
 
 ## Implemented Files
 
@@ -164,6 +164,8 @@ Project/config files:
 - Hub runtime can aggregate agent listings from trusted remote peers.
 - Audit helper records local registration, messaging, response, and auth events
   without prompt/response bodies.
+- Hub runtime emits audit metadata for local registration, unregister, prompt
+  routing, and response submission paths.
 
 ## Security Notes
 
@@ -194,5 +196,5 @@ Project/config files:
 
 1. Add end-to-end acceptance checks for local hub startup and trusted remote
    listing.
-2. Wire audit helper into runtime paths beyond unit coverage.
-3. Add optional trust UX commands/import guidance.
+2. Add optional trust UX commands/import guidance.
+3. Expand audit wiring to discovery/auth transport paths if needed.

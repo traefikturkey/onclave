@@ -1,3 +1,5 @@
+import type { AuditEventName, AuditMetadata } from "./audit";
+import { AuditedHubRuntime } from "./audited-runtime";
 import type { AuthorizedSshEd25519Key } from "./authorized-keys";
 import { DiscoveryService, type DiscoveredPeer, type DiscoveryUdpSocket } from "./discovery";
 import type { HubState } from "./local-hub";
@@ -7,7 +9,7 @@ import {
   type LocalAgent,
   type LocalAgentRegistration,
 } from "./local-registry";
-import { MessageRouter, type DeliveredPrompt } from "./messages";
+import { MessageRouter, type DeliveredPrompt, type MessageResponse } from "./messages";
 import {
   HubFrameProcessor,
   HubTransportAuthGate,
@@ -37,6 +39,7 @@ export type ComsLanHubRuntimeOptions = {
   deliverPrompt?: (prompt: DeliveredPrompt) => Promise<void>;
   remoteIdentity?: RemoteHubClientIdentity;
   remoteClientFactory?: (peer: DiscoveredPeer) => Pick<RemoteHubClient, "listAgents">;
+  audit?: (event: AuditEventName, metadata: AuditMetadata) => void | Promise<void>;
 };
 
 export type RemoteAgentListing = {
@@ -47,6 +50,7 @@ export type RemoteAgentListing = {
 export class ComsLanHubRuntime {
   private readonly registry: LocalAgentRegistry;
   private readonly messages: MessageRouter;
+  private readonly audit?: AuditedHubRuntime;
   private wssServer: WssHubServer | null = null;
   private discovery: DiscoveryService | null = null;
   private state: HubState | null = null;
@@ -56,12 +60,16 @@ export class ComsLanHubRuntime {
       staleAfterMs: options.staleAfterMs,
       offlineAfterMs: options.offlineAfterMs,
     });
+    this.audit = options.audit ? new AuditedHubRuntime({ audit: options.audit }) : undefined;
     this.messages = new MessageRouter({
       registry: this.registry,
       now: options.now,
       ttlMs: options.messageTtlMs ?? 1_800_000,
       maxHops: options.maxHops ?? 5,
-      deliverPrompt: options.deliverPrompt ?? (async () => undefined),
+      deliverPrompt: async (prompt) => {
+        this.audit?.messageInbound(prompt);
+        await options.deliverPrompt?.(prompt);
+      },
     });
   }
 
@@ -126,11 +134,15 @@ export class ComsLanHubRuntime {
   }
 
   registerLocalAgent(registration: LocalAgentRegistration): LocalAgent {
-    return this.registry.register(registration, this.options.now());
+    const agent = this.registry.register(registration, this.options.now());
+    this.audit?.localRegister(registration);
+    return agent;
   }
 
   unregisterLocalAgent(sessionId: string): boolean {
-    return this.registry.unregister(sessionId);
+    const removed = this.registry.unregister(sessionId);
+    this.audit?.localUnregister(sessionId, removed);
+    return removed;
   }
 
   localAgents(): LocalAgent[] {
@@ -162,14 +174,26 @@ export class ComsLanHubRuntime {
       listAgents: () => this.registry.list(),
       registerLocalAgent: (registration) => this.registerLocalAgent(registration),
       unregisterLocalAgent: (sessionId) => this.unregisterLocalAgent(sessionId),
-      onSendPrompt: async (frame) => this.handleSendPrompt(frame),
+      onSendPrompt: async (frame) => this.routePrompt(frame),
       getResponse: (msgId) => this.messages.getResponse(msgId),
-      submitResponse: (response) => this.messages.submitResponse(response),
+      submitResponse: (response) => this.submitResponse(response),
     });
   }
 
-  private async handleSendPrompt(frame: SendPromptFrame) {
-    return this.messages.sendPrompt(frame);
+  async routePrompt(frame: SendPromptFrame) {
+    const result = await this.messages.sendPrompt(frame);
+    this.audit?.messageOutbound({
+      msgId: frame.msgId,
+      targetSessionId: frame.targetSessionId,
+      status: result.ok ? result.status : result.error,
+    });
+    return result;
+  }
+
+  submitResponse(response: MessageResponse) {
+    const result = this.messages.submitResponse(response);
+    if (result.ok) this.audit?.responseInbound(response);
+    return result;
   }
 
   private remoteClientFor(peer: DiscoveredPeer): Pick<RemoteHubClient, "listAgents"> {

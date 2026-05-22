@@ -28,6 +28,58 @@ afterAll(async () => {
 });
 
 describe("ComsLanHubRuntime", () => {
+  it("audits registration, message routing, and response submission", async () => {
+    const events: Array<{ event: string; metadata: unknown }> = [];
+    const delivered: unknown[] = [];
+    const runtime = new ComsLanHubRuntime({
+      nodeId: "node_server",
+      hubInstanceId: "hub_server",
+      host: "127.0.0.1",
+      tls,
+      authorizedKeys: [],
+      discoverySocket: new FakeUdpSocket(),
+      discoveryPort: 48889,
+      broadcastAddress: "255.255.255.255",
+      startedAt: NOW,
+      now: () => NOW,
+      staleAfterMs: 30_000,
+      offlineAfterMs: 60_000,
+      deliverPrompt: async (prompt) => {
+        delivered.push(prompt);
+      },
+      audit: (event, metadata) => {
+        events.push({ event, metadata });
+      },
+    });
+
+    const agent = runtime.registerLocalAgent(createRegistration());
+    await runtime.routePrompt({
+      type: "send_prompt",
+      msgId: "msg-1",
+      targetSessionId: agent.sessionId,
+      prompt: "do not log me",
+      hops: 0,
+    });
+    runtime.submitResponse({
+      msgId: "msg-1",
+      responderSessionId: agent.sessionId,
+      response: "do not log me either",
+      error: null,
+      completedAt: NOW,
+    });
+    runtime.unregisterLocalAgent(agent.sessionId);
+
+    expect(events).toEqual([
+      { event: "local_register", metadata: { session_id: "session-1", name: "agent-one", project: "onclave@main" } },
+      { event: "message_inbound", metadata: { msg_id: "msg-1", target_session_id: "session-1", hops: 0 } },
+      { event: "message_outbound", metadata: { msg_id: "msg-1", target_session_id: "session-1", status: "delivered" } },
+      { event: "response_inbound", metadata: { msg_id: "msg-1", responder_session_id: "session-1", error: null } },
+      { event: "local_unregister", metadata: { session_id: "session-1", removed: true } },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("do not log me");
+    expect(delivered).toHaveLength(1);
+  });
+
   it("lists trusted remote agents through remote clients", async () => {
     const remoteAgent = createAgent();
     const runtime = new ComsLanHubRuntime({
