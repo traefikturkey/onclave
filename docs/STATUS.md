@@ -27,7 +27,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 77 passing tests
+- `bun test`: 80 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -60,6 +60,7 @@ Runtime modules:
 - `src/coms-lan/messages.ts`
 - `src/coms-lan/project-label.ts`
 - `src/coms-lan/state.ts`
+- `src/coms-lan/tls.ts`
 - `src/coms-lan/transport.ts`
 - `src/coms-lan/wss-transport.ts`
 
@@ -80,6 +81,7 @@ Tests:
 - `tests/coms-lan/messages.test.ts`
 - `tests/coms-lan/project-label.test.ts`
 - `tests/coms-lan/state.test.ts`
+- `tests/coms-lan/tls.test.ts`
 - `tests/coms-lan/transport-frame.test.ts`
 - `tests/coms-lan/transport.test.ts`
 - `tests/coms-lan/wss-transport.test.ts`
@@ -100,6 +102,7 @@ Project/config files:
 - State path helpers rooted under `~/.pi/coms-lan/`.
 - Atomic JSON writes.
 - App-specific Ed25519 identity and signing key generation.
+- Persistent self-signed TLS material loading/generation under `~/.pi/coms-lan/`.
 - Local hub state read/write and validation.
 - Existing live hub reuse via injected health checks.
 - Stale hub state replacement.
@@ -139,28 +142,27 @@ Project/config files:
 
 ## Security Notes
 
-- Private keys are generated under `~/.pi/coms-lan/`, not under `~/.ssh/`.
+- Private signing keys and TLS keys are generated under `~/.pi/coms-lan/`, not
+  under `~/.ssh/`.
 - `authorized_keys` parsing supports only `ssh-ed25519` in v1.
 - `authorized_keys` options are rejected in v1.
 - Discovery packets are metadata-only and exclude prompts, secrets, private keys,
   cwd, and path fields.
 - Audit events reject sensitive field names such as prompt, response, secret,
   token, credential, private, and key material.
-- The current handshake verifier is app-level Ed25519 auth only; full WSS
-  transport is not implemented yet.
+- WSS transport uses self-signed TLS for encrypted transport; app-level Ed25519
+  auth is the trust gate.
 - WSS runtime spike succeeded with Bun native `Bun.serve({ tls, websocket })` and
   native `WebSocket` using self-signed TLS with certificate verification disabled
   at the WebSocket layer. App-level Ed25519 auth remains the trust gate.
 
 ## Open Implementation Decisions
 
-1. WSS primitive: choose the stable Bun/Pi-compatible WebSocket/TLS server/client
-   approach.
-2. Hub lifetime: decide whether the hub runs in-process in the first Pi instance
+1. Hub lifetime: decide whether the hub runs in-process in the first Pi instance
    or as a spawned child process.
-3. Static peers: decide whether v1 includes manual peer endpoints as a fallback
+2. Static peers: decide whether v1 includes manual peer endpoints as a fallback
    when UDP broadcast is unavailable.
-4. Trust UX: decide whether v1 is file-edit only for `authorized_keys` or also
+3. Trust UX: decide whether v1 is file-edit only for `authorized_keys` or also
    includes a command to import keys.
 
 ## Next Actions
@@ -168,6 +170,6 @@ Project/config files:
 1. Start the Pi extension entrypoint now that routing has a tested module
    boundary.
 2. Add Pi tool surface for peer/agent listing and send/get/await behavior.
-4. Add end-to-end acceptance checks for local hub startup and trusted remote
+3. Add end-to-end acceptance checks for local hub startup and trusted remote
    listing.
-5. Add audit integration around discovery, auth, and messaging events.
+4. Add audit integration around discovery, auth, and messaging events.

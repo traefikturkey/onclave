@@ -11,6 +11,8 @@ export type ComsLanPaths = {
   hubLock: string;
   identity: string;
   privateKey: string;
+  tlsCert: string;
+  tlsKey: string;
   runtimeDir: string;
 };
 
@@ -24,6 +26,8 @@ export function getComsLanPaths(root: string): ComsLanPaths {
     hubLock: join(root, "hub.lock"),
     identity: join(root, "identity.json"),
     privateKey: join(root, "identity.key"),
+    tlsCert: join(root, "tls.cert.pem"),
+    tlsKey: join(root, "tls.key.pem"),
     runtimeDir: join(root, "runtime"),
   };
 }

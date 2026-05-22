@@ -21,6 +21,8 @@ describe("coms-lan state helpers", () => {
     expect(paths.hubState).toBe(join(root, "hub.json"));
     expect(paths.identity).toBe(join(root, "identity.json"));
     expect(paths.privateKey).toBe(join(root, "identity.key"));
+    expect(paths.tlsCert).toBe(join(root, "tls.cert.pem"));
+    expect(paths.tlsKey).toBe(join(root, "tls.key.pem"));
     expect(paths.runtimeDir).toBe(join(root, "runtime"));
   });
 
