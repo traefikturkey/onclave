@@ -27,7 +27,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 83 passing tests
+- `bun test`: 85 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -48,6 +48,7 @@ Runtime modules:
 
 - `src/coms-lan/audit.ts`
 - `src/coms-lan/authorized-keys.ts`
+- `src/coms-lan/bootstrap.ts`
 - `src/coms-lan/canonical-json.ts`
 - `src/coms-lan/discovery.ts`
 - `src/coms-lan/extension-helpers.ts`
@@ -69,6 +70,7 @@ Tests:
 
 - `tests/coms-lan/audit.test.ts`
 - `tests/coms-lan/authorized-keys.test.ts`
+- `tests/coms-lan/bootstrap.test.ts`
 - `tests/coms-lan/canonical-json.test.ts`
 - `tests/coms-lan/discovery-service.test.ts`
 - `tests/coms-lan/discovery.test.ts`
@@ -107,6 +109,8 @@ Project/config files:
 - Persistent self-signed TLS material loading/generation under `~/.pi/coms-lan/`.
 - Authorized key trust loading from `~/.pi/coms-lan/authorized_keys`.
 - Public key export formatting for operator trust setup.
+- Local hub bootstrap loads identity, trust, TLS material, and starts or reuses
+  hub state.
 - Local hub state read/write and validation.
 - Existing live hub reuse via injected health checks.
 - Stale hub state replacement.
