@@ -3,18 +3,18 @@ import { homedir, networkInterfaces } from "node:os";
 import { basename } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { appendAuditEvent, type AuditEventName, type AuditMetadata } from "../src/coms-lan/audit";
-import { bootstrapLocalHub, type BootstrapLocalHubResult } from "../src/coms-lan/bootstrap";
-import { findStaticPeer, loadComsLanConfig } from "../src/coms-lan/config";
-import { createLocalAgentRegistration } from "../src/coms-lan/extension-helpers";
-import { loadIdentityPrivateKeyHex } from "../src/coms-lan/identity";
-import { createRemoteHubClient, RemoteHubAuthError } from "../src/coms-lan/remote-client";
-import type { DeliveredPrompt } from "../src/coms-lan/messages";
-import type { LocalAgentRegistration } from "../src/coms-lan/local-registry";
-import { getComsLanPaths } from "../src/coms-lan/state";
-import { buildComsLanStatus } from "../src/coms-lan/status";
-import { addAuthorizedKeyLine } from "../src/coms-lan/trust";
-import { sendWssFrames } from "../src/coms-lan/wss-transport";
+import { appendAuditEvent, type AuditEventName, type AuditMetadata } from "../src/onclave/audit";
+import { bootstrapLocalHub, type BootstrapLocalHubResult } from "../src/onclave/bootstrap";
+import { findStaticPeer, loadOnclaveConfig } from "../src/onclave/config";
+import { createLocalAgentRegistration } from "../src/onclave/extension-helpers";
+import { loadIdentityPrivateKeyHex } from "../src/onclave/identity";
+import { createRemoteHubClient, RemoteHubAuthError } from "../src/onclave/remote-client";
+import type { DeliveredPrompt } from "../src/onclave/messages";
+import type { LocalAgentRegistration } from "../src/onclave/local-registry";
+import { getOnclavePaths } from "../src/onclave/state";
+import { buildOnclaveStatus } from "../src/onclave/status";
+import { addAuthorizedKeyLine } from "../src/onclave/trust";
+import { sendWssFrames } from "../src/onclave/wss-transport";
 
 const DEFAULT_DISCOVERY_PORT = 48889;
 const DEFAULT_BROADCAST_ADDRESS = "255.255.255.255";
@@ -41,7 +41,7 @@ export default function (pi: ExtensionAPI) {
     default: false,
   });
 
-  const paths = getComsLanPaths(`${homedir()}/.pi/coms-lan`);
+  const paths = getOnclavePaths(`${homedir()}/.pi/onclave`);
   const audit = (event: AuditEventName, metadata: AuditMetadata) => appendAuditEvent(paths.auditLog, event, metadata);
   let bootstrap: BootstrapLocalHubResult | null = null;
   let localSessionId: string | null = null;
@@ -189,7 +189,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({}),
     async execute() {
       if (!bootstrap) throw new Error("onclave is not initialized");
-      const status = buildComsLanStatus({
+      const status = buildOnclaveStatus({
         endpoint: bootstrap.state.endpoint,
         started: bootstrap.started,
         publicAuthorizedKeyLine: bootstrap.publicAuthorizedKeyLine,
@@ -219,7 +219,7 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({}),
     async execute() {
       const peers = bootstrap?.runtime?.discoveredPeers?.() ?? [];
-      const config = await loadComsLanConfig(paths);
+      const config = await loadOnclaveConfig(paths);
       return {
         content: [
           {
@@ -235,10 +235,10 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "onclave_static_peers",
     label: "Onclave Static Peers",
-    description: "List persistent static peers configured in ~/.pi/coms-lan/config.json.",
+    description: "List persistent static peers configured in ~/.pi/onclave/config.json.",
     parameters: Type.Object({}),
     async execute() {
-      const config = await loadComsLanConfig(paths);
+      const config = await loadOnclaveConfig(paths);
       return {
         content: [{ type: "text" as const, text: `${config.staticPeers.length} static peer(s)` }],
         details: { staticPeers: config.staticPeers, configPath: paths.config },
@@ -327,7 +327,7 @@ export default function (pi: ExtensionAPI) {
     label: "Onclave Remote Agents",
     description: "List agents from a trusted remote Onclave hub using explicit metadata or a static peer name.",
     parameters: Type.Object({
-      peer_name: Type.Optional(Type.String({ description: "Name of a static peer in ~/.pi/coms-lan/config.json." })),
+      peer_name: Type.Optional(Type.String({ description: "Name of a static peer in ~/.pi/onclave/config.json." })),
       endpoint: Type.Optional(Type.String({ description: "Remote WSS endpoint, for example wss://host:1234/v1/hub." })),
       node_id: Type.Optional(Type.String({ description: "Remote persistent node ID." })),
       hub_instance_id: Type.Optional(Type.String({ description: "Remote runtime hub instance ID." })),
@@ -358,7 +358,7 @@ export default function (pi: ExtensionAPI) {
     label: "Onclave Remote Send",
     description: "Send a prompt to a trusted remote Onclave hub using explicit metadata or a static peer name.",
     parameters: Type.Object({
-      peer_name: Type.Optional(Type.String({ description: "Name of a static peer in ~/.pi/coms-lan/config.json." })),
+      peer_name: Type.Optional(Type.String({ description: "Name of a static peer in ~/.pi/onclave/config.json." })),
       endpoint: Type.Optional(Type.String({ description: "Remote WSS endpoint, for example wss://host:1234/v1/hub." })),
       node_id: Type.Optional(Type.String({ description: "Remote persistent node ID." })),
       hub_instance_id: Type.Optional(Type.String({ description: "Remote runtime hub instance ID." })),
@@ -400,7 +400,7 @@ export default function (pi: ExtensionAPI) {
     label: "Onclave Remote Get",
     description: "Poll a message response from a trusted remote Onclave hub.",
     parameters: Type.Object({
-      peer_name: Type.Optional(Type.String({ description: "Name of a static peer in ~/.pi/coms-lan/config.json." })),
+      peer_name: Type.Optional(Type.String({ description: "Name of a static peer in ~/.pi/onclave/config.json." })),
       endpoint: Type.Optional(Type.String({ description: "Remote WSS endpoint, for example wss://host:1234/v1/hub." })),
       node_id: Type.Optional(Type.String({ description: "Remote persistent node ID." })),
       hub_instance_id: Type.Optional(Type.String({ description: "Remote runtime hub instance ID." })),
@@ -489,11 +489,11 @@ type RemotePeerParams = {
 };
 
 async function resolveRemotePeer(
-  paths: ReturnType<typeof getComsLanPaths>,
+  paths: ReturnType<typeof getOnclavePaths>,
   params: RemotePeerParams
 ): Promise<{ endpoint: string; nodeId: string; hubInstanceId: string }> {
   if (params.peer_name) {
-    const peer = findStaticPeer(await loadComsLanConfig(paths), params.peer_name);
+    const peer = findStaticPeer(await loadOnclaveConfig(paths), params.peer_name);
     if (!peer) throw new Error(`static peer not found: ${params.peer_name}`);
     return { endpoint: peer.endpoint, nodeId: peer.nodeId, hubInstanceId: peer.hubInstanceId };
   }
@@ -505,7 +505,7 @@ async function resolveRemotePeer(
 
 async function createRemoteClient(
   bootstrap: BootstrapLocalHubResult,
-  paths: ReturnType<typeof getComsLanPaths>,
+  paths: ReturnType<typeof getOnclavePaths>,
   endpoint: string,
   nodeId: string,
   hubInstanceId: string

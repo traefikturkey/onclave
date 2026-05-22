@@ -21,7 +21,7 @@ This plan is intentionally scoped to the PRD v1 goals:
 - Ed25519 challenge-response authentication before any remote agent listing or
   messaging.
 - Persistent state, config, runtime files, and audit logs under
-  `~/.pi/coms-lan/`.
+  `~/.pi/onclave/`.
 - No changes to `coms.ts` or `coms-net.ts` as the primary implementation path.
 
 ## Prior-Art Review
@@ -100,8 +100,8 @@ minimal runtime and test scaffolding needed for a Pi extension:
 extensions/
   onclave.ts
 scripts/
-  coms-lan-hub.ts        # only if the hub cannot safely live inside extension code
-src/coms-lan/
+  onclave-hub.ts         # only if the hub cannot safely live inside extension code
+src/onclave/
   audit.ts
   authorized-keys.ts
   canonical-json.ts
@@ -114,7 +114,7 @@ src/coms-lan/
   state.ts
   transport.ts
 tests/
-  coms-lan/
+  onclave/
     authorized-keys.test.ts
     canonical-json.test.ts
     discovery.test.ts
@@ -124,16 +124,16 @@ tests/
     project-label.test.ts
 ```
 
-Planning bias: start with `extensions/onclave.ts` plus small `src/coms-lan/*`
-modules. Add `scripts/coms-lan-hub.ts` only if process lifecycle or Bun server
+Planning bias: start with `extensions/onclave.ts` plus small `src/onclave/*`
+modules. Add `scripts/onclave-hub.ts` only if process lifecycle or Bun server
 startup is cleaner outside the extension.
 
 ## Runtime State Layout
 
-All files live under `~/.pi/coms-lan/`:
+All files live under `~/.pi/onclave/`:
 
 ```text
-~/.pi/coms-lan/
+~/.pi/onclave/
   authorized_keys              # imported/configured ssh-ed25519 public keys
   audit.log.jsonl              # append-only JSONL audit events
   config.json                  # non-secret operator config
@@ -161,7 +161,7 @@ Security rules:
 
 - `node_id`: generated stable ID for the machine hub.
 - `public_key`: app-specific Ed25519 public key.
-- `private_key_path`: points to `identity.key` under `~/.pi/coms-lan/`.
+- `private_key_path`: points to `identity.key` under `~/.pi/onclave/`.
 - `created_at` and `version`.
 
 ### Runtime identity
@@ -176,7 +176,7 @@ Metadata-only JSON packet:
 
 ```json
 {
-  "m": "PI-COMS-LAN",
+  "m": "PI-ONCLAVE",
   "v": 1,
   "node_id": "...",
   "hub_instance_id": "...",
@@ -239,7 +239,7 @@ Implementation notes:
 
 Startup path for each Pi instance:
 
-1. Ensure `~/.pi/coms-lan/` exists.
+1. Ensure `~/.pi/onclave/` exists.
 2. Load or create persistent local identity.
 3. Try to read `hub.json`.
 4. If `hub.json` exists, health-check the local hub endpoint.
@@ -302,7 +302,7 @@ Resolution order:
 
 Examples:
 
-- Worktree branch `feature/coms-lan` -> `feature/coms-lan`
+- Worktree branch `feature/onclave` -> `feature/onclave`
 - Repo directory `onclave` on branch `main` -> `onclave@main`
 - Non-git directory `/tmp/scratch` -> `scratch`
 
@@ -404,7 +404,7 @@ Exit criteria:
 
 ### Phase 1: State, Identity, Audit, and Authorized Keys
 
-- Implement path helpers rooted at `~/.pi/coms-lan/` with test override support.
+- Implement path helpers rooted at `~/.pi/onclave/` with test override support.
 - Implement atomic JSON writes for state files.
 - Implement persistent node identity and app-specific Ed25519 key generation.
 - Implement JSONL audit writer.
@@ -495,11 +495,11 @@ Exit criteria:
 
 1. **Static peer fallback:** v1 supports manual peer fallback through explicit
    remote tool parameters (`endpoint`, `node_id`, `hub_instance_id`) and
-   persistent static peers in `~/.pi/coms-lan/config.json`.
+   persistent static peers in `~/.pi/onclave/config.json`.
 2. **Audit payloads:** audit logs omit prompt and response bodies by default.
    Payload logging is not part of v1.
 3. **Trust changes:** v1 supports file-based trust through
-   `~/.pi/coms-lan/authorized_keys`, with commands/tools that display the local
+   `~/.pi/onclave/authorized_keys`, with commands/tools that display the local
    public key line, show the trust file path, and validate/dedupe/append public
    key lines.
 4. **`authorized_keys` options:** options are rejected in v1. Only plain
@@ -510,7 +510,7 @@ Exit criteria:
    that wins the local hub lock. A spawned child process remains a post-v1
    hardening option.
 
-Detailed rationale is recorded in `docs/COMS_LAN_DECISIONS.md`.
+Detailed rationale is recorded in `docs/ONCLAVE_DECISIONS.md`.
 
 ## Implementation Status Update
 
@@ -578,7 +578,7 @@ protocol or security implementation.
     - consider richer trust inspection/status output if operators need a more
       guided trust-management loop;
     - evaluate a future trust request / approval flow as described in
-      `docs/COMS_LAN_TRUST_UX_FUTURE.md`.
+      `docs/ONCLAVE_TRUST_UX_FUTURE.md`.
 2. Reverse-direction and orchestration UX
     - add a reverse-direction acceptance helper so Host B can initiate the same
       validation flow back to Host A with the same low-friction workflow;
