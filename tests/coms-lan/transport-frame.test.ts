@@ -88,6 +88,7 @@ describe("HubFrameProcessor", () => {
     const processor = createProcessor(fixture.authorizedKeys, {
       onSendPrompt: async (frame) => {
         sent.push(frame);
+        return { ok: true, msgId: frame.msgId, status: "delivered" };
       },
     });
     const frame: SendPromptFrame = {
@@ -101,14 +102,37 @@ describe("HubFrameProcessor", () => {
     await processor.handleRaw(JSON.stringify(fixture.frame));
     const response = await processor.handleRaw(JSON.stringify(frame));
 
-    expect(response).toEqual({ type: "send_accepted", msgId: "msg-1" });
+    expect(response).toEqual({ type: "send_accepted", msgId: "msg-1", status: "delivered" });
     expect(sent).toEqual([frame]);
+  });
+
+  it("returns routing failures for authenticated prompt sends", async () => {
+    const fixture = await createClientAuthFrame();
+    const processor = createProcessor(fixture.authorizedKeys, {
+      onSendPrompt: async () => ({ ok: false, error: "target_not_found" }),
+    });
+
+    await processor.handleRaw(JSON.stringify(fixture.frame));
+    const response = await processor.handleRaw(
+      JSON.stringify({
+        type: "send_prompt",
+        msgId: "msg-1",
+        targetSessionId: "missing",
+        prompt: "hello",
+        hops: 0,
+      })
+    );
+
+    expect(response).toEqual({ type: "send_rejected", msgId: "msg-1", error: "target_not_found" });
   });
 });
 
 function createProcessor(
   authorizedKeys: ReturnType<typeof parseAuthorizedKeys>,
-  options: { agents?: LocalAgent[]; onSendPrompt?: (frame: SendPromptFrame) => Promise<void> } = {}
+  options: {
+    agents?: LocalAgent[];
+    onSendPrompt?: (frame: SendPromptFrame) => Promise<{ ok: true; msgId: string; status: "delivered" } | { ok: false; error: string } | void>;
+  } = {}
 ): HubFrameProcessor {
   return new HubFrameProcessor({
     gate: new HubTransportAuthGate({

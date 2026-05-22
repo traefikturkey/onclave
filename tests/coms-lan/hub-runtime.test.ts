@@ -29,6 +29,7 @@ afterAll(async () => {
 describe("ComsLanHubRuntime", () => {
   it("starts WSS transport, broadcasts discovery, registers local agents, and gates remote listing", async () => {
     const discoverySocket = new FakeUdpSocket();
+    const delivered: unknown[] = [];
     const auth = await createClientAuthFrame();
     const runtime = new ComsLanHubRuntime({
       nodeId: "node_server",
@@ -43,6 +44,9 @@ describe("ComsLanHubRuntime", () => {
       now: () => NOW,
       staleAfterMs: 30_000,
       offlineAfterMs: 60_000,
+      deliverPrompt: async (prompt) => {
+        delivered.push(prompt);
+      },
     });
 
     await runtime.start();
@@ -57,12 +61,35 @@ describe("ComsLanHubRuntime", () => {
       });
 
       const agent = runtime.registerLocalAgent(createRegistration());
-      const responses = await sendWssFrames(runtime.wssUrl(), [auth.frame, { type: "list_agents" }], {
-        rejectUnauthorized: false,
-      });
+      const responses = await sendWssFrames(
+        runtime.wssUrl(),
+        [
+          auth.frame,
+          { type: "list_agents" },
+          {
+            type: "send_prompt",
+            msgId: "msg-1",
+            targetSessionId: "session-1",
+            prompt: "hello",
+            hops: 0,
+          },
+        ],
+        { rejectUnauthorized: false }
+      );
 
       expect(responses[0]).toMatchObject({ type: "auth_ok" });
       expect(responses[1]).toEqual({ type: "agents", agents: [agent] });
+      expect(responses[2]).toEqual({ type: "send_accepted", msgId: "msg-1", status: "delivered" });
+      expect(delivered).toEqual([
+        {
+          msgId: "msg-1",
+          targetSessionId: "session-1",
+          deliveryEndpoint: "local://session-1",
+          prompt: "hello",
+          hops: 0,
+          receivedAt: NOW,
+        },
+      ]);
     } finally {
       await runtime.stop();
     }

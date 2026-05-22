@@ -6,6 +6,7 @@ import {
   type LocalAgent,
   type LocalAgentRegistration,
 } from "./local-registry";
+import { MessageRouter, type DeliveredPrompt } from "./messages";
 import {
   HubFrameProcessor,
   HubTransportAuthGate,
@@ -30,10 +31,14 @@ export type ComsLanHubRuntimeOptions = {
   now: () => string;
   staleAfterMs: number;
   offlineAfterMs: number;
+  messageTtlMs?: number;
+  maxHops?: number;
+  deliverPrompt?: (prompt: DeliveredPrompt) => Promise<void>;
 };
 
 export class ComsLanHubRuntime {
   private readonly registry: LocalAgentRegistry;
+  private readonly messages: MessageRouter;
   private wssServer: WssHubServer | null = null;
   private discovery: DiscoveryService | null = null;
   private state: HubState | null = null;
@@ -42,6 +47,13 @@ export class ComsLanHubRuntime {
     this.registry = new LocalAgentRegistry({
       staleAfterMs: options.staleAfterMs,
       offlineAfterMs: options.offlineAfterMs,
+    });
+    this.messages = new MessageRouter({
+      registry: this.registry,
+      now: options.now,
+      ttlMs: options.messageTtlMs ?? 1_800_000,
+      maxHops: options.maxHops ?? 5,
+      deliverPrompt: options.deliverPrompt ?? (async () => undefined),
     });
   }
 
@@ -121,8 +133,8 @@ export class ComsLanHubRuntime {
     });
   }
 
-  private async handleSendPrompt(_frame: SendPromptFrame): Promise<void> {
-    return undefined;
+  private async handleSendPrompt(frame: SendPromptFrame) {
+    return this.messages.sendPrompt(frame);
   }
 }
 

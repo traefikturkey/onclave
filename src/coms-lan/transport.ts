@@ -36,11 +36,16 @@ export type ListAgentsFrame = {
 
 export type HubFrame = ClientAuthFrame | ListAgentsFrame | SendPromptFrame;
 
+export type SendPromptRouteResult =
+  | { ok: true; msgId: string; status: "delivered" }
+  | { ok: false; error: string };
+
 export type HubFrameResponse =
   | { type: "auth_ok"; peer: AuthenticatedPeer }
   | { type: "auth_failed"; reason: HandshakeFailureReason }
   | { type: "agents"; agents: LocalAgent[] }
-  | { type: "send_accepted"; msgId: string }
+  | { type: "send_accepted"; msgId: string; status: "delivered" }
+  | { type: "send_rejected"; msgId: string; error: string }
   | { type: "error"; code: "invalid_frame" | "auth_required" | "unsupported_frame" };
 
 export type HubTransportAuthGateOptions = {
@@ -52,7 +57,7 @@ export type HubTransportAuthGateOptions = {
 export type HubFrameProcessorOptions = {
   gate: HubTransportAuthGate;
   listAgents: () => LocalAgent[];
-  onSendPrompt: (frame: SendPromptFrame) => Promise<void>;
+  onSendPrompt: (frame: SendPromptFrame) => Promise<SendPromptRouteResult | void>;
 };
 
 export type TransportAuthResult =
@@ -74,10 +79,14 @@ export class HubFrameProcessor {
       case "list_agents":
         if (!this.isAuthenticated()) return { type: "error", code: "auth_required" };
         return { type: "agents", agents: this.options.listAgents() };
-      case "send_prompt":
+      case "send_prompt": {
         if (!this.isAuthenticated()) return { type: "error", code: "auth_required" };
-        await this.options.onSendPrompt(frame);
-        return { type: "send_accepted", msgId: frame.msgId };
+        const result = await this.options.onSendPrompt(frame);
+        if (result && !result.ok) {
+          return { type: "send_rejected", msgId: frame.msgId, error: result.error };
+        }
+        return { type: "send_accepted", msgId: frame.msgId, status: "delivered" };
+      }
       default:
         return { type: "error", code: "unsupported_frame" };
     }

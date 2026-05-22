@@ -27,7 +27,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 67 passing tests
+- `bun test`: 74 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -39,7 +39,7 @@ Result:
 | Phase 2: Local Hub Lifecycle and Registration | Mostly complete | Hub state, health-check reuse, stale replacement, lock-protected start flow, dynamic local service binding, and local registry implemented; integration into extension remains. |
 | Phase 3: UDP Discovery | Mostly complete | Packet validation, untrusted peer cache, broadcast/listen lifecycle, and Node UDP adapter implemented; hub integration remains. |
 | Phase 4: WSS Transport and Mutual Authentication | Mostly complete | Bun WSS spike passed; signed handshake verifier, transport auth gate, frame processor, minimal WSS server/client wrapper, and composed hub runtime implemented; extension integration remains. |
-| Phase 5: Messaging and Tool Surface | Not started | Needs routing, response correlation, and Pi tools. |
+| Phase 5: Messaging and Tool Surface | Partial | Local message routing, response correlation, timeout cleanup, and WSS send_prompt delivery are implemented; Pi tools remain. |
 | Phase 6: Acceptance Hardening | Not started | Manual multi-process and LAN checks remain. |
 
 ## Implemented Files
@@ -56,6 +56,7 @@ Runtime modules:
 - `src/coms-lan/local-hub.ts`
 - `src/coms-lan/local-registry.ts`
 - `src/coms-lan/local-service.ts`
+- `src/coms-lan/messages.ts`
 - `src/coms-lan/project-label.ts`
 - `src/coms-lan/state.ts`
 - `src/coms-lan/transport.ts`
@@ -74,6 +75,7 @@ Tests:
 - `tests/coms-lan/local-hub.test.ts`
 - `tests/coms-lan/local-registry.test.ts`
 - `tests/coms-lan/local-service.test.ts`
+- `tests/coms-lan/messages.test.ts`
 - `tests/coms-lan/project-label.test.ts`
 - `tests/coms-lan/state.test.ts`
 - `tests/coms-lan/transport-frame.test.ts`
@@ -125,6 +127,11 @@ Project/config files:
   TLS.
 - Composed hub runtime starts WSS transport, broadcasts discovery, registers
   local agents, and exposes auth-gated remote listing.
+- Message router delivers prompts to registered local agents.
+- Message router correlates responses by message ID and marks expired messages
+  as timeout.
+- Authenticated WSS `send_prompt` frames route through the message router and
+  surface routing failures.
 
 ## Security Notes
 
@@ -154,9 +161,10 @@ Project/config files:
 
 ## Next Actions
 
-1. Add message routing tests after transport auth gates are in place.
-2. Implement message routing behind those tests.
-3. Start the Pi extension entrypoint once routing has a tested module boundary.
-4. Add Pi tool surface after extension bootstrap works.
-5. Add end-to-end acceptance checks for local hub startup and trusted remote
+1. Start the Pi extension entrypoint now that routing has a tested module
+   boundary.
+2. Add Pi session registration/bootstrap tests around extension-facing helpers.
+3. Add Pi tool surface for peer/agent listing and send/get/await behavior.
+4. Add end-to-end acceptance checks for local hub startup and trusted remote
    listing.
+5. Add audit integration around discovery, auth, and messaging events.
