@@ -10,6 +10,10 @@ source_prd: ./PRD.md
 trust remote hubs with Ed25519 public keys, and exchange prompt/response
 messages over authenticated WSS.
 
+Start with [USAGE.md](./USAGE.md) for quick starts, extension loading,
+status-dot meanings, and tool examples. Use this operator guide for deeper
+runtime and troubleshooting details.
+
 ## State Location
 
 All runtime state lives under:
