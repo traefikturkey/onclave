@@ -53,6 +53,51 @@ describe("MessageRouter", () => {
     expect(router.getResponse("msg-1")).toEqual({ status: "pending" });
   });
 
+  it("preserves async reply metadata when delivering prompts", async () => {
+    const delivered: DeliveredPrompt[] = [];
+    const router = createRouter(delivered);
+
+    await router.sendPrompt(
+      createFrame({
+        replyMode: "async_message",
+        origin: {
+          nodeId: "node_origin",
+          hubInstanceId: "hub_origin",
+          endpoint: "wss://172.30.20.50:43837/v1/hub",
+          sessionId: "session-origin",
+          correlationId: "corr-1",
+          agentName: "host-a",
+          projectLabel: "onclave@main",
+        },
+      })
+    );
+
+    expect(delivered).toEqual([
+      {
+        msgId: "msg-1",
+        targetSessionId: "session-1",
+        deliveryEndpoint: "local://session-1",
+        prompt: "hello",
+        hops: 0,
+        receivedAt: NOW,
+        replyMode: "async_message",
+        origin: {
+          nodeId: "node_origin",
+          hubInstanceId: "hub_origin",
+          endpoint: "wss://172.30.20.50:43837/v1/hub",
+          sessionId: "session-origin",
+          correlationId: "corr-1",
+          agentName: "host-a",
+          projectLabel: "onclave@main",
+        },
+      },
+    ]);
+    expect(router.getMessage("msg-1")).toMatchObject({
+      replyMode: "async_message",
+      origin: { correlationId: "corr-1", sessionId: "session-origin" },
+    });
+  });
+
   it("correlates responses by message ID", async () => {
     const router = createRouter([]);
     await router.sendPrompt(createFrame());

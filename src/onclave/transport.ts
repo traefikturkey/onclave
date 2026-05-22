@@ -12,6 +12,12 @@ import {
 } from "./handshake";
 import type { LocalAgent, LocalAgentRegistration } from "./local-registry";
 import type { MessageResponse, SubmitResponseResult } from "./messages";
+import {
+  isPromptOriginMetadata,
+  isPromptReplyMode,
+  type PromptOriginMetadata,
+  type PromptReplyMode,
+} from "./prompt-metadata";
 
 export type ClientAuthFrame = {
   type: "client_auth";
@@ -38,6 +44,8 @@ export type SendPromptFrame = {
   targetSessionId: string;
   prompt: string;
   hops: number;
+  replyMode?: PromptReplyMode;
+  origin?: PromptOriginMetadata;
 };
 
 export type ListAgentsFrame = {
@@ -422,7 +430,9 @@ function isLocalSendPromptFrame(value: Record<string, unknown>): value is LocalS
     typeof value.targetSessionId === "string" &&
     value.targetSessionId.length > 0 &&
     typeof value.prompt === "string" &&
-    typeof value.hops === "number"
+    typeof value.hops === "number" &&
+    (value.replyMode === undefined || isPromptReplyMode(value.replyMode)) &&
+    (value.origin === undefined || isPromptOriginMetadata(value.origin))
   );
 }
 
@@ -434,6 +444,8 @@ function isSendPromptFrame(value: Record<string, unknown>): value is SendPromptF
     typeof value.targetSessionId === "string" &&
     value.targetSessionId.length > 0 &&
     typeof value.prompt === "string" &&
-    typeof value.hops === "number"
+    typeof value.hops === "number" &&
+    (value.replyMode === undefined || isPromptReplyMode(value.replyMode)) &&
+    (value.origin === undefined || isPromptOriginMetadata(value.origin))
   );
 }

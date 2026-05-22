@@ -21,6 +21,7 @@ describe("Onclave extension registration", () => {
       "onclave_remote_agents",
       "onclave_remote_get",
       "onclave_remote_send",
+      "onclave_reply",
       "onclave_send",
       "onclave_static_peers",
       "onclave_status",

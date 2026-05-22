@@ -1,4 +1,5 @@
 import type { LocalAgentRegistry } from "./local-registry";
+import type { PromptOriginMetadata, PromptReplyMode } from "./prompt-metadata";
 import type { SendPromptFrame } from "./transport";
 
 export type MessageStatus = "queued" | "delivered" | "complete" | "error" | "timeout";
@@ -10,6 +11,8 @@ export type DeliveredPrompt = {
   prompt: string;
   hops: number;
   receivedAt: string;
+  replyMode?: PromptReplyMode;
+  origin?: PromptOriginMetadata;
 };
 
 export type RoutedMessage = {
@@ -24,6 +27,8 @@ export type RoutedMessage = {
   completedAt?: string;
   response?: unknown;
   error?: string | null;
+  replyMode?: PromptReplyMode;
+  origin?: PromptOriginMetadata;
 };
 
 export type MessageResponse = {
@@ -81,6 +86,8 @@ export class MessageRouter {
       status: "queued",
       createdAt: now,
       expiresAt: new Date(Date.parse(now) + this.options.ttlMs).toISOString(),
+      ...(frame.replyMode ? { replyMode: frame.replyMode } : {}),
+      ...(frame.origin ? { origin: frame.origin } : {}),
     };
     this.messages.set(frame.msgId, message);
 
@@ -92,6 +99,8 @@ export class MessageRouter {
         prompt: frame.prompt,
         hops: frame.hops,
         receivedAt: now,
+        ...(frame.replyMode ? { replyMode: frame.replyMode } : {}),
+        ...(frame.origin ? { origin: frame.origin } : {}),
       });
     } catch {
       this.messages.set(frame.msgId, { ...message, status: "error", error: "delivery_failed" });
