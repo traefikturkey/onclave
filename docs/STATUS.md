@@ -27,7 +27,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 74 passing tests
+- `bun test`: 77 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -50,6 +50,7 @@ Runtime modules:
 - `src/coms-lan/authorized-keys.ts`
 - `src/coms-lan/canonical-json.ts`
 - `src/coms-lan/discovery.ts`
+- `src/coms-lan/extension-helpers.ts`
 - `src/coms-lan/handshake.ts`
 - `src/coms-lan/hub-runtime.ts`
 - `src/coms-lan/identity.ts`
@@ -69,6 +70,7 @@ Tests:
 - `tests/coms-lan/canonical-json.test.ts`
 - `tests/coms-lan/discovery-service.test.ts`
 - `tests/coms-lan/discovery.test.ts`
+- `tests/coms-lan/extension-helpers.test.ts`
 - `tests/coms-lan/handshake.test.ts`
 - `tests/coms-lan/hub-runtime.test.ts`
 - `tests/coms-lan/identity.test.ts`
@@ -132,6 +134,8 @@ Project/config files:
   as timeout.
 - Authenticated WSS `send_prompt` frames route through the message router and
   surface routing failures.
+- Extension-facing helper builds local agent registrations from session/runtime
+  metadata with project labels and stable defaults.
 
 ## Security Notes
 
@@ -163,8 +167,7 @@ Project/config files:
 
 1. Start the Pi extension entrypoint now that routing has a tested module
    boundary.
-2. Add Pi session registration/bootstrap tests around extension-facing helpers.
-3. Add Pi tool surface for peer/agent listing and send/get/await behavior.
+2. Add Pi tool surface for peer/agent listing and send/get/await behavior.
 4. Add end-to-end acceptance checks for local hub startup and trusted remote
    listing.
 5. Add audit integration around discovery, auth, and messaging events.
