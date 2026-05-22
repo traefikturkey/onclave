@@ -82,6 +82,7 @@ Existing tools using this model:
 
 Automatic background polling/aggregation from static peers can be added later if
 operators need static peers to appear alongside discovered trusted agent lists.
+Richer static-peer convenience flows also remain a post-v1 operator UX item.
 
 ## Decision 3: Trust Import UX
 
@@ -107,7 +108,8 @@ Current support:
 ### Deferred Follow-up
 
 A trust removal tool can be added later if operators need managed key revocation
-without editing `authorized_keys`.
+without editing `authorized_keys`. Richer trust inspection UX also remains a
+post-v1 operator improvement.
 
 ## Decision 4: WSS Transport Stack
 
@@ -132,3 +134,5 @@ extension runtime.
   the accepted v1 implementation.
 - Future transport changes should preserve the same frame protocol and mutual
   authentication behavior so operators do not need a workflow change.
+- Reverse-direction acceptance helpers and higher-level orchestration remain
+  operator UX work above the transport layer, not transport redesign tasks.

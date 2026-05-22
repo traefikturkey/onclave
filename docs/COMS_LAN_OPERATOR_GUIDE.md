@@ -258,6 +258,16 @@ coms_lan_remote_get peer_name="bench" msg_id="msg_..."
 Remote list/send/get requires successful Ed25519 authentication against the
 remote host's `authorized_keys`. Endpoint knowledge alone does not grant access.
 
+## Post-v1 Operator Improvements
+
+The current v1 workflow is complete, but the remaining planned operator-facing
+work is:
+
+- trust removal or revocation helpers beyond manual `authorized_keys` edits;
+- reverse-direction acceptance helpers so either host can run the initiator
+  workflow with the same low-friction prompt-template flow;
+- richer static-peer convenience or aggregation when UDP discovery is blocked.
+
 ## Audit Logs
 
 Audit log path:

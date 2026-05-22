@@ -248,6 +248,17 @@ See `docs/COMS_LAN_DECISIONS.md` for rationale and consequences.
 
 ## Next Actions
 
-1. Consider post-v1 trust removal UX, reverse-direction acceptance helpers, or
-   automatic static peer aggregation if further operator testing shows they are
-   needed.
+The remaining work is post-v1 operator polish:
+
+1. Trust management UX
+    - add a trust removal or revocation helper so operators do not need to edit
+      `authorized_keys` manually for common removal cases;
+    - consider richer trust inspection/status output if operators need it.
+2. Reverse-direction and orchestration UX
+    - add a reverse-direction acceptance helper so either host can run the
+      initiator flow with minimal operator coordination;
+    - consider a higher-level acceptance orchestrator or additional prompt
+      templates for multi-host validation runs.
+3. Static peer/operator convenience
+    - consider automatic static peer aggregation or richer static-peer workflows
+      when UDP discovery is blocked or unreliable.

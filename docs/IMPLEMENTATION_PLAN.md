@@ -569,6 +569,21 @@ Resolved.
 
 ## Remaining Next Steps
 
-1. Consider post-v1 trust removal UX, reverse-direction acceptance helpers, or
-   automatic static peer aggregation if future operator testing shows they are
-   needed.
+The remaining work is now operator UX and lifecycle polish rather than core v1
+protocol or security implementation.
+
+1. Trust management UX
+    - add a trust removal or revocation workflow so operators do not need to
+      edit `authorized_keys` manually for common key-removal cases;
+    - consider richer trust inspection/status output if operators need a more
+      guided trust-management loop.
+2. Reverse-direction and orchestration UX
+    - add a reverse-direction acceptance helper so Host B can initiate the same
+      validation flow back to Host A with the same low-friction workflow;
+    - consider a higher-level acceptance orchestrator or additional prompt
+      templates to reduce manual operator coordination further.
+3. Static peer and operator convenience
+    - consider automatic static peer aggregation or richer `config.json`
+      convenience flows when UDP discovery is blocked or unreliable;
+    - keep manual/static peer fallback aligned with the same trust and audit
+      guarantees as discovered peers.
