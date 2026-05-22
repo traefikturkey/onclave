@@ -27,7 +27,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 80 passing tests
+- `bun test`: 83 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -62,6 +62,7 @@ Runtime modules:
 - `src/coms-lan/state.ts`
 - `src/coms-lan/tls.ts`
 - `src/coms-lan/transport.ts`
+- `src/coms-lan/trust.ts`
 - `src/coms-lan/wss-transport.ts`
 
 Tests:
@@ -83,6 +84,7 @@ Tests:
 - `tests/coms-lan/state.test.ts`
 - `tests/coms-lan/tls.test.ts`
 - `tests/coms-lan/transport-frame.test.ts`
+- `tests/coms-lan/trust.test.ts`
 - `tests/coms-lan/transport.test.ts`
 - `tests/coms-lan/wss-transport.test.ts`
 
@@ -103,6 +105,8 @@ Project/config files:
 - Atomic JSON writes.
 - App-specific Ed25519 identity and signing key generation.
 - Persistent self-signed TLS material loading/generation under `~/.pi/coms-lan/`.
+- Authorized key trust loading from `~/.pi/coms-lan/authorized_keys`.
+- Public key export formatting for operator trust setup.
 - Local hub state read/write and validation.
 - Existing live hub reuse via injected health checks.
 - Stale hub state replacement.
