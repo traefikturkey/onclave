@@ -109,6 +109,9 @@ export class OnclaveHubRuntime {
       broadcastAddress: this.options.broadcastAddress,
       intervalMs: 5_000,
       now: this.options.now,
+      trustedNodeIds: this.options.authorizedKeys
+        .map((key) => key.comment.trim())
+        .filter((comment) => /^node_[0-9A-HJKMNP-TV-Z]{26}$/.test(comment)),
       audit: this.options.audit,
     });
     await this.discovery.start();

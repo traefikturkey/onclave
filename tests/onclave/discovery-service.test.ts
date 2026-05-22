@@ -59,7 +59,7 @@ describe("DiscoveryService", () => {
     await service.stop();
   });
 
-  it("stores inbound valid packets as untrusted peers", async () => {
+  it("stores inbound valid packets as untrusted peers by default", async () => {
     const socket = new FakeUdpSocket();
     const service = createService(socket, () => "2026-05-21T00:00:01.000Z");
     await service.start();
@@ -85,6 +85,39 @@ describe("DiscoveryService", () => {
         endpoint: "wss://192.168.1.20:5555/v1/hub",
         lastSeenAt: "2026-05-21T00:00:01.000Z",
         trustState: "untrusted",
+        authState: "not_attempted",
+      },
+    ]);
+
+    await service.stop();
+  });
+
+  it("stores inbound valid packets as trusted peers when their node id is pre-authorized", async () => {
+    const socket = new FakeUdpSocket();
+    const service = createService(socket, () => "2026-05-21T00:00:01.000Z", undefined, ["node_peer"]);
+    await service.start();
+
+    socket.emitMessage(
+      Buffer.from(
+        JSON.stringify({
+          m: "PI-ONCLAVE",
+          v: 1,
+          node_id: "node_peer",
+          hub_instance_id: "hub_peer",
+          wss_port: 5555,
+          started_at: "2026-05-21T00:00:00.000Z",
+        })
+      ),
+      { address: "192.168.1.20", port: 48889 }
+    );
+
+    expect(service.peers()).toEqual([
+      {
+        nodeId: "node_peer",
+        hubInstanceId: "hub_peer",
+        endpoint: "wss://192.168.1.20:5555/v1/hub",
+        lastSeenAt: "2026-05-21T00:00:01.000Z",
+        trustState: "trusted",
         authState: "not_attempted",
       },
     ]);
@@ -149,7 +182,8 @@ describe("DiscoveryService", () => {
 function createService(
   socket: DiscoveryUdpSocket,
   now: () => string = () => "2026-05-21T00:00:00.000Z",
-  events?: Array<{ event: AuditEventName; metadata: AuditMetadata }>
+  events?: Array<{ event: AuditEventName; metadata: AuditMetadata }>,
+  trustedNodeIds?: string[]
 ): DiscoveryService {
   return new DiscoveryService({
     socket,
@@ -161,6 +195,7 @@ function createService(
     broadcastAddress: "255.255.255.255",
     intervalMs: 60_000,
     now,
+    trustedNodeIds,
     audit: events
       ? (event, metadata) => {
           events.push({ event, metadata });

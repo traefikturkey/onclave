@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { keygenAsync } from "@noble/ed25519";
 import { parseAuthorizedKeys } from "../../src/onclave/authorized-keys";
+import { formatAuthorizedKeyLine } from "../../src/onclave/trust";
 import type { DiscoveryUdpSocket, UdpRemoteInfo } from "../../src/onclave/discovery";
 import { signHandshakePayload, type HandshakePayload, type ServerHelloFrame } from "../../src/onclave/handshake";
 import type { RemoteHubClient } from "../../src/onclave/remote-client";
@@ -131,6 +132,64 @@ describe("OnclaveHubRuntime", () => {
     ).toEqual([{ peerNodeId: "node_remote", agent: remoteAgent }]);
   });
 
+  it("marks discovered peers as trusted when their node id is already authorized", async () => {
+    const discoverySocket = new FakeUdpSocket();
+    const serverKeys = await createKeyMaterial();
+    const authorizedIdentity = {
+      version: 1 as const,
+      nodeId: "node_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      publicKey: serverKeys.publicKeyHex,
+      privateKeyPath: "/tmp/identity.key",
+      createdAt: NOW,
+    };
+    const runtime = new OnclaveHubRuntime({
+      nodeId: "node_server",
+      hubInstanceId: "hub_server",
+      host: "127.0.0.1",
+      tls,
+      authorizedKeys: parseAuthorizedKeys(formatAuthorizedKeyLine(authorizedIdentity)),
+      localPublicKeyHex: serverKeys.publicKeyHex,
+      localPrivateKeyHex: serverKeys.privateKeyHex,
+      discoverySocket,
+      discoveryPort: 48889,
+      broadcastAddress: "255.255.255.255",
+      startedAt: NOW,
+      now: () => NOW,
+      staleAfterMs: 30_000,
+      offlineAfterMs: 60_000,
+    });
+
+    await runtime.start();
+    try {
+      discoverySocket.emitMessage(
+        Buffer.from(
+          JSON.stringify({
+            m: "PI-ONCLAVE",
+            v: 1,
+            node_id: authorizedIdentity.nodeId,
+            hub_instance_id: "hub_remote",
+            wss_port: 4444,
+            started_at: NOW,
+          })
+        ),
+        { address: "192.168.1.20", port: 48889 }
+      );
+
+      expect(runtime.discoveredPeers()).toEqual([
+        {
+          nodeId: authorizedIdentity.nodeId,
+          hubInstanceId: "hub_remote",
+          endpoint: "wss://192.168.1.20:4444/v1/hub",
+          lastSeenAt: NOW,
+          trustState: "trusted",
+          authState: "not_attempted",
+        },
+      ]);
+    } finally {
+      await runtime.stop();
+    }
+  });
+
   it("starts WSS transport, broadcasts discovery, registers local agents, and gates remote listing", async () => {
     const discoverySocket = new FakeUdpSocket();
     const delivered: unknown[] = [];
@@ -210,6 +269,7 @@ class FakeUdpSocket implements DiscoveryUdpSocket {
   broadcastEnabled = false;
   closed = false;
   sent: Array<{ data: Buffer; port: number; address: string }> = [];
+  private messageHandler: ((data: Buffer, remote: UdpRemoteInfo) => void) | null = null;
 
   async bind(port: number): Promise<void> {
     this.boundPort = port;
@@ -219,7 +279,9 @@ class FakeUdpSocket implements DiscoveryUdpSocket {
     this.broadcastEnabled = enabled;
   }
 
-  onMessage(_handler: (data: Buffer, remote: UdpRemoteInfo) => void): void {}
+  onMessage(handler: (data: Buffer, remote: UdpRemoteInfo) => void): void {
+    this.messageHandler = handler;
+  }
 
   async send(data: Buffer, port: number, address: string): Promise<void> {
     this.sent.push({ data, port, address });
@@ -227,6 +289,10 @@ class FakeUdpSocket implements DiscoveryUdpSocket {
 
   async close(): Promise<void> {
     this.closed = true;
+  }
+
+  emitMessage(data: Buffer, remote: UdpRemoteInfo): void {
+    this.messageHandler?.(data, remote);
   }
 }
 

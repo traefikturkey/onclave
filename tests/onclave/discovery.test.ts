@@ -76,7 +76,7 @@ describe("DiscoveryPeerCache", () => {
     expect(cache.list()).toEqual([]);
   });
 
-  it("stores discovered peers as untrusted", () => {
+  it("stores discovered peers as untrusted by default", () => {
     const cache = new DiscoveryPeerCache("node_self");
 
     const result = cache.upsertFromPacket(
@@ -100,6 +100,34 @@ describe("DiscoveryPeerCache", () => {
         endpoint: "wss://192.168.1.10:4444/v1/hub",
         lastSeenAt: "2026-05-21T00:00:01.000Z",
         trustState: "untrusted",
+        authState: "not_attempted",
+      },
+    ]);
+  });
+
+  it("stores discovered peers as trusted when their node id is pre-authorized", () => {
+    const cache = new DiscoveryPeerCache("node_self", ["node_peer"]);
+
+    cache.upsertFromPacket(
+      {
+        m: "PI-ONCLAVE",
+        v: 1,
+        node_id: "node_peer",
+        hub_instance_id: "hub_peer",
+        wss_port: 4444,
+        started_at: "2026-05-21T00:00:00.000Z",
+      },
+      "192.168.1.10",
+      "2026-05-21T00:00:01.000Z"
+    );
+
+    expect(cache.list()).toEqual([
+      {
+        nodeId: "node_peer",
+        hubInstanceId: "hub_peer",
+        endpoint: "wss://192.168.1.10:4444/v1/hub",
+        lastSeenAt: "2026-05-21T00:00:01.000Z",
+        trustState: "trusted",
         authState: "not_attempted",
       },
     ]);

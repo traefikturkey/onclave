@@ -54,6 +54,7 @@ export type DiscoveryServiceOptions = {
   broadcastAddress: string;
   intervalMs: number;
   now: () => string;
+  trustedNodeIds?: Iterable<string>;
   audit?: (event: AuditEventName, metadata: AuditMetadata) => void | Promise<void>;
 };
 
@@ -88,8 +89,14 @@ export function parseDiscoveryPacket(data: string | Uint8Array): DiscoveryPacket
 
 export class DiscoveryPeerCache {
   private readonly peers = new Map<string, DiscoveredPeer>();
+  private readonly trustedNodeIds: ReadonlySet<string>;
 
-  constructor(private readonly localNodeId: string) {}
+  constructor(
+    private readonly localNodeId: string,
+    trustedNodeIds: Iterable<string> = []
+  ) {
+    this.trustedNodeIds = new Set(trustedNodeIds);
+  }
 
   upsertFromPacket(packet: DiscoveryPacket, remoteAddress: string, seenAt: string): PeerUpsertResult {
     if (packet.node_id === this.localNodeId) return "ignored_self";
@@ -100,7 +107,7 @@ export class DiscoveryPeerCache {
       hubInstanceId: packet.hub_instance_id,
       endpoint: `wss://${remoteAddress}:${packet.wss_port}/v1/hub`,
       lastSeenAt: seenAt,
-      trustState: existing?.trustState ?? "untrusted",
+      trustState: existing?.trustState ?? (this.trustedNodeIds.has(packet.node_id) ? "trusted" : "untrusted"),
       authState: existing?.authState ?? "not_attempted",
     };
 
@@ -192,7 +199,7 @@ export class DiscoveryService {
     if (options.intervalMs <= 0) {
       throw new Error("discovery interval must be positive");
     }
-    this.cache = new DiscoveryPeerCache(options.localNodeId);
+    this.cache = new DiscoveryPeerCache(options.localNodeId, options.trustedNodeIds);
   }
 
   async start(): Promise<void> {
