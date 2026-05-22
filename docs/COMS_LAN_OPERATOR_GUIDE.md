@@ -42,13 +42,17 @@ From this repository on each host, run:
 bun run coms-lan:acceptance-host -- --host-name host-a
 ```
 
-The helper prints:
+The helper creates the local coms-lan identity if needed, then prints:
 
-- local identity and hub state if Pi has already started `coms-lan`
+- local identity and hub state when available
 - the public key line to copy to the peer
 - `coms_lan_trust_add` command for the peer
 - endpoint, node ID, and hub instance ID values for remote tools
 - suggested Pi tool commands for the acceptance flow
+
+If the hub line says `not started yet`, that is expected before the first Pi
+session starts `coms-lan`. Start Pi, run `coms_lan_status`, then rerun the
+helper to print endpoint metadata.
 
 After you know the peer's endpoint and IDs, you can also write a static peer:
 

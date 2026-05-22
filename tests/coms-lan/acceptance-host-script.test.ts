@@ -1,10 +1,20 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import {
+  loadLocalAcceptanceState,
   renderAcceptanceHostReport,
   upsertStaticPeer,
   type AcceptanceHostOptions,
 } from "../../scripts/coms-lan-acceptance-host";
 import type { ComsLanConfig } from "../../src/coms-lan/config";
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
 
 describe("coms-lan acceptance host script", () => {
   it("renders local key and peer commands without private material", () => {
@@ -40,6 +50,17 @@ describe("coms-lan acceptance host script", () => {
     expect(report).not.toContain("privateKey");
   });
 
+  it("initializes a local identity so first run can print a trust line", async () => {
+    const root = await mkdtemp(join(tmpdir(), "coms-lan-acceptance-host-"));
+    tempDirs.push(root);
+
+    const state = await loadLocalAcceptanceState(root);
+
+    expect(state.identity?.nodeId).toMatch(/^node_/);
+    expect(state.authorizedKeyLine).toMatch(/^ssh-ed25519 /);
+    expect(state.hub).toBeNull();
+  });
+
   it("upserts static peers by name", () => {
     const config: ComsLanConfig = {
       version: 1,
@@ -72,5 +93,6 @@ function createOptions(): AcceptanceHostOptions {
     hostName: "host-a",
     writeStaticPeer: false,
     auditScan: false,
+    initIdentity: true,
   };
 }

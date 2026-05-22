@@ -38,9 +38,10 @@ From this repository on each host, run:
 bun run coms-lan:acceptance-host -- --host-name host-a
 ```
 
-Run it once before starting Pi to see prerequisites, then again after
-`coms_lan_status` has created local state. The helper prints the local public
-key line, peer trust command, local endpoint/IDs, and suggested Pi tool calls.
+Run it once before starting Pi to create the local coms-lan identity and print
+this host's public key line. Then start Pi, run `coms_lan_status`, and rerun the
+helper to print local endpoint/IDs and suggested Pi tool calls. If the hub line
+says `not started yet` on the first run, that is expected.
 
 After collecting peer endpoint metadata, you can write a static peer entry:
 

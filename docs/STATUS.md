@@ -25,7 +25,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 117 passing tests
+- `bun test`: 118 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -195,8 +195,9 @@ Project/config files:
   packets, and trusted remote WSS listing/send after public key exchange.
 - Manual multi-host LAN acceptance runbook is documented in
   `docs/COMS_LAN_MANUAL_ACCEPTANCE.md`.
-- Host-side acceptance helper script prints local public key/endpoint metadata,
-  writes optional static peers, and scans audit logs for obvious secret markers.
+- Host-side acceptance helper script initializes local identity when needed,
+  prints local public key/endpoint metadata, writes optional static peers, and
+  scans audit logs for obvious secret markers.
 
 ## Security Notes
 

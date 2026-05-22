@@ -3,7 +3,7 @@ import { access, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { loadComsLanConfig, writeComsLanConfig, type ComsLanConfig, type StaticPeerConfig } from "../src/coms-lan/config";
-import type { ComsLanIdentity } from "../src/coms-lan/identity";
+import { loadOrCreateIdentity, type ComsLanIdentity } from "../src/coms-lan/identity";
 import type { HubState } from "../src/coms-lan/local-hub";
 import { getComsLanPaths } from "../src/coms-lan/state";
 import { formatAuthorizedKeyLine } from "../src/coms-lan/trust";
@@ -14,6 +14,7 @@ export type AcceptanceHostOptions = {
   peer?: StaticPeerConfig;
   writeStaticPeer: boolean;
   auditScan: boolean;
+  initIdentity: boolean;
 };
 
 type LocalAcceptanceState = {
@@ -27,9 +28,9 @@ type LocalAcceptanceState = {
 
 const DEFAULT_HOST_NAME = "this-host";
 
-export async function loadLocalAcceptanceState(root: string): Promise<LocalAcceptanceState> {
+export async function loadLocalAcceptanceState(root: string, initIdentity = true): Promise<LocalAcceptanceState> {
   const paths = getComsLanPaths(root);
-  const identity = await readJsonFile<ComsLanIdentity>(paths.identity);
+  const identity = initIdentity ? await loadOrCreateIdentity(paths) : await readJsonFile<ComsLanIdentity>(paths.identity);
   const hub = await readJsonFile<HubState>(paths.hubState);
   const config = await loadComsLanConfig(paths).catch(() => null);
   const auditLogExists = await fileExists(paths.auditLog);
@@ -56,23 +57,29 @@ export function renderAcceptanceHostReport(state: LocalAcceptanceState, options:
   lines.push(`State root: ${state.root}`);
   lines.push("");
   lines.push("## Local status");
-  lines.push(`- identity: ${state.identity ? state.identity.nodeId : "missing; start Pi with coms-lan first"}`);
-  lines.push(`- hub: ${state.hub ? `${state.hub.endpoint} (${state.hub.hubInstanceId})` : "missing; run coms_lan_status in Pi first"}`);
+  lines.push(`- identity: ${state.identity ? state.identity.nodeId : "missing; rerun without --no-init to create it"}`);
+  lines.push(`- hub: ${state.hub ? `${state.hub.endpoint} (${state.hub.hubInstanceId})` : "not started yet; run coms_lan_status in Pi, then rerun this script"}`);
   lines.push(`- config static peers: ${state.config ? state.config.staticPeers.length : "unreadable"}`);
   lines.push(`- audit log: ${state.auditLogExists ? "present" : "not present yet"}`);
   lines.push("");
 
   lines.push("## Step A: copy this public key line to the other host");
   lines.push("```text");
-  lines.push(state.authorizedKeyLine ?? "Start Pi with coms-lan first, then rerun this script.");
+  lines.push(state.authorizedKeyLine ?? "Rerun without --no-init to create the local coms-lan identity.");
   lines.push("```");
   lines.push("");
 
   lines.push("## Step B: in Pi on the other host, trust this host");
   lines.push("```text");
-  lines.push(state.authorizedKeyLine ? `coms_lan_trust_add public_key_line=\"${state.authorizedKeyLine}\"` : "coms_lan_trust_info");
+  lines.push(state.authorizedKeyLine ? `coms_lan_trust_add public_key_line=\"${state.authorizedKeyLine}\"` : "bun run coms-lan:acceptance-host -- --host-name host-a");
   lines.push("```");
   lines.push("");
+
+  if (!state.hub) {
+    lines.push("## Step C: start Pi with coms-lan on this host");
+    lines.push("Run `coms_lan_status` inside Pi to start or discover the local hub, then rerun this helper to print endpoint metadata.");
+    lines.push("");
+  }
 
   if (state.hub && state.identity) {
     lines.push("## Step C: values the other host can use to reach this host");
@@ -123,7 +130,7 @@ async function main(): Promise<void> {
     console.log(`[OK] wrote static peer '${options.peer.name ?? options.peer.nodeId}' to ${paths.config}`);
   }
 
-  const state = await loadLocalAcceptanceState(options.root);
+  const state = await loadLocalAcceptanceState(options.root, options.initIdentity);
   console.log(renderAcceptanceHostReport(state, options));
 
   if (options.auditScan) {
@@ -137,6 +144,7 @@ function parseArgs(args: string[]): AcceptanceHostOptions {
     hostName: DEFAULT_HOST_NAME,
     writeStaticPeer: false,
     auditScan: false,
+    initIdentity: true,
   };
 
   for (let index = 0; index < args.length; index += 1) {
@@ -169,6 +177,9 @@ function parseArgs(args: string[]): AcceptanceHostOptions {
         break;
       case "--audit-scan":
         options.auditScan = true;
+        break;
+      case "--no-init":
+        options.initIdentity = false;
         break;
       default:
         throw new Error(`unknown argument: ${arg}`);
@@ -246,6 +257,7 @@ Options:
   --peer-endpoint URL          Peer wss://host:port/v1/hub endpoint.
   --write-static-peer          Write/update the peer in config.json.
   --audit-scan                 Scan audit.log.jsonl for obvious secret markers.
+  --no-init                    Do not create the local coms-lan identity if missing.
   -h, --help                   Show this help.
 `);
 }
