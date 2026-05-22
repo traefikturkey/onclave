@@ -7,12 +7,17 @@ import { loadOrCreateIdentity } from "./identity";
 import type { ComsLanPaths } from "./state";
 import { loadOrCreateTlsMaterial, type TlsMaterialGenerator } from "./tls";
 import { formatAuthorizedKeyLine, loadAuthorizedKeys } from "./trust";
-import { createNodeDiscoveryUdpSocket, type DiscoveryUdpSocket } from "./discovery";
+import { createNodeDiscoveryUdpSocket, type DiscoveredPeer, type DiscoveryUdpSocket } from "./discovery";
+import type { LocalAgent, LocalAgentRegistration } from "./local-registry";
 import type { TlsMaterial } from "./wss-transport";
 
 export type HubRuntimeHandle = {
   state: HubState;
   stop: () => Promise<void>;
+  registerLocalAgent?: (registration: LocalAgentRegistration) => LocalAgent;
+  unregisterLocalAgent?: (sessionId: string) => boolean;
+  localAgents?: () => LocalAgent[];
+  discoveredPeers?: () => DiscoveredPeer[];
 };
 
 export type BootstrapRuntimeInput = {
@@ -101,5 +106,9 @@ async function createRuntime(
   return {
     state: runtime.hubState(),
     stop: async () => runtime.stop(),
+    registerLocalAgent: (registration) => runtime.registerLocalAgent(registration),
+    unregisterLocalAgent: (sessionId) => runtime.unregisterLocalAgent(sessionId),
+    localAgents: () => runtime.localAgents(),
+    discoveredPeers: () => runtime.discoveredPeers(),
   };
 }

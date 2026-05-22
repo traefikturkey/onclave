@@ -12,9 +12,9 @@ implementation_plan: ./IMPLEMENTATION_PLAN.md
 Initial planning, security foundation, and local hub state/lock flow are in
 place for `coms-lan`.
 
-The repository now has a Bun/TypeScript scaffold, unit tests, and core modules
-for the first implementation slices. No Pi extension entrypoint or messaging
-tools are implemented yet.
+The repository now has a Bun/TypeScript scaffold, unit tests, core modules, and
+an initial Pi extension entrypoint. Remote send/get/await tools and full
+multi-process local registration are not implemented yet.
 
 ## Verification
 
@@ -39,10 +39,14 @@ Result:
 | Phase 2: Local Hub Lifecycle and Registration | Mostly complete | Hub state, health-check reuse, stale replacement, lock-protected start flow, dynamic local service binding, and local registry implemented; integration into extension remains. |
 | Phase 3: UDP Discovery | Mostly complete | Packet validation, untrusted peer cache, broadcast/listen lifecycle, and Node UDP adapter implemented; hub integration remains. |
 | Phase 4: WSS Transport and Mutual Authentication | Mostly complete | Bun WSS spike passed; signed handshake verifier, transport auth gate, frame processor, minimal WSS server/client wrapper, and composed hub runtime implemented; extension integration remains. |
-| Phase 5: Messaging and Tool Surface | Partial | Local message routing, response correlation, timeout cleanup, and WSS send_prompt delivery are implemented; Pi tools remain. |
+| Phase 5: Messaging and Tool Surface | Partial | Local message routing, response correlation, timeout cleanup, WSS send_prompt delivery, and initial Pi status/list tools are implemented; remote send/get/await tools remain. |
 | Phase 6: Acceptance Hardening | Not started | Manual multi-process and LAN checks remain. |
 
 ## Implemented Files
+
+Extension:
+
+- `extensions/coms-lan.ts`
 
 Runtime modules:
 
@@ -147,6 +151,8 @@ Project/config files:
   surface routing failures.
 - Extension-facing helper builds local agent registrations from session/runtime
   metadata with project labels and stable defaults.
+- Initial Pi extension entrypoint bootstraps/reuses local hub state, registers
+  the owned local runtime agent, and exposes status/peer/agent listing tools.
 
 ## Security Notes
 
@@ -175,9 +181,9 @@ Project/config files:
 
 ## Next Actions
 
-1. Start the Pi extension entrypoint now that routing has a tested module
-   boundary.
-2. Add Pi tool surface for peer/agent listing and send/get/await behavior.
+1. Add local registration API for Pi instances that reuse an existing hub owned
+   by another process.
+2. Add Pi tool surface for remote send/get/await behavior.
 3. Add end-to-end acceptance checks for local hub startup and trusted remote
    listing.
 4. Add audit integration around discovery, auth, and messaging events.

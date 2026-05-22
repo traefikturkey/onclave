@@ -1,5 +1,5 @@
 import type { AuthorizedSshEd25519Key } from "./authorized-keys";
-import { DiscoveryService, type DiscoveryUdpSocket } from "./discovery";
+import { DiscoveryService, type DiscoveredPeer, type DiscoveryUdpSocket } from "./discovery";
 import type { HubState } from "./local-hub";
 import {
   LocalAgentRegistry,
@@ -119,6 +119,18 @@ export class ComsLanHubRuntime {
 
   registerLocalAgent(registration: LocalAgentRegistration): LocalAgent {
     return this.registry.register(registration, this.options.now());
+  }
+
+  unregisterLocalAgent(sessionId: string): boolean {
+    return this.registry.unregister(sessionId);
+  }
+
+  localAgents(): LocalAgent[] {
+    return this.registry.list();
+  }
+
+  discoveredPeers(): DiscoveredPeer[] {
+    return this.discovery?.peers() ?? [];
   }
 
   private createFrameProcessor(): HubFrameProcessor {
