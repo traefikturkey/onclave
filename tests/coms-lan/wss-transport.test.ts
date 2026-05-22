@@ -80,6 +80,7 @@ async function startTestServer(authorizedKeys: ReturnType<typeof parseAuthorized
         registerLocalAgent: (registration) => ({ ...registration, status: "online", queueDepth: 0, contextUsedPct: 0, registeredAt: NOW, lastSeenAt: NOW }),
         unregisterLocalAgent: () => false,
         onSendPrompt: async () => undefined,
+        getResponse: () => ({ status: "unknown", error: "message_not_found" }),
       }),
   });
 }

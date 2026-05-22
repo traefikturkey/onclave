@@ -46,6 +46,13 @@ describe("MessageRouter", () => {
     expect(result).toEqual({ ok: false, error: "hop_limit_exceeded" });
   });
 
+  it("returns pending status before a response is complete", async () => {
+    const router = createRouter([]);
+    await router.sendPrompt(createFrame());
+
+    expect(router.getResponse("msg-1")).toEqual({ status: "pending" });
+  });
+
   it("correlates responses by message ID", async () => {
     const router = createRouter([]);
     await router.sendPrompt(createFrame());
@@ -64,6 +71,11 @@ describe("MessageRouter", () => {
       response: "done",
       error: null,
       completedAt: "2026-05-21T00:00:05.000Z",
+    });
+    expect(router.getResponse("msg-1")).toEqual({
+      status: "complete",
+      response: "done",
+      error: null,
     });
   });
 
@@ -93,6 +105,7 @@ describe("MessageRouter", () => {
       status: "timeout",
       error: "timeout",
     });
+    expect(router.getResponse("msg-1")).toEqual({ status: "timeout", error: "timeout" });
   });
 });
 

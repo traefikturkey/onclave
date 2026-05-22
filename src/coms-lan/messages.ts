@@ -42,6 +42,12 @@ export type SubmitResponseResult =
   | { ok: true; status: "complete" | "error" }
   | { ok: false; error: "message_not_found" | "responder_mismatch" };
 
+export type MessageResponseLookup =
+  | { status: "pending" }
+  | { status: "complete" | "error"; response: unknown; error: string | null }
+  | { status: "timeout"; error: "timeout" }
+  | { status: "unknown"; error: "message_not_found" };
+
 export type MessageRouterOptions = {
   registry: LocalAgentRegistry;
   now: () => string;
@@ -128,6 +134,20 @@ export class MessageRouter {
       }
     }
     return expired;
+  }
+
+  getResponse(msgId: string): MessageResponseLookup {
+    const message = this.messages.get(msgId);
+    if (!message) return { status: "unknown", error: "message_not_found" };
+    if (message.status === "complete" || message.status === "error") {
+      return {
+        status: message.status,
+        response: message.response,
+        error: message.error ?? null,
+      };
+    }
+    if (message.status === "timeout") return { status: "timeout", error: "timeout" };
+    return { status: "pending" };
   }
 
   getMessage(msgId: string): RoutedMessage | null {

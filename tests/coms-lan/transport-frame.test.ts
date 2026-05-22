@@ -92,6 +92,29 @@ describe("HubFrameProcessor", () => {
     });
   });
 
+  it("requires authentication before reading message responses", async () => {
+    const processor = createProcessor([]);
+
+    await expect(processor.handleRaw(JSON.stringify({ type: "get_response", msgId: "msg-1" }))).resolves.toEqual({
+      type: "error",
+      code: "auth_required",
+    });
+  });
+
+  it("returns message responses after authentication", async () => {
+    const fixture = await createClientAuthFrame();
+    const processor = createProcessor(fixture.authorizedKeys, {
+      getResponse: () => ({ status: "complete", response: "done", error: null }),
+    });
+
+    await processor.handleRaw(JSON.stringify(fixture.frame));
+    await expect(processor.handleRaw(JSON.stringify({ type: "get_response", msgId: "msg-1" }))).resolves.toEqual({
+      type: "response",
+      msgId: "msg-1",
+      result: { status: "complete", response: "done", error: null },
+    });
+  });
+
   it("requires authentication before accepting prompt sends", async () => {
     const sent: SendPromptFrame[] = [];
     const processor = createProcessor([], {
@@ -165,6 +188,7 @@ function createProcessor(
     registerLocalAgent?: (registration: LocalAgentRegistration) => LocalAgent;
     unregisterLocalAgent?: (sessionId: string) => boolean;
     onSendPrompt?: (frame: SendPromptFrame) => Promise<{ ok: true; msgId: string; status: "delivered" } | { ok: false; error: string } | void>;
+    getResponse?: (msgId: string) => { status: string; response?: unknown; error?: string | null };
   } = {}
 ): HubFrameProcessor {
   return new HubFrameProcessor({
@@ -177,6 +201,7 @@ function createProcessor(
     registerLocalAgent: options.registerLocalAgent ?? ((registration) => ({ ...registration, status: "online", queueDepth: 0, contextUsedPct: 0, registeredAt: NOW, lastSeenAt: NOW })),
     unregisterLocalAgent: options.unregisterLocalAgent ?? (() => false),
     onSendPrompt: options.onSendPrompt ?? (async () => undefined),
+    getResponse: options.getResponse ?? (() => ({ status: "unknown", error: "message_not_found" })),
   });
 }
 

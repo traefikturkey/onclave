@@ -144,6 +144,7 @@ export class ComsLanHubRuntime {
       registerLocalAgent: (registration) => this.registerLocalAgent(registration),
       unregisterLocalAgent: (sessionId) => this.unregisterLocalAgent(sessionId),
       onSendPrompt: async (frame) => this.handleSendPrompt(frame),
+      getResponse: (msgId) => this.messages.getResponse(msgId),
     });
   }
 

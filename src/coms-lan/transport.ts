@@ -34,6 +34,11 @@ export type ListAgentsFrame = {
   type: "list_agents";
 };
 
+export type GetResponseFrame = {
+  type: "get_response";
+  msgId: string;
+};
+
 export type LocalRegisterFrame = {
   type: "local_register";
   registration: LocalAgentRegistration;
@@ -44,7 +49,7 @@ export type LocalUnregisterFrame = {
   sessionId: string;
 };
 
-export type HubFrame = ClientAuthFrame | ListAgentsFrame | SendPromptFrame | LocalRegisterFrame | LocalUnregisterFrame;
+export type HubFrame = ClientAuthFrame | ListAgentsFrame | SendPromptFrame | LocalRegisterFrame | LocalUnregisterFrame | GetResponseFrame;
 
 export type SendPromptRouteResult =
   | { ok: true; msgId: string; status: "delivered" }
@@ -56,9 +61,16 @@ export type HubFrameResponse =
   | { type: "agents"; agents: LocalAgent[] }
   | { type: "local_register_ok"; agent: LocalAgent }
   | { type: "local_unregister_ok"; sessionId: string; removed: boolean }
+  | { type: "response"; msgId: string; result: MessageResponseResult }
   | { type: "send_accepted"; msgId: string; status: "delivered" }
   | { type: "send_rejected"; msgId: string; error: string }
   | { type: "error"; code: "invalid_frame" | "auth_required" | "unsupported_frame" };
+
+export type MessageResponseResult = {
+  status: string;
+  response?: unknown;
+  error?: string | null;
+};
 
 export type HubTransportAuthGateOptions = {
   authorizedKeys: AuthorizedSshEd25519Key[];
@@ -72,6 +84,7 @@ export type HubFrameProcessorOptions = {
   registerLocalAgent: (registration: LocalAgentRegistration) => LocalAgent;
   unregisterLocalAgent: (sessionId: string) => boolean;
   onSendPrompt: (frame: SendPromptFrame) => Promise<SendPromptRouteResult | void>;
+  getResponse: (msgId: string) => MessageResponseResult;
 };
 
 export type TransportAuthResult =
@@ -101,6 +114,9 @@ export class HubFrameProcessor {
       case "list_agents":
         if (!this.isAuthenticated()) return { type: "error", code: "auth_required" };
         return { type: "agents", agents: this.options.listAgents() };
+      case "get_response":
+        if (!this.isAuthenticated()) return { type: "error", code: "auth_required" };
+        return { type: "response", msgId: frame.msgId, result: this.options.getResponse(frame.msgId) };
       case "send_prompt": {
         if (!this.isAuthenticated()) return { type: "error", code: "auth_required" };
         const result = await this.options.onSendPrompt(frame);
@@ -184,6 +200,8 @@ function parseFrame(raw: string | Buffer): HubFrame | null {
         return isLocalRegisterFrame(record) ? record : null;
       case "local_unregister":
         return isLocalUnregisterFrame(record) ? record : null;
+      case "get_response":
+        return isGetResponseFrame(record) ? record : null;
       case "send_prompt":
         return isSendPromptFrame(record) ? record : null;
       default:
@@ -250,6 +268,10 @@ function isLocalAgentRegistration(value: unknown): value is LocalAgentRegistrati
     typeof record.deliveryEndpoint === "string" &&
     record.deliveryEndpoint.length > 0
   );
+}
+
+function isGetResponseFrame(value: Record<string, unknown>): value is GetResponseFrame {
+  return value.type === "get_response" && typeof value.msgId === "string" && value.msgId.length > 0;
 }
 
 function isSendPromptFrame(value: Record<string, unknown>): value is SendPromptFrame {

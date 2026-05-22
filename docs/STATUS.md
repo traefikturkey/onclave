@@ -27,7 +27,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 87 passing tests
+- `bun test`: 90 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -139,14 +139,14 @@ Project/config files:
 - Transport auth gate blocks list/message privileges before authentication.
 - Transport auth gate enables v1 privileges only after authorized handshake.
 - Hub frame processor handles local register/unregister frames, client auth,
-  gated agent listing, and gated prompt send frames.
+  gated agent listing, gated response lookup, and gated prompt send frames.
 - Minimal Bun WSS server/client wrapper handles frame exchange over self-signed
   TLS.
 - Composed hub runtime starts WSS transport, broadcasts discovery, registers
   local agents, and exposes auth-gated remote listing.
 - Message router delivers prompts to registered local agents.
-- Message router correlates responses by message ID and marks expired messages
-  as timeout.
+- Message router correlates responses by message ID, exposes response lookup,
+  and marks expired messages as timeout.
 - Authenticated WSS `send_prompt` frames route through the message router and
   surface routing failures.
 - Extension-facing helper builds local agent registrations from session/runtime
@@ -182,7 +182,7 @@ Project/config files:
 
 ## Next Actions
 
-1. Add Pi tool surface for remote send/get/await behavior.
+1. Add Pi tool surface for send/get/await behavior.
 2. Add `agent_end` response submission wiring.
 3. Add end-to-end acceptance checks for local hub startup and trusted remote
    listing.
