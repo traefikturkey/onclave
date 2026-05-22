@@ -27,7 +27,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 92 passing tests
+- `bun test`: 93 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -39,7 +39,7 @@ Result:
 | Phase 2: Local Hub Lifecycle and Registration | Mostly complete | Hub state, health-check reuse, stale replacement, lock-protected start flow, dynamic local service binding, local registry, and local WSS registration frames implemented; broader multi-process acceptance remains. |
 | Phase 3: UDP Discovery | Mostly complete | Packet validation, untrusted peer cache, broadcast/listen lifecycle, and Node UDP adapter implemented; hub integration remains. |
 | Phase 4: WSS Transport and Mutual Authentication | Mostly complete | Bun WSS spike passed; signed handshake verifier, transport auth gate, frame processor, minimal WSS server/client wrapper, and composed hub runtime implemented; extension integration remains. |
-| Phase 5: Messaging and Tool Surface | Partial | Local message routing, response correlation, timeout cleanup, WSS send_prompt delivery, and initial Pi status/list/send/get/await tools are implemented; trusted remote send remains. |
+| Phase 5: Messaging and Tool Surface | Partial | Local message routing, response correlation, timeout cleanup, WSS send_prompt delivery, initial Pi status/list/send/get/await tools, and `agent_end` response submission are implemented; trusted remote send remains. |
 | Phase 6: Acceptance Hardening | Not started | Manual multi-process and LAN checks remain. |
 
 ## Implemented Files
@@ -152,8 +152,9 @@ Project/config files:
 - Extension-facing helper builds local agent registrations from session/runtime
   metadata with project labels and stable defaults.
 - Initial Pi extension entrypoint bootstraps/reuses local hub state, registers
-  local agents directly or through local WSS registration frames, and exposes
-  status/peer/agent listing plus local send/get/await tools.
+  local agents directly or through local WSS registration frames, exposes
+  status/peer/agent listing plus local send/get/await tools, injects inbound
+  prompts, and submits `agent_end` responses.
 
 ## Security Notes
 
@@ -182,8 +183,7 @@ Project/config files:
 
 ## Next Actions
 
-1. Add `agent_end` response submission wiring.
-2. Add trusted remote send behavior beyond local hub routing.
-3. Add end-to-end acceptance checks for local hub startup and trusted remote
+1. Add trusted remote send behavior beyond local hub routing.
+2. Add end-to-end acceptance checks for local hub startup and trusted remote
    listing.
-4. Add audit integration around discovery, auth, and messaging events.
+3. Add audit integration around discovery, auth, and messaging events.

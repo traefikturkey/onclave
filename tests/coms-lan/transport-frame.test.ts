@@ -92,6 +92,38 @@ describe("HubFrameProcessor", () => {
     });
   });
 
+  it("handles local response submission without hub-to-hub authentication", async () => {
+    const submitted: unknown[] = [];
+    const processor = createProcessor([], {
+      submitResponse: (response) => {
+        submitted.push(response);
+        return { ok: true, status: "complete" };
+      },
+    });
+
+    await expect(
+      processor.handleRaw(
+        JSON.stringify({
+          type: "local_submit_response",
+          msgId: "msg-1",
+          responderSessionId: "session-1",
+          response: "done",
+          error: null,
+          completedAt: "2026-05-21T00:00:05.000Z",
+        })
+      )
+    ).resolves.toEqual({ type: "response_submitted", msgId: "msg-1", status: "complete" });
+    expect(submitted).toEqual([
+      {
+        msgId: "msg-1",
+        responderSessionId: "session-1",
+        response: "done",
+        error: null,
+        completedAt: "2026-05-21T00:00:05.000Z",
+      },
+    ]);
+  });
+
   it("handles local response lookup without hub-to-hub authentication", async () => {
     const processor = createProcessor([], {
       getResponse: () => ({ status: "complete", response: "done", error: null }),
@@ -232,6 +264,13 @@ function createProcessor(
     unregisterLocalAgent?: (sessionId: string) => boolean;
     onSendPrompt?: (frame: SendPromptFrame) => Promise<{ ok: true; msgId: string; status: "delivered" } | { ok: false; error: string } | void>;
     getResponse?: (msgId: string) => { status: string; response?: unknown; error?: string | null };
+    submitResponse?: (response: {
+      msgId: string;
+      responderSessionId: string;
+      response: unknown;
+      error: string | null;
+      completedAt: string;
+    }) => { ok: true; status: "complete" | "error" } | { ok: false; error: "message_not_found" | "responder_mismatch" };
   } = {}
 ): HubFrameProcessor {
   return new HubFrameProcessor({
@@ -245,6 +284,7 @@ function createProcessor(
     unregisterLocalAgent: options.unregisterLocalAgent ?? (() => false),
     onSendPrompt: options.onSendPrompt ?? (async () => undefined),
     getResponse: options.getResponse ?? (() => ({ status: "unknown", error: "message_not_found" })),
+    submitResponse: options.submitResponse ?? (() => ({ ok: false, error: "message_not_found" })),
   });
 }
 

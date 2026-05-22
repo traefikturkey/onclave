@@ -9,6 +9,7 @@ import { loadOrCreateTlsMaterial, type TlsMaterialGenerator } from "./tls";
 import { formatAuthorizedKeyLine, loadAuthorizedKeys } from "./trust";
 import { createNodeDiscoveryUdpSocket, type DiscoveredPeer, type DiscoveryUdpSocket } from "./discovery";
 import type { LocalAgent, LocalAgentRegistration } from "./local-registry";
+import type { DeliveredPrompt } from "./messages";
 import type { TlsMaterial } from "./wss-transport";
 
 export type HubRuntimeHandle = {
@@ -35,6 +36,7 @@ export type BootstrapLocalHubOptions = {
   healthCheck: (endpoint: string) => Promise<boolean>;
   tlsGenerator?: TlsMaterialGenerator;
   discoverySocketFactory?: () => DiscoveryUdpSocket;
+  deliverPrompt?: (prompt: DeliveredPrompt) => Promise<void>;
   runtimeFactory?: (input: BootstrapRuntimeInput) => Promise<HubRuntimeHandle>;
 };
 
@@ -101,6 +103,7 @@ async function createRuntime(
     now: options.now,
     staleAfterMs: 30_000,
     offlineAfterMs: 60_000,
+    deliverPrompt: options.deliverPrompt,
   } satisfies ComsLanHubRuntimeOptions);
   await runtime.start();
   return {

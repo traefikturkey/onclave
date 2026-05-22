@@ -6,6 +6,7 @@ import {
   type HandshakePayload,
 } from "./handshake";
 import type { LocalAgent, LocalAgentRegistration } from "./local-registry";
+import type { MessageResponse, SubmitResponseResult } from "./messages";
 
 export type ClientAuthFrame = {
   type: "client_auth";
@@ -57,6 +58,10 @@ export type LocalGetResponseFrame = Omit<GetResponseFrame, "type"> & {
   type: "local_get_response";
 };
 
+export type LocalSubmitResponseFrame = MessageResponse & {
+  type: "local_submit_response";
+};
+
 export type HubFrame =
   | ClientAuthFrame
   | ListAgentsFrame
@@ -65,6 +70,7 @@ export type HubFrame =
   | LocalUnregisterFrame
   | LocalSendPromptFrame
   | LocalGetResponseFrame
+  | LocalSubmitResponseFrame
   | GetResponseFrame;
 
 export type SendPromptRouteResult =
@@ -78,6 +84,8 @@ export type HubFrameResponse =
   | { type: "local_register_ok"; agent: LocalAgent }
   | { type: "local_unregister_ok"; sessionId: string; removed: boolean }
   | { type: "response"; msgId: string; result: MessageResponseResult }
+  | { type: "response_submitted"; msgId: string; status: "complete" | "error" }
+  | { type: "response_rejected"; msgId: string; error: string }
   | { type: "send_accepted"; msgId: string; status: "delivered" }
   | { type: "send_rejected"; msgId: string; error: string }
   | { type: "error"; code: "invalid_frame" | "auth_required" | "unsupported_frame" };
@@ -101,6 +109,7 @@ export type HubFrameProcessorOptions = {
   unregisterLocalAgent: (sessionId: string) => boolean;
   onSendPrompt: (frame: SendPromptFrame) => Promise<SendPromptRouteResult | void>;
   getResponse: (msgId: string) => MessageResponseResult;
+  submitResponse: (response: MessageResponse) => SubmitResponseResult;
 };
 
 export type TransportAuthResult =
@@ -129,6 +138,17 @@ export class HubFrameProcessor {
         };
       case "local_get_response":
         return { type: "response", msgId: frame.msgId, result: this.options.getResponse(frame.msgId) };
+      case "local_submit_response": {
+        const result = this.options.submitResponse({
+          msgId: frame.msgId,
+          responderSessionId: frame.responderSessionId,
+          response: frame.response,
+          error: frame.error,
+          completedAt: frame.completedAt,
+        });
+        if (!result.ok) return { type: "response_rejected", msgId: frame.msgId, error: result.error };
+        return { type: "response_submitted", msgId: frame.msgId, status: result.status };
+      }
       case "local_send_prompt": {
         const result = await this.options.onSendPrompt({ ...frame, type: "send_prompt" });
         if (result && !result.ok) {
@@ -229,6 +249,8 @@ function parseFrame(raw: string | Buffer): HubFrame | null {
         return isLocalGetResponseFrame(record) ? record : null;
       case "local_send_prompt":
         return isLocalSendPromptFrame(record) ? record : null;
+      case "local_submit_response":
+        return isLocalSubmitResponseFrame(record) ? record : null;
       case "get_response":
         return isGetResponseFrame(record) ? record : null;
       case "send_prompt":
@@ -305,6 +327,20 @@ function isGetResponseFrame(value: Record<string, unknown>): value is GetRespons
 
 function isLocalGetResponseFrame(value: Record<string, unknown>): value is LocalGetResponseFrame {
   return value.type === "local_get_response" && typeof value.msgId === "string" && value.msgId.length > 0;
+}
+
+function isLocalSubmitResponseFrame(value: Record<string, unknown>): value is LocalSubmitResponseFrame {
+  return (
+    value.type === "local_submit_response" &&
+    typeof value.msgId === "string" &&
+    value.msgId.length > 0 &&
+    typeof value.responderSessionId === "string" &&
+    value.responderSessionId.length > 0 &&
+    "response" in value &&
+    (typeof value.error === "string" || value.error === null) &&
+    typeof value.completedAt === "string" &&
+    value.completedAt.length > 0
+  );
 }
 
 function isLocalSendPromptFrame(value: Record<string, unknown>): value is LocalSendPromptFrame {

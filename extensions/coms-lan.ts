@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { bootstrapLocalHub, type BootstrapLocalHubResult } from "../src/coms-lan/bootstrap";
 import { createLocalAgentRegistration } from "../src/coms-lan/extension-helpers";
+import type { DeliveredPrompt } from "../src/coms-lan/messages";
 import type { LocalAgentRegistration } from "../src/coms-lan/local-registry";
 import { getComsLanPaths } from "../src/coms-lan/state";
 import { sendWssFrames } from "../src/coms-lan/wss-transport";
@@ -37,6 +38,7 @@ export default function (pi: ExtensionAPI) {
   let bootstrap: BootstrapLocalHubResult | null = null;
   let localSessionId: string | null = null;
   let localRegistration: LocalAgentRegistration | null = null;
+  const inboundPrompts = new Map<string, DeliveredPrompt>();
 
   pi.on("session_start", async (_event, ctx) => {
     const paths = getComsLanPaths(`${homedir()}/.pi/coms-lan`);
@@ -46,6 +48,7 @@ export default function (pi: ExtensionAPI) {
       broadcastAddress: DEFAULT_BROADCAST_ADDRESS,
       now: () => new Date().toISOString(),
       healthCheck: checkHubHealth,
+      deliverPrompt: async (prompt) => deliverInboundPrompt(pi, prompt, inboundPrompts),
     });
 
     localSessionId = sessionIdFromContext(ctx);
@@ -73,6 +76,32 @@ export default function (pi: ExtensionAPI) {
     bootstrap = null;
     localSessionId = null;
     localRegistration = null;
+    inboundPrompts.clear();
+  });
+
+  pi.on("agent_end", async (_event, ctx) => {
+    if (!bootstrap || !localSessionId) return;
+    const inbound = [...inboundPrompts.values()].at(-1);
+    if (!inbound) return;
+    const response = extractLastAssistantText(ctx);
+    const responses = await sendWssFrames(
+      localHubWssUrl(bootstrap.state.endpoint),
+      [
+        {
+          type: "local_submit_response",
+          msgId: inbound.msgId,
+          responderSessionId: localSessionId,
+          response,
+          error: null,
+          completedAt: new Date().toISOString(),
+        },
+      ],
+      { rejectUnauthorized: false, timeoutMs: 5_000 }
+    );
+    const submit = responses[0];
+    if (submit?.type === "response_submitted") {
+      inboundPrompts.delete(inbound.msgId);
+    }
   });
 
   pi.registerTool({
@@ -204,6 +233,45 @@ export default function (pi: ExtensionAPI) {
       };
     },
   });
+}
+
+async function deliverInboundPrompt(
+  pi: ExtensionAPI,
+  prompt: DeliveredPrompt,
+  inboundPrompts: Map<string, DeliveredPrompt>
+): Promise<void> {
+  inboundPrompts.set(prompt.msgId, prompt);
+  pi.sendMessage(
+    {
+      customType: "coms-lan-inbound",
+      content:
+        `[inbound coms-lan message]\n` +
+        `[msg_id ${prompt.msgId}; reply with a normal assistant response.]\n\n` +
+        prompt.prompt,
+      display: true,
+      details: { msgId: prompt.msgId, targetSessionId: prompt.targetSessionId, hops: prompt.hops },
+    },
+    { triggerTurn: true, deliverAs: "followUp" }
+  );
+}
+
+function extractLastAssistantText(ctx: ExtensionContext): string {
+  let lastAssistantText = "";
+  for (const entry of ctx.sessionManager.getBranch()) {
+    if (entry.type !== "message" || entry.message.role !== "assistant") continue;
+    const content = entry.message.content;
+    if (typeof content === "string") {
+      lastAssistantText = content;
+    } else if (Array.isArray(content)) {
+      lastAssistantText = content
+        .filter((block): block is { type: "text"; text: string } => {
+          return Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "text";
+        })
+        .map((block) => block.text)
+        .join("\n");
+    }
+  }
+  return lastAssistantText;
 }
 
 async function createRegistrationForContext(

@@ -81,6 +81,7 @@ async function startTestServer(authorizedKeys: ReturnType<typeof parseAuthorized
         unregisterLocalAgent: () => false,
         onSendPrompt: async () => undefined,
         getResponse: () => ({ status: "unknown", error: "message_not_found" }),
+        submitResponse: () => ({ ok: false, error: "message_not_found" }),
       }),
   });
 }
