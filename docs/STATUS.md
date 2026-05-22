@@ -13,8 +13,8 @@ Initial planning, security foundation, and local hub state/lock flow are in
 place for `coms-lan`.
 
 The repository now has a Bun/TypeScript scaffold, unit tests, and core modules
-for the first implementation slices. No Pi extension entrypoint, WSS transport,
-or messaging tools are implemented yet.
+for the first implementation slices. No Pi extension entrypoint or messaging
+tools are implemented yet.
 
 ## Verification
 
@@ -27,7 +27,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 64 passing tests
+- `bun test`: 66 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -38,7 +38,7 @@ Result:
 | Phase 1: State, Identity, Audit, Authorized Keys | Complete | Core security/state helpers implemented and tested. |
 | Phase 2: Local Hub Lifecycle and Registration | Mostly complete | Hub state, health-check reuse, stale replacement, lock-protected start flow, dynamic local service binding, and local registry implemented; integration into extension remains. |
 | Phase 3: UDP Discovery | Mostly complete | Packet validation, untrusted peer cache, broadcast/listen lifecycle, and Node UDP adapter implemented; hub integration remains. |
-| Phase 4: WSS Transport and Mutual Authentication | Partial | Bun WSS spike passed; signed handshake verifier, transport auth gate, and frame processor implemented; full WSS server/client remains. |
+| Phase 4: WSS Transport and Mutual Authentication | Mostly complete | Bun WSS spike passed; signed handshake verifier, transport auth gate, frame processor, and minimal WSS server/client wrapper implemented; hub integration remains. |
 | Phase 5: Messaging and Tool Surface | Not started | Needs routing, response correlation, and Pi tools. |
 | Phase 6: Acceptance Hardening | Not started | Manual multi-process and LAN checks remain. |
 
@@ -58,6 +58,7 @@ Runtime modules:
 - `src/coms-lan/project-label.ts`
 - `src/coms-lan/state.ts`
 - `src/coms-lan/transport.ts`
+- `src/coms-lan/wss-transport.ts`
 
 Tests:
 
@@ -75,6 +76,7 @@ Tests:
 - `tests/coms-lan/state.test.ts`
 - `tests/coms-lan/transport-frame.test.ts`
 - `tests/coms-lan/transport.test.ts`
+- `tests/coms-lan/wss-transport.test.ts`
 
 Project/config files:
 
@@ -117,6 +119,8 @@ Project/config files:
 - Transport auth gate enables v1 privileges only after authorized handshake.
 - Hub frame processor handles client auth, gated agent listing, and gated prompt
   send frames.
+- Minimal Bun WSS server/client wrapper handles frame exchange over self-signed
+  TLS.
 
 ## Security Notes
 
@@ -146,10 +150,9 @@ Project/config files:
 
 ## Next Actions
 
-1. Add WSS hub server/client tests using the frame processor.
-2. Implement the minimal WSS server/client wrapper.
-3. Start the Pi extension entrypoint once discovery and local hub boundaries are
-   ready to compose.
-4. Add integration tests that compose local hub lifecycle, registry, discovery,
+1. Add integration tests that compose local hub lifecycle, registry, discovery,
    and auth gating.
-5. Add message routing tests after transport auth gates are in place.
+2. Start the Pi extension entrypoint once composed hub behavior is covered.
+3. Add message routing tests after transport auth gates are in place.
+4. Implement message routing behind those tests.
+5. Add Pi tool surface after routing has a tested module boundary.
