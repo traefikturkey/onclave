@@ -34,6 +34,14 @@ export async function loadOrCreateIdentity(paths: ComsLanPaths): Promise<ComsLan
   return identity;
 }
 
+export async function loadIdentityPrivateKeyHex(paths: ComsLanPaths): Promise<string> {
+  const privateKeyHex = (await readFile(paths.privateKey, "utf8")).trim();
+  if (!/^[a-f0-9]{64}$/i.test(privateKeyHex)) {
+    throw new Error("identity private key must be 32 bytes of hex");
+  }
+  return privateKeyHex.toLowerCase();
+}
+
 async function readIdentity(paths: ComsLanPaths): Promise<ComsLanIdentity | null> {
   try {
     const parsed = JSON.parse(await readFile(paths.identity, "utf8")) as unknown;

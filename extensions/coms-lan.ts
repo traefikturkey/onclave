@@ -5,6 +5,8 @@ import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { bootstrapLocalHub, type BootstrapLocalHubResult } from "../src/coms-lan/bootstrap";
 import { createLocalAgentRegistration } from "../src/coms-lan/extension-helpers";
+import { loadIdentityPrivateKeyHex } from "../src/coms-lan/identity";
+import { createRemoteHubClient } from "../src/coms-lan/remote-client";
 import type { DeliveredPrompt } from "../src/coms-lan/messages";
 import type { LocalAgentRegistration } from "../src/coms-lan/local-registry";
 import { getComsLanPaths } from "../src/coms-lan/state";
@@ -35,13 +37,13 @@ export default function (pi: ExtensionAPI) {
     default: false,
   });
 
+  const paths = getComsLanPaths(`${homedir()}/.pi/coms-lan`);
   let bootstrap: BootstrapLocalHubResult | null = null;
   let localSessionId: string | null = null;
   let localRegistration: LocalAgentRegistration | null = null;
   const inboundPrompts = new Map<string, DeliveredPrompt>();
 
   pi.on("session_start", async (_event, ctx) => {
-    const paths = getComsLanPaths(`${homedir()}/.pi/coms-lan`);
     bootstrap = await bootstrapLocalHub(paths, {
       host: "127.0.0.1",
       discoveryPort: DEFAULT_DISCOVERY_PORT,
@@ -221,6 +223,78 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "coms_lan_remote_agents",
+    label: "Coms LAN Remote Agents",
+    description: "List agents from a trusted remote coms-lan hub using explicit peer endpoint metadata.",
+    parameters: Type.Object({
+      endpoint: Type.String({ description: "Remote WSS endpoint, for example wss://host:1234/v1/hub." }),
+      node_id: Type.String({ description: "Remote persistent node ID." }),
+      hub_instance_id: Type.String({ description: "Remote runtime hub instance ID." }),
+    }),
+    async execute(_callId, params) {
+      if (!bootstrap) throw new Error("coms-lan is not initialized");
+      const client = await createRemoteClient(bootstrap, paths, params.endpoint, params.node_id, params.hub_instance_id);
+      const agents = await client.listAgents();
+      return {
+        content: [{ type: "text" as const, text: `${agents.length} remote agent(s)` }],
+        details: { agents, endpoint: params.endpoint, node_id: params.node_id },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "coms_lan_remote_send",
+    label: "Coms LAN Remote Send",
+    description: "Send a prompt to a trusted remote coms-lan hub using explicit peer endpoint metadata.",
+    parameters: Type.Object({
+      endpoint: Type.String({ description: "Remote WSS endpoint, for example wss://host:1234/v1/hub." }),
+      node_id: Type.String({ description: "Remote persistent node ID." }),
+      hub_instance_id: Type.String({ description: "Remote runtime hub instance ID." }),
+      target_session_id: Type.String({ description: "Remote target agent session ID." }),
+      prompt: Type.String({ description: "Prompt to deliver." }),
+    }),
+    async execute(_callId, params) {
+      if (!bootstrap) throw new Error("coms-lan is not initialized");
+      const msgId = `msg_${randomId()}`;
+      const client = await createRemoteClient(bootstrap, paths, params.endpoint, params.node_id, params.hub_instance_id);
+      const response = await client.sendPrompt({
+        msgId,
+        targetSessionId: params.target_session_id,
+        prompt: params.prompt,
+        hops: 0,
+      });
+      if (response.type !== "send_accepted") {
+        throw new Error(`remote send failed: ${JSON.stringify(response)}`);
+      }
+      return {
+        content: [{ type: "text" as const, text: `coms_lan_remote_send → ${params.target_session_id}\nmsg_id ${msgId}` }],
+        details: { msg_id: msgId, target_session_id: params.target_session_id, status: response.status },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "coms_lan_remote_get",
+    label: "Coms LAN Remote Get",
+    description: "Poll a message response from a trusted remote coms-lan hub.",
+    parameters: Type.Object({
+      endpoint: Type.String({ description: "Remote WSS endpoint, for example wss://host:1234/v1/hub." }),
+      node_id: Type.String({ description: "Remote persistent node ID." }),
+      hub_instance_id: Type.String({ description: "Remote runtime hub instance ID." }),
+      msg_id: Type.String({ description: "Message ID returned by coms_lan_remote_send." }),
+    }),
+    async execute(_callId, params) {
+      if (!bootstrap) throw new Error("coms-lan is not initialized");
+      const client = await createRemoteClient(bootstrap, paths, params.endpoint, params.node_id, params.hub_instance_id);
+      const result = await client.getResponse(params.msg_id);
+      return {
+        content: [{ type: "text" as const, text: formatResponseResult(result) }],
+        details: { msg_id: params.msg_id, result },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: "coms_lan_agents",
     label: "Coms LAN Agents",
     description: "List local agents registered with this coms-lan runtime.",
@@ -272,6 +346,31 @@ function extractLastAssistantText(ctx: ExtensionContext): string {
     }
   }
   return lastAssistantText;
+}
+
+async function createRemoteClient(
+  bootstrap: BootstrapLocalHubResult,
+  paths: ReturnType<typeof getComsLanPaths>,
+  endpoint: string,
+  nodeId: string,
+  hubInstanceId: string
+) {
+  return createRemoteHubClient({
+    identity: {
+      nodeId: bootstrap.identity.nodeId,
+      hubInstanceId: bootstrap.state.hubInstanceId,
+      endpoint: localHubWssUrl(bootstrap.state.endpoint),
+      publicKeyHex: bootstrap.identity.publicKey,
+      privateKeyHex: await loadIdentityPrivateKeyHex(paths),
+    },
+    remote: {
+      nodeId,
+      hubInstanceId,
+      endpoint,
+    },
+    now: () => new Date().toISOString(),
+    rejectUnauthorized: false,
+  });
 }
 
 async function createRegistrationForContext(

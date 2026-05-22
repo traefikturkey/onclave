@@ -27,7 +27,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 100 passing tests
+- `bun test`: 102 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -39,7 +39,7 @@ Result:
 | Phase 2: Local Hub Lifecycle and Registration | Mostly complete | Hub state, health-check reuse, stale replacement, lock-protected start flow, dynamic local service binding, local registry, and local WSS registration frames implemented; broader multi-process acceptance remains. |
 | Phase 3: UDP Discovery | Mostly complete | Packet validation, untrusted peer cache, broadcast/listen lifecycle, and Node UDP adapter implemented; hub integration remains. |
 | Phase 4: WSS Transport and Mutual Authentication | Mostly complete | Bun WSS spike passed; signed handshake verifier, transport auth gate, frame processor, minimal WSS server/client wrapper, and composed hub runtime implemented; extension integration remains. |
-| Phase 5: Messaging and Tool Surface | Partial | Local message routing, response correlation, timeout cleanup, WSS send_prompt delivery, initial Pi status/list/send/get/await tools, `agent_end` response submission, trusted remote client helpers, and trusted remote listing support are implemented; remote send tools remain. |
+| Phase 5: Messaging and Tool Surface | Mostly complete | Local message routing, response correlation, timeout cleanup, WSS send_prompt delivery, Pi status/list/send/get/await tools, `agent_end` response submission, trusted remote client helpers, and explicit trusted remote list/send/get tools are implemented. |
 | Phase 6: Acceptance Hardening | Partial | Audit event helper coverage added; manual multi-process and LAN checks remain. |
 
 ## Implemented Files
@@ -157,8 +157,8 @@ Project/config files:
   metadata with project labels and stable defaults.
 - Initial Pi extension entrypoint bootstraps/reuses local hub state, registers
   local agents directly or through local WSS registration frames, exposes
-  status/peer/agent listing plus local send/get/await tools, injects inbound
-  prompts, and submits `agent_end` responses.
+  status/peer/agent listing plus local and explicit trusted remote send/get/await
+  tools, injects inbound prompts, and submits `agent_end` responses.
 - Remote client helper authenticates to trusted WSS peers for agent listing,
   prompt send, and response lookup.
 - Hub runtime can aggregate agent listings from trusted remote peers.
@@ -192,7 +192,7 @@ Project/config files:
 
 ## Next Actions
 
-1. Add Pi tool surface for trusted remote agent listing/send behavior.
-2. Add end-to-end acceptance checks for local hub startup and trusted remote
+1. Add end-to-end acceptance checks for local hub startup and trusted remote
    listing.
-3. Wire audit helper into runtime paths beyond unit coverage.
+2. Wire audit helper into runtime paths beyond unit coverage.
+3. Add optional trust UX commands/import guidance.
