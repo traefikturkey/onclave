@@ -28,7 +28,7 @@ afterAll(async () => {
   if (tempDir) await rm(tempDir, { recursive: true, force: true });
 });
 
-describe("Bun WSS hub transport", () => {
+describe("WSS hub transport", () => {
   it("returns auth_required for gated frames before authentication", async () => {
     const server = await startTestServer([]);
     try {
