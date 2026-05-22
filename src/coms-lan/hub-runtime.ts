@@ -141,6 +141,8 @@ export class ComsLanHubRuntime {
         maxSkewMs: 30_000,
       }),
       listAgents: () => this.registry.list(),
+      registerLocalAgent: (registration) => this.registerLocalAgent(registration),
+      unregisterLocalAgent: (sessionId) => this.unregisterLocalAgent(sessionId),
       onSendPrompt: async (frame) => this.handleSendPrompt(frame),
     });
   }

@@ -36,6 +36,7 @@ export default function (pi: ExtensionAPI) {
 
   let bootstrap: BootstrapLocalHubResult | null = null;
   let localSessionId: string | null = null;
+  let localRegistration: LocalAgentRegistration | null = null;
 
   pi.on("session_start", async (_event, ctx) => {
     const paths = getComsLanPaths(`${homedir()}/.pi/coms-lan`);
@@ -48,22 +49,30 @@ export default function (pi: ExtensionAPI) {
     });
 
     localSessionId = sessionIdFromContext(ctx);
+    localRegistration = await createRegistrationForContext(pi, ctx, localSessionId);
     if (bootstrap.runtime?.registerLocalAgent) {
-      await registerOwnedRuntimeAgent(pi, ctx, bootstrap.runtime.registerLocalAgent, localSessionId);
+      bootstrap.runtime.registerLocalAgent(localRegistration);
+    } else {
+      await registerWithLocalHub(bootstrap.state.endpoint, localRegistration);
     }
 
     ctx.ui?.setStatus?.("coms-lan", bootstrap.started ? "coms-lan hub" : "coms-lan client");
   });
 
   pi.on("session_shutdown", async () => {
-    if (bootstrap?.runtime && localSessionId) {
-      bootstrap.runtime.unregisterLocalAgent?.(localSessionId);
+    if (bootstrap && localSessionId) {
+      if (bootstrap.runtime?.unregisterLocalAgent) {
+        bootstrap.runtime.unregisterLocalAgent(localSessionId);
+      } else {
+        await unregisterWithLocalHub(bootstrap.state.endpoint, localSessionId);
+      }
     }
     if (bootstrap?.runtime && bootstrap.started) {
       await bootstrap.runtime.stop();
     }
     bootstrap = null;
     localSessionId = null;
+    localRegistration = null;
   });
 
   pi.registerTool({
@@ -121,13 +130,12 @@ export default function (pi: ExtensionAPI) {
   });
 }
 
-async function registerOwnedRuntimeAgent(
+async function createRegistrationForContext(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
-  registerLocalAgent: (registration: LocalAgentRegistration) => unknown,
   sessionId: string
-): Promise<void> {
-  const registration = await createLocalAgentRegistration({
+): Promise<LocalAgentRegistration> {
+  return createLocalAgentRegistration({
     sessionId,
     instanceId: `pi_${randomId()}`,
     cwd: ctx.cwd || process.cwd(),
@@ -138,11 +146,24 @@ async function registerOwnedRuntimeAgent(
     explicit: pi.getFlag("explicit") === true,
     deliveryEndpoint: `local://${sessionId}`,
   });
-  registerLocalAgent(registration);
+}
+
+async function registerWithLocalHub(endpoint: string, registration: LocalAgentRegistration): Promise<void> {
+  await sendWssFrames(localHubWssUrl(endpoint), [{ type: "local_register", registration }], {
+    rejectUnauthorized: false,
+    timeoutMs: 2_000,
+  });
+}
+
+async function unregisterWithLocalHub(endpoint: string, sessionId: string): Promise<void> {
+  await sendWssFrames(localHubWssUrl(endpoint), [{ type: "local_unregister", sessionId }], {
+    rejectUnauthorized: false,
+    timeoutMs: 2_000,
+  });
 }
 
 async function checkHubHealth(endpoint: string): Promise<boolean> {
-  const url = endpoint.replace(/^https:/, "wss:").replace(/\/$/, "") + "/v1/hub";
+  const url = localHubWssUrl(endpoint);
   try {
     const responses = await sendWssFrames(url, [{ type: "list_agents" }], {
       rejectUnauthorized: false,
@@ -152,6 +173,10 @@ async function checkHubHealth(endpoint: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function localHubWssUrl(endpoint: string): string {
+  return endpoint.replace(/^https:/, "wss:").replace(/\/$/, "") + "/v1/hub";
 }
 
 function sessionIdFromContext(ctx: ExtensionContext): string {

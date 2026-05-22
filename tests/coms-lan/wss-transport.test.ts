@@ -77,6 +77,8 @@ async function startTestServer(authorizedKeys: ReturnType<typeof parseAuthorized
           maxSkewMs: 30_000,
         }),
         listAgents: () => agents,
+        registerLocalAgent: (registration) => ({ ...registration, status: "online", queueDepth: 0, contextUsedPct: 0, registeredAt: NOW, lastSeenAt: NOW }),
+        unregisterLocalAgent: () => false,
         onSendPrompt: async () => undefined,
       }),
   });

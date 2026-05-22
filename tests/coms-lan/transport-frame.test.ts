@@ -8,7 +8,7 @@ import {
   type ClientAuthFrame,
   type SendPromptFrame,
 } from "../../src/coms-lan/transport";
-import type { LocalAgent } from "../../src/coms-lan/local-registry";
+import type { LocalAgent, LocalAgentRegistration } from "../../src/coms-lan/local-registry";
 
 const NOW = "2026-05-21T00:00:00.000Z";
 
@@ -20,6 +20,37 @@ describe("HubFrameProcessor", () => {
       type: "error",
       code: "invalid_frame",
     });
+  });
+
+  it("registers local agents without hub-to-hub authentication", async () => {
+    const registered: LocalAgentRegistration[] = [];
+    const agent = createAgent();
+    const processor = createProcessor([], {
+      registerLocalAgent: (registration) => {
+        registered.push(registration);
+        return agent;
+      },
+    });
+
+    await expect(
+      processor.handleRaw(JSON.stringify({ type: "local_register", registration: createRegistration() }))
+    ).resolves.toEqual({ type: "local_register_ok", agent });
+    expect(registered).toEqual([createRegistration()]);
+  });
+
+  it("unregisters local agents without hub-to-hub authentication", async () => {
+    const unregistered: string[] = [];
+    const processor = createProcessor([], {
+      unregisterLocalAgent: (sessionId) => {
+        unregistered.push(sessionId);
+        return true;
+      },
+    });
+
+    await expect(
+      processor.handleRaw(JSON.stringify({ type: "local_unregister", sessionId: "session-1" }))
+    ).resolves.toEqual({ type: "local_unregister_ok", sessionId: "session-1", removed: true });
+    expect(unregistered).toEqual(["session-1"]);
   });
 
   it("requires authentication before listing agents", async () => {
@@ -131,6 +162,8 @@ function createProcessor(
   authorizedKeys: ReturnType<typeof parseAuthorizedKeys>,
   options: {
     agents?: LocalAgent[];
+    registerLocalAgent?: (registration: LocalAgentRegistration) => LocalAgent;
+    unregisterLocalAgent?: (sessionId: string) => boolean;
     onSendPrompt?: (frame: SendPromptFrame) => Promise<{ ok: true; msgId: string; status: "delivered" } | { ok: false; error: string } | void>;
   } = {}
 ): HubFrameProcessor {
@@ -141,6 +174,8 @@ function createProcessor(
       maxSkewMs: 30_000,
     }),
     listAgents: () => options.agents ?? [],
+    registerLocalAgent: options.registerLocalAgent ?? ((registration) => ({ ...registration, status: "online", queueDepth: 0, contextUsedPct: 0, registeredAt: NOW, lastSeenAt: NOW })),
+    unregisterLocalAgent: options.unregisterLocalAgent ?? (() => false),
     onSendPrompt: options.onSendPrompt ?? (async () => undefined),
   });
 }
@@ -180,7 +215,7 @@ async function createClientAuthFrame(): Promise<{
   };
 }
 
-function createAgent(): LocalAgent {
+function createRegistration(): LocalAgentRegistration {
   return {
     sessionId: "session-1",
     instanceId: "pi-instance-1",
@@ -191,6 +226,12 @@ function createAgent(): LocalAgent {
     color: "#336699",
     explicit: false,
     deliveryEndpoint: "local://session-1",
+  };
+}
+
+function createAgent(): LocalAgent {
+  return {
+    ...createRegistration(),
     status: "online",
     queueDepth: 0,
     contextUsedPct: 0,

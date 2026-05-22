@@ -27,7 +27,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 85 passing tests
+- `bun test`: 87 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -36,7 +36,7 @@ Result:
 |---|---|---|
 | Phase 0: Project Scaffold | Complete | Bun test/typecheck scaffold added. |
 | Phase 1: State, Identity, Audit, Authorized Keys | Complete | Core security/state helpers implemented and tested. |
-| Phase 2: Local Hub Lifecycle and Registration | Mostly complete | Hub state, health-check reuse, stale replacement, lock-protected start flow, dynamic local service binding, and local registry implemented; integration into extension remains. |
+| Phase 2: Local Hub Lifecycle and Registration | Mostly complete | Hub state, health-check reuse, stale replacement, lock-protected start flow, dynamic local service binding, local registry, and local WSS registration frames implemented; broader multi-process acceptance remains. |
 | Phase 3: UDP Discovery | Mostly complete | Packet validation, untrusted peer cache, broadcast/listen lifecycle, and Node UDP adapter implemented; hub integration remains. |
 | Phase 4: WSS Transport and Mutual Authentication | Mostly complete | Bun WSS spike passed; signed handshake verifier, transport auth gate, frame processor, minimal WSS server/client wrapper, and composed hub runtime implemented; extension integration remains. |
 | Phase 5: Messaging and Tool Surface | Partial | Local message routing, response correlation, timeout cleanup, WSS send_prompt delivery, and initial Pi status/list tools are implemented; remote send/get/await tools remain. |
@@ -138,8 +138,8 @@ Project/config files:
     - replayed nonce-pair rejection.
 - Transport auth gate blocks list/message privileges before authentication.
 - Transport auth gate enables v1 privileges only after authorized handshake.
-- Hub frame processor handles client auth, gated agent listing, and gated prompt
-  send frames.
+- Hub frame processor handles local register/unregister frames, client auth,
+  gated agent listing, and gated prompt send frames.
 - Minimal Bun WSS server/client wrapper handles frame exchange over self-signed
   TLS.
 - Composed hub runtime starts WSS transport, broadcasts discovery, registers
@@ -152,7 +152,8 @@ Project/config files:
 - Extension-facing helper builds local agent registrations from session/runtime
   metadata with project labels and stable defaults.
 - Initial Pi extension entrypoint bootstraps/reuses local hub state, registers
-  the owned local runtime agent, and exposes status/peer/agent listing tools.
+  local agents directly or through local WSS registration frames, and exposes
+  status/peer/agent listing tools.
 
 ## Security Notes
 
@@ -181,9 +182,8 @@ Project/config files:
 
 ## Next Actions
 
-1. Add local registration API for Pi instances that reuse an existing hub owned
-   by another process.
-2. Add Pi tool surface for remote send/get/await behavior.
+1. Add Pi tool surface for remote send/get/await behavior.
+2. Add `agent_end` response submission wiring.
 3. Add end-to-end acceptance checks for local hub startup and trusted remote
    listing.
 4. Add audit integration around discovery, auth, and messaging events.

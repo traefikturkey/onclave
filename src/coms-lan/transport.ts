@@ -5,7 +5,7 @@ import {
   type HandshakeFailureReason,
   type HandshakePayload,
 } from "./handshake";
-import type { LocalAgent } from "./local-registry";
+import type { LocalAgent, LocalAgentRegistration } from "./local-registry";
 
 export type ClientAuthFrame = {
   type: "client_auth";
@@ -34,7 +34,17 @@ export type ListAgentsFrame = {
   type: "list_agents";
 };
 
-export type HubFrame = ClientAuthFrame | ListAgentsFrame | SendPromptFrame;
+export type LocalRegisterFrame = {
+  type: "local_register";
+  registration: LocalAgentRegistration;
+};
+
+export type LocalUnregisterFrame = {
+  type: "local_unregister";
+  sessionId: string;
+};
+
+export type HubFrame = ClientAuthFrame | ListAgentsFrame | SendPromptFrame | LocalRegisterFrame | LocalUnregisterFrame;
 
 export type SendPromptRouteResult =
   | { ok: true; msgId: string; status: "delivered" }
@@ -44,6 +54,8 @@ export type HubFrameResponse =
   | { type: "auth_ok"; peer: AuthenticatedPeer }
   | { type: "auth_failed"; reason: HandshakeFailureReason }
   | { type: "agents"; agents: LocalAgent[] }
+  | { type: "local_register_ok"; agent: LocalAgent }
+  | { type: "local_unregister_ok"; sessionId: string; removed: boolean }
   | { type: "send_accepted"; msgId: string; status: "delivered" }
   | { type: "send_rejected"; msgId: string; error: string }
   | { type: "error"; code: "invalid_frame" | "auth_required" | "unsupported_frame" };
@@ -57,6 +69,8 @@ export type HubTransportAuthGateOptions = {
 export type HubFrameProcessorOptions = {
   gate: HubTransportAuthGate;
   listAgents: () => LocalAgent[];
+  registerLocalAgent: (registration: LocalAgentRegistration) => LocalAgent;
+  unregisterLocalAgent: (sessionId: string) => boolean;
   onSendPrompt: (frame: SendPromptFrame) => Promise<SendPromptRouteResult | void>;
 };
 
@@ -76,6 +90,14 @@ export class HubFrameProcessor {
     switch (frame.type) {
       case "client_auth":
         return this.handleClientAuth(frame);
+      case "local_register":
+        return { type: "local_register_ok", agent: this.options.registerLocalAgent(frame.registration) };
+      case "local_unregister":
+        return {
+          type: "local_unregister_ok",
+          sessionId: frame.sessionId,
+          removed: this.options.unregisterLocalAgent(frame.sessionId),
+        };
       case "list_agents":
         if (!this.isAuthenticated()) return { type: "error", code: "auth_required" };
         return { type: "agents", agents: this.options.listAgents() };
@@ -158,6 +180,10 @@ function parseFrame(raw: string | Buffer): HubFrame | null {
         return isClientAuthFrame(record) ? record : null;
       case "list_agents":
         return { type: "list_agents" };
+      case "local_register":
+        return isLocalRegisterFrame(record) ? record : null;
+      case "local_unregister":
+        return isLocalUnregisterFrame(record) ? record : null;
       case "send_prompt":
         return isSendPromptFrame(record) ? record : null;
       default:
@@ -192,6 +218,37 @@ function isHandshakePayload(value: unknown): value is HandshakePayload {
     typeof record.client_nonce === "string" &&
     typeof record.server_nonce === "string" &&
     typeof record.timestamp === "string"
+  );
+}
+
+function isLocalRegisterFrame(value: Record<string, unknown>): value is LocalRegisterFrame {
+  return value.type === "local_register" && isLocalAgentRegistration(value.registration);
+}
+
+function isLocalUnregisterFrame(value: Record<string, unknown>): value is LocalUnregisterFrame {
+  return value.type === "local_unregister" && typeof value.sessionId === "string" && value.sessionId.length > 0;
+}
+
+function isLocalAgentRegistration(value: unknown): value is LocalAgentRegistration {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.sessionId === "string" &&
+    record.sessionId.length > 0 &&
+    typeof record.instanceId === "string" &&
+    record.instanceId.length > 0 &&
+    typeof record.name === "string" &&
+    record.name.length > 0 &&
+    typeof record.projectLabel === "string" &&
+    record.projectLabel.length > 0 &&
+    typeof record.model === "string" &&
+    record.model.length > 0 &&
+    typeof record.purpose === "string" &&
+    typeof record.color === "string" &&
+    /^#[0-9a-fA-F]{6}$/.test(record.color) &&
+    typeof record.explicit === "boolean" &&
+    typeof record.deliveryEndpoint === "string" &&
+    record.deliveryEndpoint.length > 0
   );
 }
 
