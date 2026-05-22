@@ -27,7 +27,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 58 passing tests
+- `bun test`: 64 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -38,7 +38,7 @@ Result:
 | Phase 1: State, Identity, Audit, Authorized Keys | Complete | Core security/state helpers implemented and tested. |
 | Phase 2: Local Hub Lifecycle and Registration | Mostly complete | Hub state, health-check reuse, stale replacement, lock-protected start flow, dynamic local service binding, and local registry implemented; integration into extension remains. |
 | Phase 3: UDP Discovery | Mostly complete | Packet validation, untrusted peer cache, broadcast/listen lifecycle, and Node UDP adapter implemented; hub integration remains. |
-| Phase 4: WSS Transport and Mutual Authentication | Partial | Bun WSS spike passed; signed handshake verifier and transport auth gate implemented; full WSS server/client remains. |
+| Phase 4: WSS Transport and Mutual Authentication | Partial | Bun WSS spike passed; signed handshake verifier, transport auth gate, and frame processor implemented; full WSS server/client remains. |
 | Phase 5: Messaging and Tool Surface | Not started | Needs routing, response correlation, and Pi tools. |
 | Phase 6: Acceptance Hardening | Not started | Manual multi-process and LAN checks remain. |
 
@@ -73,6 +73,7 @@ Tests:
 - `tests/coms-lan/local-service.test.ts`
 - `tests/coms-lan/project-label.test.ts`
 - `tests/coms-lan/state.test.ts`
+- `tests/coms-lan/transport-frame.test.ts`
 - `tests/coms-lan/transport.test.ts`
 
 Project/config files:
@@ -114,6 +115,8 @@ Project/config files:
     - replayed nonce-pair rejection.
 - Transport auth gate blocks list/message privileges before authentication.
 - Transport auth gate enables v1 privileges only after authorized handshake.
+- Hub frame processor handles client auth, gated agent listing, and gated prompt
+  send frames.
 
 ## Security Notes
 
@@ -143,8 +146,8 @@ Project/config files:
 
 ## Next Actions
 
-1. Add WSS hub server/client tests around the transport auth gate.
-2. Implement the minimal WSS frame handling for client auth and gated operations.
+1. Add WSS hub server/client tests using the frame processor.
+2. Implement the minimal WSS server/client wrapper.
 3. Start the Pi extension entrypoint once discovery and local hub boundaries are
    ready to compose.
 4. Add integration tests that compose local hub lifecycle, registry, discovery,
