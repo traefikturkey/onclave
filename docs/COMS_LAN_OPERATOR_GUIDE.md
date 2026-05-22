@@ -111,6 +111,7 @@ Expected fields:
 - hub endpoint
 - whether this session started the hub
 - local public key line for peer trust setup
+- optional `remote_endpoints` hints derived from non-loopback local interfaces
 
 ## Trust Exchange
 

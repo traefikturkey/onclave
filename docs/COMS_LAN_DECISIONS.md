@@ -108,3 +108,27 @@ Current support:
 
 A trust removal tool can be added later if operators need managed key revocation
 without editing `authorized_keys`.
+
+## Decision 4: WSS Transport Stack
+
+**Decision:** Keep the v1 WSS implementation on Node `https` plus `ws` rather
+than migrating to Bun-native `Bun.serve({ tls, websocket })` inside the Pi
+extension runtime.
+
+### Rationale
+
+- Pi extensions run in the Node-based Pi host runtime, so the current Node
+  transport integrates directly without a Bun-specific sidecar or process split.
+- Manual two-host LAN acceptance passed with the current transport stack.
+- The app-level Ed25519 mutual authentication remains the trust gate; transport
+  encryption is still provided by self-signed TLS.
+- The current transport tests and runtime behavior are stable enough for v1,
+  while a Bun-native transport can remain a future optimization if Pi runtime
+  constraints change.
+
+### Consequences
+
+- PRD and status docs should refer to the Node `https` plus `ws` transport as
+  the accepted v1 implementation.
+- Future transport changes should preserve the same frame protocol and mutual
+  authentication behavior so operators do not need a workflow change.

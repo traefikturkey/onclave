@@ -504,9 +504,8 @@ Exit criteria:
    key lines.
 4. **`authorized_keys` options:** options are rejected in v1. Only plain
    `ssh-ed25519` public key lines are accepted.
-5. **WSS primitive:** v1 uses Bun native `Bun.serve({ tls, websocket })` and the
-   native `WebSocket` client, with app-level Ed25519 authentication as the trust
-   gate.
+5. **WSS primitive:** v1 uses Node `https` plus `ws`, with app-level Ed25519
+   authentication as the trust gate.
 6. **Hub lifetime:** v1 keeps the hub in-process inside the first Pi instance
    that wins the local hub lock. A spawned child process remains a post-v1
    hardening option.
@@ -528,10 +527,48 @@ Observed result:
 This moves the implementation plan to functionally complete for the PRD v1
 scope.
 
+## PRD Gap Remediation Update
+
+As of the latest implementation pass, the previously identified PRD gaps have
+been addressed as follows:
+
+### Gap 1: Mutual challenge-response
+
+Resolved.
+
+- remote auth now begins with an explicit `auth_hello` / `server_hello` step;
+- the server issues a fresh nonce and signs the bound handshake payload;
+- the client verifies the server signature before continuing with privileged
+  remote operations;
+- tests cover mutual-auth success plus stale, replay, tamper, and unknown-key
+  failure cases.
+
+### Gap 2: Discovered peer trust/auth state propagation
+
+Resolved.
+
+- discovered peer cache entries can now transition through `in_progress`,
+  `authenticated`, and `failed` auth states;
+- successful and failed remote auth attempts update the runtime peer cache so
+  operator-facing peer details can reflect current trust/auth state.
+
+### Gap 3: WSS transport decision divergence
+
+Resolved in documentation.
+
+- the PRD and decisions docs now record Node `https` plus `ws` as the accepted
+  v1 transport choice for compatibility with the Pi extension runtime.
+
+### Gap 4: Operator-facing endpoint reporting
+
+Resolved.
+
+- `coms_lan_status` now includes LAN-reachable `remote_endpoints` hints derived
+  from non-loopback local interfaces;
+- tests cover the status output for both loopback-only and LAN-reachable hosts.
+
 ## Remaining Next Steps
 
-1. Improve operator-facing endpoint reporting so `coms_lan_status` better
-   distinguishes loopback bind metadata from LAN-reachable peer endpoints.
-2. Consider post-v1 trust removal UX, reverse-direction acceptance helpers, or
+1. Consider post-v1 trust removal UX, reverse-direction acceptance helpers, or
    automatic static peer aggregation if future operator testing shows they are
    needed.

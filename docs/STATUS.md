@@ -31,7 +31,7 @@ Manual verification:
 
 Result:
 
-- `bun test`: 118 passing tests
+- `bun test`: 127 passing tests
 - `bun run typecheck`: passing
 - manual LAN acceptance: passed on two physical hosts
 
@@ -43,7 +43,7 @@ Result:
 | Phase 1: State, Identity, Audit, Authorized Keys | Complete | Core security/state helpers implemented and tested. |
 | Phase 2: Local Hub Lifecycle and Registration | Complete | Hub state, health-check reuse, stale replacement, lock-protected start flow, dynamic local service binding, local registry, local WSS registration frames, and bootstrap reuse acceptance are covered. |
 | Phase 3: UDP Discovery | Complete | Packet validation, untrusted peer cache, broadcast/listen lifecycle, Node UDP adapter, runtime broadcast integration, and metadata-only acceptance coverage are in place. |
-| Phase 4: WSS Transport and Mutual Authentication | Complete | Bun WSS transport, signed handshake verifier, transport auth gate, frame processor, hub runtime integration, and trusted remote acceptance coverage are in place. |
+| Phase 4: WSS Transport and Mutual Authentication | Complete | Node `https` plus `ws` WSS transport, mutual signed handshake verification, transport auth gate, frame processor, hub runtime integration, and trusted remote acceptance coverage are in place. |
 | Phase 5: Messaging and Tool Surface | Complete | Local message routing, response correlation, timeout cleanup, WSS send_prompt delivery, Pi status/list/send/get/await tools, `agent_end` response submission, trust info/add, static peer listing, trusted remote client helpers, and explicit/static trusted remote list/send/get tools are implemented. |
 | Phase 6: Acceptance Hardening | Complete | Automated acceptance passes, the manual multi-host LAN runbook is documented, prompt-template helpers reduce operator friction, and a two-physical-host LAN run completed successfully with passing audit scans. |
 
@@ -163,17 +163,19 @@ Project/config files:
 - UDP discovery service lifecycle with immediate and interval broadcasts.
 - Inbound UDP packet handling through validated discovery packets.
 - Node UDP socket adapter for runtime discovery.
-- Core Ed25519 client handshake verification:
+- Core Ed25519 mutual handshake verification:
+    - server hello with fresh server nonce,
     - authorized-key check,
-    - signature verification,
+    - client signature verification,
+    - server signature verification,
     - stale timestamp rejection,
     - replayed nonce-pair rejection.
 - Transport auth gate blocks list/message privileges before authentication.
 - Transport auth gate enables v1 privileges only after authorized handshake.
 - Hub frame processor handles local register/unregister/send/get frames, client
   auth, gated agent listing, gated response lookup, and gated prompt send frames.
-- Minimal Bun WSS server/client wrapper handles frame exchange over self-signed
-  TLS.
+- Minimal Node `https` plus `ws` WSS wrapper handles frame exchange over
+  self-signed TLS.
 - Composed hub runtime starts WSS transport, broadcasts discovery, registers
   local agents, and exposes auth-gated remote listing.
 - Message router delivers prompts to registered local agents.
@@ -226,9 +228,9 @@ Project/config files:
   token, credential, private, and key material.
 - WSS transport uses self-signed TLS for encrypted transport; app-level Ed25519
   auth is the trust gate.
-- WSS runtime spike succeeded with Bun native `Bun.serve({ tls, websocket })` and
-  native `WebSocket` using self-signed TLS with certificate verification disabled
-  at the WebSocket layer. App-level Ed25519 auth remains the trust gate.
+- WSS transport uses Node `https` plus `ws` with self-signed TLS and certificate
+  verification disabled at the WebSocket layer. App-level Ed25519 mutual auth
+  remains the trust gate.
 
 ## Resolved Implementation Decisions
 
@@ -246,8 +248,6 @@ See `docs/COMS_LAN_DECISIONS.md` for rationale and consequences.
 
 ## Next Actions
 
-1. Improve operator clarity around LAN-reachable endpoints in `coms_lan_status`
-   so the tool does not imply that `127.0.0.1` is the cross-host address.
-2. Consider post-v1 trust removal UX, reverse-direction acceptance helpers, or
+1. Consider post-v1 trust removal UX, reverse-direction acceptance helpers, or
    automatic static peer aggregation if further operator testing shows they are
    needed.

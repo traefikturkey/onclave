@@ -219,8 +219,8 @@ Use these as references for Pi extension shape, tool UX, local agent registratio
   path, and validating/deduping/appending public key lines.
 - `authorized_keys` options are rejected outright for v1; only plain
   `ssh-ed25519` public key lines are accepted.
-- WSS uses Bun native `Bun.serve({ tls, websocket })` and native `WebSocket`,
-  with app-level Ed25519 authentication as the trust gate.
+- WSS uses Node `https` plus `ws` for compatibility with the Pi extension
+  runtime, with app-level Ed25519 authentication as the trust gate.
 - V1 keeps the hub in-process inside the first Pi instance that wins the local
   hub lock; a spawned hub process is deferred as a post-v1 hardening option.
 
