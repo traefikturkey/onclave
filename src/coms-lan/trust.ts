@@ -1,8 +1,14 @@
-import { readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import type { AuthorizedSshEd25519Key } from "./authorized-keys";
-import { parseAuthorizedKeys } from "./authorized-keys";
+import { parseAuthorizedKeys, parseSshEd25519PublicKeyLine } from "./authorized-keys";
 import type { ComsLanIdentity } from "./identity";
 import type { ComsLanPaths } from "./state";
+
+export type AddAuthorizedKeyResult = {
+  key: AuthorizedSshEd25519Key;
+  added: boolean;
+};
 
 export async function loadAuthorizedKeys(paths: ComsLanPaths): Promise<AuthorizedSshEd25519Key[]> {
   try {
@@ -11,6 +17,18 @@ export async function loadAuthorizedKeys(paths: ComsLanPaths): Promise<Authorize
     if (isNodeError(error) && error.code === "ENOENT") return [];
     throw error;
   }
+}
+
+export async function addAuthorizedKeyLine(paths: ComsLanPaths, line: string): Promise<AddAuthorizedKeyResult> {
+  const key = parseSshEd25519PublicKeyLine(line, 1);
+  const existing = await loadAuthorizedKeys(paths);
+  const publicKeyHex = Buffer.from(key.publicKeyBytes).toString("hex");
+  const duplicate = existing.some((item) => Buffer.from(item.publicKeyBytes).toString("hex") === publicKeyHex);
+  if (duplicate) return { key, added: false };
+
+  await mkdir(dirname(paths.authorizedKeys), { recursive: true });
+  await appendFile(paths.authorizedKeys, `${line.trim()}\n`, "utf8");
+  return { key, added: true };
 }
 
 export function formatAuthorizedKeyLine(identity: ComsLanIdentity): string {

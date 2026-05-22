@@ -1,3 +1,4 @@
+import type { AuditEventName, AuditMetadata } from "./audit";
 import type { AuthorizedSshEd25519Key } from "./authorized-keys";
 import { ComsLanHubRuntime, type ComsLanHubRuntimeOptions } from "./hub-runtime";
 import type { HubState } from "./local-hub";
@@ -37,6 +38,7 @@ export type BootstrapLocalHubOptions = {
   tlsGenerator?: TlsMaterialGenerator;
   discoverySocketFactory?: () => DiscoveryUdpSocket;
   deliverPrompt?: (prompt: DeliveredPrompt) => Promise<void>;
+  audit?: (event: AuditEventName, metadata: AuditMetadata) => void | Promise<void>;
   runtimeFactory?: (input: BootstrapRuntimeInput) => Promise<HubRuntimeHandle>;
 };
 
@@ -56,6 +58,7 @@ export async function bootstrapLocalHub(
   const identity = await loadOrCreateIdentity(paths);
   const publicAuthorizedKeyLine = formatAuthorizedKeyLine(identity);
   const authorizedKeys = await loadAuthorizedKeys(paths);
+  void options.audit?.("trust_loaded", { count: authorizedKeys.length });
   let runtime: HubRuntimeHandle | null = null;
 
   const result = await startOrDiscoverLocalHub(paths, {
@@ -104,6 +107,7 @@ async function createRuntime(
     staleAfterMs: 30_000,
     offlineAfterMs: 60_000,
     deliverPrompt: options.deliverPrompt,
+    audit: options.audit,
   } satisfies ComsLanHubRuntimeOptions);
   await runtime.start();
   return {

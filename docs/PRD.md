@@ -210,12 +210,13 @@ Use these as references for Pi extension shape, tool UX, local agent registratio
 
 ## Resolved Questions
 
-- V1 includes manual peer fallback through explicit remote tool parameters when
-  UDP broadcast is unavailable; persistent static peer configuration is
-  deferred.
+- V1 includes manual peer fallback through explicit remote tool parameters and
+  persistent static peers in `~/.pi/coms-lan/config.json` when UDP broadcast is
+  unavailable.
 - Prompt and response payload bodies are omitted from audit logs by default.
-- Trust changes are file-based through `~/.pi/coms-lan/authorized_keys`, with a
-  command/tool for displaying the local public key line and trust file path.
+- Trust changes are file-based through `~/.pi/coms-lan/authorized_keys`, with
+  commands/tools for displaying the local public key line, showing the trust file
+  path, and validating/deduping/appending public key lines.
 - `authorized_keys` options are rejected outright for v1; only plain
   `ssh-ed25519` public key lines are accepted.
 - WSS uses Bun native `Bun.serve({ tls, websocket })` and native `WebSocket`,

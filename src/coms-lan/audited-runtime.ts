@@ -9,6 +9,50 @@ export type AuditedHubRuntimeOptions = {
 export class AuditedHubRuntime {
   constructor(private readonly options: AuditedHubRuntimeOptions) {}
 
+  hubStart(input: { nodeId: string; hubInstanceId: string; endpoint: string }): void {
+    void this.options.audit("hub_start", {
+      node_id: input.nodeId,
+      hub_instance_id: input.hubInstanceId,
+      endpoint: input.endpoint,
+    });
+  }
+
+  hubStop(input: { nodeId: string; hubInstanceId: string }): void {
+    void this.options.audit("hub_stop", {
+      node_id: input.nodeId,
+      hub_instance_id: input.hubInstanceId,
+    });
+  }
+
+  trustLoaded(input: { count: number }): void {
+    void this.options.audit("trust_loaded", {
+      count: input.count,
+    });
+  }
+
+  trustChanged(input: { action: string; fingerprint: string; duplicate: boolean }): void {
+    void this.options.audit("trust_changed", {
+      action: input.action,
+      fingerprint: input.fingerprint,
+      duplicate: input.duplicate,
+    });
+  }
+
+  discoverySeen(input: { nodeId: string; endpoint: string; result: string }): void {
+    void this.options.audit("discovery_seen", {
+      node_id: input.nodeId,
+      endpoint: input.endpoint,
+      result: input.result,
+    });
+  }
+
+  discoveryIgnored(input: { reason: string; remote?: string }): void {
+    void this.options.audit("discovery_ignored", {
+      reason: input.reason,
+      remote: input.remote,
+    });
+  }
+
   localRegister(registration: LocalAgentRegistration): void {
     void this.options.audit("local_register", {
       session_id: registration.sessionId,
@@ -45,6 +89,12 @@ export class AuditedHubRuntime {
       msg_id: response.msgId,
       responder_session_id: response.responderSessionId,
       error: response.error,
+    });
+  }
+
+  authAttempt(input: { nodeId: string }): void {
+    void this.options.audit("auth_attempt", {
+      node_id: input.nodeId,
     });
   }
 

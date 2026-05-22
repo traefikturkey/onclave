@@ -21,6 +21,7 @@ describe("bootstrapLocalHub", () => {
     const paths = getComsLanPaths(root);
     await writeFile(paths.authorizedKeys, `${VALID_KEY_LINE}\n`, "utf8");
     const starts: unknown[] = [];
+    const events: unknown[] = [];
 
     const result = await bootstrapLocalHub(paths, {
       host: "127.0.0.1",
@@ -28,6 +29,9 @@ describe("bootstrapLocalHub", () => {
       broadcastAddress: "255.255.255.255",
       now: () => NOW,
       healthCheck: async () => false,
+      audit: (event, metadata) => {
+        events.push({ event, metadata });
+      },
       tlsGenerator: async () => ({ cert: pem("CERTIFICATE", "cert"), key: pem("PRIVATE KEY", "key") }),
       runtimeFactory: async (input) => {
         starts.push(input);
@@ -50,6 +54,7 @@ describe("bootstrapLocalHub", () => {
     expect(result.authorizedKeys).toHaveLength(1);
     expect(result.publicAuthorizedKeyLine).toContain(result.identity.nodeId);
     expect(starts).toHaveLength(1);
+    expect(events).toEqual([{ event: "trust_loaded", metadata: { count: 1 } }]);
   });
 
   it("reuses a live hub state without starting a new runtime", async () => {

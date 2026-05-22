@@ -90,7 +90,8 @@ Expected result:
 3. Append that line to Host B's `~/.pi/coms-lan/authorized_keys`.
 4. On Host B, run `coms_lan_trust_info` or `/coms-lan-trust`.
 5. Copy Host B's public `ssh-ed25519 ...` line.
-6. Append that line to Host A's `~/.pi/coms-lan/authorized_keys`.
+6. Append that line to Host A's `~/.pi/coms-lan/authorized_keys`, or use
+   `coms_lan_trust_add` on Host A.
 7. Restart both Pi sessions, or start new sessions, so the trust file is loaded.
 
 Expected result:
@@ -105,9 +106,11 @@ Expected result:
 2. On Host B, run `coms_lan_status` and record Host B's endpoint, node ID, and
    hub instance ID.
 3. From Host A, call `coms_lan_remote_agents` with Host B's endpoint, node ID,
-   and hub instance ID.
+   and hub instance ID, or with a `peer_name` configured in Host A's
+   `config.json`.
 4. From Host B, call `coms_lan_remote_agents` with Host A's endpoint, node ID,
-   and hub instance ID.
+   and hub instance ID, or with a `peer_name` configured in Host B's
+   `config.json`.
 
 Expected result:
 

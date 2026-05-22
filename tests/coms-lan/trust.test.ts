@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { formatAuthorizedKeyLine, loadAuthorizedKeys } from "../../src/coms-lan/trust";
+import { addAuthorizedKeyLine, formatAuthorizedKeyLine, loadAuthorizedKeys } from "../../src/coms-lan/trust";
 import { getComsLanPaths } from "../../src/coms-lan/state";
 import type { ComsLanIdentity } from "../../src/coms-lan/identity";
 
@@ -32,6 +32,25 @@ describe("loadAuthorizedKeys", () => {
 
     expect(keys).toHaveLength(1);
     expect(keys[0]?.comment).toBe("test@example");
+  });
+});
+
+describe("addAuthorizedKeyLine", () => {
+  it("validates, appends, and dedupes public key lines", async () => {
+    const root = await mkdtemp(join(tmpdir(), "coms-lan-trust-"));
+    tempDirs.push(root);
+    const paths = getComsLanPaths(root);
+
+    await expect(addAuthorizedKeyLine(paths, VALID_KEY_LINE)).resolves.toMatchObject({ added: true });
+    await expect(addAuthorizedKeyLine(paths, VALID_KEY_LINE)).resolves.toMatchObject({ added: false });
+
+    expect((await readFile(paths.authorizedKeys, "utf8")).trim().split(/\r?\n/)).toEqual([VALID_KEY_LINE]);
+  });
+
+  it("rejects unsupported key lines", async () => {
+    const root = await mkdtemp(join(tmpdir(), "coms-lan-trust-"));
+    tempDirs.push(root);
+    await expect(addAuthorizedKeyLine(getComsLanPaths(root), "ssh-rsa AAAA nope")).rejects.toThrow(/unsupported/);
   });
 });
 

@@ -1,3 +1,4 @@
+import type { AuditEventName, AuditMetadata } from "./audit";
 import type { AuthorizedSshEd25519Key } from "./authorized-keys";
 import {
   ReplayCache,
@@ -100,6 +101,7 @@ export type HubTransportAuthGateOptions = {
   authorizedKeys: AuthorizedSshEd25519Key[];
   now: () => Date;
   maxSkewMs: number;
+  audit?: (event: AuditEventName, metadata: AuditMetadata) => void | Promise<void>;
 };
 
 export type HubFrameProcessorOptions = {
@@ -195,6 +197,7 @@ export class HubTransportAuthGate {
 
   async authenticateClient(frame: ClientAuthFrame): Promise<TransportAuthResult> {
     const now = this.options.now();
+    void this.options.audit?.("auth_attempt", { node_id: frame.payload.client_node_id });
     const result = await verifyClientHandshake({
       payload: frame.payload,
       signatureHex: frame.signatureHex,
@@ -205,7 +208,13 @@ export class HubTransportAuthGate {
       maxSkewMs: this.options.maxSkewMs,
     });
 
-    if (!result.ok) return result;
+    if (!result.ok) {
+      void this.options.audit?.("auth_failure", {
+        node_id: frame.payload.client_node_id,
+        reason: result.reason,
+      });
+      return result;
+    }
 
     const peer: AuthenticatedPeer = {
       nodeId: frame.payload.client_node_id,
@@ -215,6 +224,10 @@ export class HubTransportAuthGate {
       authenticatedAt: now.toISOString(),
     };
     this.authenticated.set(peer.nodeId, peer);
+    void this.options.audit?.("auth_success", {
+      node_id: peer.nodeId,
+      fingerprint: peer.fingerprint,
+    });
     return { ok: true, peer };
   }
 

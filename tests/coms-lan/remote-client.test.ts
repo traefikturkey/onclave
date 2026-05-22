@@ -54,8 +54,9 @@ describe("RemoteHubClient", () => {
     }
   });
 
-  it("authenticates and sends a prompt to the remote hub", async () => {
+  it("authenticates, sends a prompt to the remote hub, and audits metadata", async () => {
     const identity = await createClientIdentity();
+    const events: unknown[] = [];
     const sent: SendPromptFrame[] = [];
     const server = await startTestServer(identity, {
       onSendPrompt: async (frame) => {
@@ -73,6 +74,9 @@ describe("RemoteHubClient", () => {
         },
         now: () => NOW,
         rejectUnauthorized: false,
+        audit: (event, metadata) => {
+          events.push({ event, metadata });
+        },
       });
 
       await expect(
@@ -92,6 +96,12 @@ describe("RemoteHubClient", () => {
           hops: 0,
         },
       ]);
+      expect(events).toEqual([
+        { event: "auth_attempt", metadata: { node_id: "node_server" } },
+        { event: "auth_success", metadata: { node_id: "node_client", fingerprint: expect.any(String) } },
+        { event: "message_outbound", metadata: { msg_id: "msg-1", target_session_id: "session-1", node_id: "node_server", status: "delivered" } },
+      ]);
+      expect(JSON.stringify(events)).not.toContain("hello");
     } finally {
       server.stop();
     }

@@ -43,28 +43,29 @@ lifetime independent from any Pi session.
 ## Decision 2: Static / Manual Peer Support
 
 **Decision:** Include manual peer support in v1 through explicit remote tool
-parameters, not through persistent static peer configuration.
+parameters and optional persistent static peers in `~/.pi/coms-lan/config.json`.
 
-The supported v1 manual fallback is to call remote tools with:
+The supported v1 manual fallback is to call remote tools with either:
 
-- `endpoint`
-- `node_id`
-- `hub_instance_id`
+- `endpoint`, `node_id`, and `hub_instance_id`; or
+- `peer_name` matching a configured static peer.
 
 Existing tools using this model:
 
 - `coms_lan_remote_agents`
 - `coms_lan_remote_send`
 - `coms_lan_remote_get`
+- `coms_lan_static_peers`
 
 ### Rationale
 
 - UDP discovery remains the default LAN discovery path.
 - Explicit endpoint metadata provides a fallback when UDP broadcast is blocked
   by network policy or firewall configuration.
-- Avoiding persistent static peer config keeps v1 smaller and reduces ambiguity
-  around stale endpoints, trust state synchronization, and config migration.
-- Manual remote tools still require Ed25519 authorization through
+- Persistent static peers provide a practical fallback for LANs where UDP
+  broadcast is blocked.
+- Static peers are non-secret endpoint metadata only.
+- Manual and static remote tools still require Ed25519 authorization through
   `authorized_keys`; endpoint knowledge alone does not grant list or message
   privileges.
 
@@ -72,33 +73,38 @@ Existing tools using this model:
 
 - Operators can reach a known trusted peer even when UDP discovery is not
   available.
-- Operators must provide the remote endpoint and IDs manually for remote tools.
-- Automatic aggregation from static configured peers is deferred.
+- Operators can either pass endpoint metadata directly or store repeated peer
+  metadata in `config.json`.
+- Static peer entries must use `wss://.../v1/hub` endpoints.
+- Static peer trust is still enforced by `authorized_keys` during WSS auth.
 
 ### Deferred Follow-up
 
-A future `config.json` static peer list can be added under `~/.pi/coms-lan/` if
-manual parameter entry becomes too repetitive.
+Automatic background polling/aggregation from static peers can be added later if
+operators need static peers to appear alongside discovered trusted agent lists.
 
 ## Decision 3: Trust Import UX
 
-**Decision:** Keep trust changes file-based for v1, with a trust information
-command/tool to show the local public key line and `authorized_keys` path.
+**Decision:** Support both file-based trust changes and a validating append tool
+for v1.
 
 Current support:
 
 - `/coms-lan-trust`
 - `coms_lan_trust_info`
+- `coms_lan_trust_add`
 - local trust file: `~/.pi/coms-lan/authorized_keys`
 
 ### Rationale
 
-- Manual file edits keep trust changes explicit and auditable.
-- The narrow `ssh-ed25519` parser rejects unsupported options and key types.
-- Avoiding automatic append/import commands reduces the chance of accidentally
-  trusting the wrong peer during v1 validation.
+- Manual file edits remain available for operators who prefer direct review.
+- `coms_lan_trust_add` validates the line, rejects unsupported options/key
+  types, dedupes existing keys, appends only public key lines, and audits
+  metadata without private material.
+- Sessions should be restarted after trust changes so active runtimes reload the
+  trust file.
 
 ### Deferred Follow-up
 
-A future `coms_lan_trust_add` tool may validate, dedupe, append, and audit a
-public key line after the manual LAN workflow has been validated.
+A trust removal tool can be added later if operators need managed key revocation
+without editing `authorized_keys`.

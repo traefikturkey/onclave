@@ -91,6 +91,11 @@ export class ComsLanHubRuntime {
       endpoint: `https://${endpointHost(this.options.host)}:${this.wssServer.port}`,
       startedAt: this.options.startedAt,
     };
+    this.audit?.hubStart({
+      nodeId: this.options.nodeId,
+      hubInstanceId: this.options.hubInstanceId,
+      endpoint: this.state.endpoint,
+    });
 
     this.discovery = new DiscoveryService({
       socket: this.options.discoverySocket,
@@ -102,11 +107,13 @@ export class ComsLanHubRuntime {
       broadcastAddress: this.options.broadcastAddress,
       intervalMs: 5_000,
       now: this.options.now,
+      audit: this.options.audit,
     });
     await this.discovery.start();
   }
 
   async stop(): Promise<void> {
+    const state = this.state;
     if (this.discovery) {
       await this.discovery.stop();
       this.discovery = null;
@@ -114,6 +121,9 @@ export class ComsLanHubRuntime {
     if (this.wssServer) {
       this.wssServer.stop();
       this.wssServer = null;
+    }
+    if (state) {
+      this.audit?.hubStop({ nodeId: state.nodeId, hubInstanceId: state.hubInstanceId });
     }
     this.state = null;
   }
@@ -170,6 +180,7 @@ export class ComsLanHubRuntime {
         authorizedKeys: this.options.authorizedKeys,
         now: () => new Date(this.options.now()),
         maxSkewMs: 30_000,
+        audit: this.options.audit,
       }),
       listAgents: () => this.registry.list(),
       registerLocalAgent: (registration) => this.registerLocalAgent(registration),

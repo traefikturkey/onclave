@@ -491,13 +491,14 @@ Exit criteria:
 ## Resolved Planning Questions
 
 1. **Static peer fallback:** v1 supports manual peer fallback through explicit
-   remote tool parameters (`endpoint`, `node_id`, `hub_instance_id`). Persistent
-   static peer configuration is deferred.
+   remote tool parameters (`endpoint`, `node_id`, `hub_instance_id`) and
+   persistent static peers in `~/.pi/coms-lan/config.json`.
 2. **Audit payloads:** audit logs omit prompt and response bodies by default.
    Payload logging is not part of v1.
-3. **Trust changes:** v1 keeps trust changes file-based through
-   `~/.pi/coms-lan/authorized_keys`, with a command/tool that displays the local
-   public key line and trust file path. Automatic key import is deferred.
+3. **Trust changes:** v1 supports file-based trust through
+   `~/.pi/coms-lan/authorized_keys`, with commands/tools that display the local
+   public key line, show the trust file path, and validate/dedupe/append public
+   key lines.
 4. **`authorized_keys` options:** options are rejected in v1. Only plain
    `ssh-ed25519` public key lines are accepted.
 5. **WSS primitive:** v1 uses Bun native `Bun.serve({ tls, websocket })` and the
@@ -512,6 +513,5 @@ Detailed rationale is recorded in `docs/COMS_LAN_DECISIONS.md`.
 ## Remaining Next Steps
 
 1. Execute `docs/COMS_LAN_MANUAL_ACCEPTANCE.md` on two physical LAN hosts.
-2. Expand audit wiring to discovery/auth transport paths if needed.
-3. Consider post-v1 persistent static peer config or trusted-key import UX after
-   manual LAN validation.
+2. Consider post-v1 trust removal UX or automatic static peer aggregation if
+   manual LAN validation shows they are needed.

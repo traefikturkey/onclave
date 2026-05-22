@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import type { AuditEventName, AuditMetadata } from "../../src/coms-lan/audit";
 import {
   DiscoveryService,
   type DiscoveryUdpSocket,
@@ -24,6 +25,36 @@ describe("DiscoveryService", () => {
       hub_instance_id: "hub_self",
       wss_port: 4444,
     });
+
+    await service.stop();
+  });
+
+  it("audits inbound valid packets", async () => {
+    const socket = new FakeUdpSocket();
+    const events: Array<{ event: AuditEventName; metadata: AuditMetadata }> = [];
+    const service = createService(socket, () => "2026-05-21T00:00:01.000Z", events);
+    await service.start();
+
+    socket.emitMessage(
+      Buffer.from(
+        JSON.stringify({
+          m: "PI-COMS-LAN",
+          v: 1,
+          node_id: "node_peer",
+          hub_instance_id: "hub_peer",
+          wss_port: 5555,
+          started_at: "2026-05-21T00:00:00.000Z",
+        })
+      ),
+      { address: "192.168.1.20", port: 48889 }
+    );
+
+    expect(events).toEqual([
+      {
+        event: "discovery_seen",
+        metadata: { node_id: "node_peer", endpoint: "wss://192.168.1.20:5555/v1/hub", result: "discovered" },
+      },
+    ]);
 
     await service.stop();
   });
@@ -61,9 +92,10 @@ describe("DiscoveryService", () => {
     await service.stop();
   });
 
-  it("ignores malformed and self packets", async () => {
+  it("ignores and audits malformed and self packets", async () => {
     const socket = new FakeUdpSocket();
-    const service = createService(socket);
+    const events: Array<{ event: AuditEventName; metadata: AuditMetadata }> = [];
+    const service = createService(socket, undefined, events);
     await service.start();
 
     socket.emitMessage(Buffer.from("not json"), { address: "192.168.1.20", port: 48889 });
@@ -82,6 +114,10 @@ describe("DiscoveryService", () => {
     );
 
     expect(service.peers()).toEqual([]);
+    expect(events).toEqual([
+      { event: "discovery_ignored", metadata: { reason: "invalid_packet", remote: "192.168.1.20" } },
+      { event: "discovery_ignored", metadata: { reason: "self", remote: "127.0.0.1" } },
+    ]);
 
     await service.stop();
   });
@@ -112,7 +148,8 @@ describe("DiscoveryService", () => {
 
 function createService(
   socket: DiscoveryUdpSocket,
-  now: () => string = () => "2026-05-21T00:00:00.000Z"
+  now: () => string = () => "2026-05-21T00:00:00.000Z",
+  events?: Array<{ event: AuditEventName; metadata: AuditMetadata }>
 ): DiscoveryService {
   return new DiscoveryService({
     socket,
@@ -124,6 +161,11 @@ function createService(
     broadcastAddress: "255.255.255.255",
     intervalMs: 60_000,
     now,
+    audit: events
+      ? (event, metadata) => {
+          events.push({ event, metadata });
+        }
+      : undefined,
   });
 }
 

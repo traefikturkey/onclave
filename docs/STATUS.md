@@ -25,7 +25,7 @@ bun run typecheck
 
 Result:
 
-- `bun test`: 105 passing tests
+- `bun test`: 115 passing tests
 - `bun run typecheck`: passing
 
 ## Phase Progress
@@ -37,7 +37,7 @@ Result:
 | Phase 2: Local Hub Lifecycle and Registration | Complete | Hub state, health-check reuse, stale replacement, lock-protected start flow, dynamic local service binding, local registry, local WSS registration frames, and bootstrap reuse acceptance are covered. |
 | Phase 3: UDP Discovery | Complete | Packet validation, untrusted peer cache, broadcast/listen lifecycle, Node UDP adapter, runtime broadcast integration, and metadata-only acceptance coverage are in place. |
 | Phase 4: WSS Transport and Mutual Authentication | Complete | Bun WSS transport, signed handshake verifier, transport auth gate, frame processor, hub runtime integration, and trusted remote acceptance coverage are in place. |
-| Phase 5: Messaging and Tool Surface | Mostly complete | Local message routing, response correlation, timeout cleanup, WSS send_prompt delivery, Pi status/list/send/get/await tools, `agent_end` response submission, trust info, trusted remote client helpers, and explicit trusted remote list/send/get tools are implemented. |
+| Phase 5: Messaging and Tool Surface | Mostly complete | Local message routing, response correlation, timeout cleanup, WSS send_prompt delivery, Pi status/list/send/get/await tools, `agent_end` response submission, trust info/add, static peer listing, trusted remote client helpers, and explicit/static trusted remote list/send/get tools are implemented. |
 | Phase 6: Acceptance Hardening | Partial | Automated acceptance covers local bootstrap reuse, local WSS register/send/get, metadata-only discovery packets, and trusted remote WSS list/send with exchanged keys. Manual multi-host LAN runbook is documented; physical LAN execution remains. |
 
 ## Implemented Files
@@ -52,6 +52,7 @@ Runtime modules:
 - `src/coms-lan/audited-runtime.ts`
 - `src/coms-lan/authorized-keys.ts`
 - `src/coms-lan/bootstrap.ts`
+- `src/coms-lan/config.ts`
 - `src/coms-lan/canonical-json.ts`
 - `src/coms-lan/discovery.ts`
 - `src/coms-lan/extension-helpers.ts`
@@ -78,10 +79,12 @@ Tests:
 - `tests/coms-lan/authorized-keys.test.ts`
 - `tests/coms-lan/bootstrap.test.ts`
 - `tests/coms-lan/canonical-json.test.ts`
+- `tests/coms-lan/config.test.ts`
 - `tests/coms-lan/discovery-service.test.ts`
 - `tests/coms-lan/discovery.test.ts`
 - `tests/coms-lan/extension-helpers.test.ts`
-- `tests/coms-lan/handshake.test.ts`
+- `tests/coms-lan/extension.test.ts`
+- `tests/coms-lan/handshake.test.ts
 - `tests/coms-lan/hub-runtime.test.ts`
 - `tests/coms-lan/identity-key.test.ts`
 - `tests/coms-lan/identity.test.ts`
@@ -97,6 +100,15 @@ Tests:
 - `tests/coms-lan/trust.test.ts`
 - `tests/coms-lan/transport.test.ts`
 - `tests/coms-lan/wss-transport.test.ts`
+
+Documentation:
+
+- `docs/COMS_LAN_DECISIONS.md`
+- `docs/COMS_LAN_MANUAL_ACCEPTANCE.md`
+- `docs/COMS_LAN_OPERATOR_GUIDE.md`
+- `docs/IMPLEMENTATION_PLAN.md`
+- `docs/PRD.md`
+- `docs/STATUS.md`
 
 Project/config files:
 
@@ -119,6 +131,8 @@ Project/config files:
 - Persistent self-signed TLS material loading/generation under `~/.pi/coms-lan/`.
 - Authorized key trust loading from `~/.pi/coms-lan/authorized_keys`.
 - Public key export formatting for operator trust setup.
+- Trust append helper validates and dedupes public `ssh-ed25519` key lines.
+- Static peer config loading and validation from `~/.pi/coms-lan/config.json`.
 - Local hub bootstrap loads identity, trust, TLS material, and starts or reuses
   hub state.
 - Local hub state read/write and validation.
@@ -159,16 +173,18 @@ Project/config files:
   metadata with project labels and stable defaults.
 - Initial Pi extension entrypoint bootstraps/reuses local hub state, registers
   local agents directly or through local WSS registration frames, exposes
-  trust setup, status/peer/agent listing plus local and explicit trusted remote
-  send/get/await tools, injects inbound prompts, and submits `agent_end`
-  responses.
+  trust setup/add, status/peer/static-peer/agent listing plus local and
+  explicit/static trusted remote send/get/await tools, injects inbound prompts,
+  and submits `agent_end` responses.
 - Remote client helper authenticates to trusted WSS peers for agent listing,
   prompt send, and response lookup.
 - Hub runtime can aggregate agent listings from trusted remote peers.
-- Audit helper records local registration, messaging, response, and auth events
-  without prompt/response bodies.
-- Hub runtime emits audit metadata for local registration, unregister, prompt
-  routing, and response submission paths.
+- Audit helper records lifecycle, trust, discovery, local registration,
+  messaging, response, and auth events without prompt/response bodies.
+- Hub runtime emits audit metadata for hub start/stop, local registration,
+  unregister, discovery, auth, prompt routing, and response submission paths.
+- Remote client emits audit metadata for auth, outbound prompts, and response
+  lookup results.
 - Automated acceptance coverage verifies first hub startup, second bootstrap
   reuse, local WSS registration/send/response lookup, metadata-only discovery
   packets, and trusted remote WSS listing/send after public key exchange.
@@ -197,17 +213,16 @@ Project/config files:
    wins the local hub lock. A spawned child process remains a post-v1 hardening
    option.
 2. Static/manual peers: v1 supports manual fallback through explicit remote tool
-   parameters (`endpoint`, `node_id`, `hub_instance_id`) instead of persistent
-   static peer configuration.
-3. Trust import UX: v1 keeps trust changes file-based through
-   `~/.pi/coms-lan/authorized_keys`, with `/coms-lan-trust` and
-   `coms_lan_trust_info` for public-key setup guidance.
+   parameters (`endpoint`, `node_id`, `hub_instance_id`) and persistent static
+   peers in `~/.pi/coms-lan/config.json`.
+3. Trust import UX: v1 supports file-based trust through
+   `~/.pi/coms-lan/authorized_keys`, with `/coms-lan-trust`,
+   `coms_lan_trust_info`, and `coms_lan_trust_add` for public-key setup.
 
 See `docs/COMS_LAN_DECISIONS.md` for rationale and consequences.
 
 ## Next Actions
 
 1. Execute the documented manual multi-host LAN runbook on two physical hosts.
-2. Expand audit wiring to discovery/auth transport paths if needed.
-3. Decide whether post-v1 should add persistent static peer config or a trusted
-   key import command.
+2. Consider post-v1 trust removal UX or automatic static peer aggregation if
+   manual validation shows they are needed.

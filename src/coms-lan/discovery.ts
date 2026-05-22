@@ -1,4 +1,5 @@
 import { createSocket, type RemoteInfo, type Socket } from "node:dgram";
+import type { AuditEventName, AuditMetadata } from "./audit";
 
 export type DiscoveryPacket = {
   m: "PI-COMS-LAN";
@@ -53,6 +54,7 @@ export type DiscoveryServiceOptions = {
   broadcastAddress: string;
   intervalMs: number;
   now: () => string;
+  audit?: (event: AuditEventName, metadata: AuditMetadata) => void | Promise<void>;
 };
 
 const DISCOVERY_MAGIC = "PI-COMS-LAN";
@@ -218,8 +220,20 @@ export class DiscoveryService {
 
   private handleMessage(data: Buffer, remote: UdpRemoteInfo): void {
     const packet = parseDiscoveryPacket(data);
-    if (!packet) return;
-    this.cache.upsertFromPacket(packet, remote.address, this.options.now());
+    if (!packet) {
+      void this.options.audit?.("discovery_ignored", { reason: "invalid_packet", remote: remote.address });
+      return;
+    }
+    const result = this.cache.upsertFromPacket(packet, remote.address, this.options.now());
+    if (result === "ignored_self") {
+      void this.options.audit?.("discovery_ignored", { reason: "self", remote: remote.address });
+      return;
+    }
+    void this.options.audit?.("discovery_seen", {
+      node_id: packet.node_id,
+      endpoint: `wss://${remote.address}:${packet.wss_port}/v1/hub`,
+      result,
+    });
   }
 }
 

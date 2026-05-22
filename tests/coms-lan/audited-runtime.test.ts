@@ -7,6 +7,27 @@ import type { LocalAgentRegistration } from "../../src/coms-lan/local-registry";
 const NOW = "2026-05-21T00:00:00.000Z";
 
 describe("AuditedHubRuntime", () => {
+  it("audits lifecycle, trust, and discovery metadata", () => {
+    const events: Array<{ event: AuditEventName; metadata: AuditMetadata }> = [];
+    const runtime = createRuntime(events);
+
+    runtime.hubStart({ nodeId: "node_local", hubInstanceId: "hub_local", endpoint: "https://127.0.0.1:4444" });
+    runtime.trustLoaded({ count: 2 });
+    runtime.trustChanged({ action: "add", fingerprint: "SHA256:test", duplicate: false });
+    runtime.discoverySeen({ nodeId: "node_peer", endpoint: "wss://192.168.1.20:4444/v1/hub", result: "discovered" });
+    runtime.discoveryIgnored({ reason: "invalid_packet", remote: "192.168.1.30" });
+    runtime.hubStop({ nodeId: "node_local", hubInstanceId: "hub_local" });
+
+    expect(events).toEqual([
+      { event: "hub_start", metadata: { node_id: "node_local", hub_instance_id: "hub_local", endpoint: "https://127.0.0.1:4444" } },
+      { event: "trust_loaded", metadata: { count: 2 } },
+      { event: "trust_changed", metadata: { action: "add", fingerprint: "SHA256:test", duplicate: false } },
+      { event: "discovery_seen", metadata: { node_id: "node_peer", endpoint: "wss://192.168.1.20:4444/v1/hub", result: "discovered" } },
+      { event: "discovery_ignored", metadata: { reason: "invalid_packet", remote: "192.168.1.30" } },
+      { event: "hub_stop", metadata: { node_id: "node_local", hub_instance_id: "hub_local" } },
+    ]);
+  });
+
   it("audits local registration and unregister", () => {
     const events: Array<{ event: AuditEventName; metadata: AuditMetadata }> = [];
     const runtime = createRuntime(events);
@@ -54,11 +75,13 @@ describe("AuditedHubRuntime", () => {
     };
 
     runtime.responseInbound(response);
+    runtime.authAttempt({ nodeId: "node_peer" });
     runtime.authSuccess({ nodeId: "node_peer", fingerprint: "SHA256:test" });
     runtime.authFailure({ nodeId: "node_peer", reason: "invalid_signature" });
 
     expect(events).toEqual([
       { event: "response_inbound", metadata: { msg_id: "msg-1", responder_session_id: "session-1", error: null } },
+      { event: "auth_attempt", metadata: { node_id: "node_peer" } },
       { event: "auth_success", metadata: { node_id: "node_peer", fingerprint: "SHA256:test" } },
       { event: "auth_failure", metadata: { node_id: "node_peer", reason: "invalid_signature" } },
     ]);
