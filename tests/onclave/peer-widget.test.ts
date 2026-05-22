@@ -37,7 +37,8 @@ describe("renderOnclavePeerWidget", () => {
 
     const normalized = lines.map(stripAnsi);
 
-    expect(normalized[0]).toContain("onclave peers");
+    expect(normalized[0]).toContain("onclave");
+    expect(normalized[0]).not.toContain("onclave peers");
     expect(normalized[0]).toContain("host-a");
     expect(normalized[0]).not.toContain(" ━host-a");
     expect(normalized[0]).toContain("━ host-a ━┓");

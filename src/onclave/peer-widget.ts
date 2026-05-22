@@ -115,7 +115,7 @@ function renderTopBorder(width: number, input: OnclavePeerWidgetInput, theme: On
     return theme.fg("dim", "━".repeat(width));
   }
 
-  const title = theme.fg("border", " onclave peers ");
+  const title = theme.fg("border", " onclave ");
   const left = theme.fg("dim", "┏━") + title;
   const rightLabel = input.localLabel
     ? theme.fg("dim", "━ ") + colorize(input.localColor, input.localLabel) + theme.fg("dim", " ━┓")

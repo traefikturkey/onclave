@@ -692,8 +692,6 @@ async function refreshOnclaveUi(
   const peers = bootstrap.runtime?.discoveredPeers?.() ?? [];
   const config = await loadOnclaveConfig(paths).catch(() => ({ version: 1 as const, staticPeers: [] }));
   const peerNames = new Map(config.staticPeers.filter((peer) => peer.name).map((peer) => [peer.nodeId, peer.name as string]));
-  const trustedCount = peers.filter((peer) => peer.trustState === "trusted").length;
-  const authenticatedCount = peers.filter((peer) => peer.authState === "authenticated").length;
   const widgetPeers = peers.slice(0, 6).map((peer) => ({
     ...peer,
     displayName: peerNames.get(peer.nodeId) ?? shortNodeId(peer.nodeId),
@@ -718,7 +716,7 @@ async function refreshOnclaveUi(
     }),
     { placement: "belowEditor" }
   );
-  ui.setStatus?.("onclave", `onclave ${peers.length} peer(s) · ${trustedCount} trusted · ${authenticatedCount} auth`);
+  ui.setStatus?.("onclave", undefined);
 }
 
 function cachePeerDisplay(
