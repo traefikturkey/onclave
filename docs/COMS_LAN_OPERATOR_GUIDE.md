@@ -72,6 +72,27 @@ Optional audit check:
 bun run coms-lan:acceptance-host -- --audit-scan
 ```
 
+## Project Prompt Templates
+
+This repository includes two project prompt templates under `.pi/prompts/` to
+reduce manual copy/paste during LAN acceptance runs:
+
+- `/coms-lan-acceptance-host-b` prepares Host B as the responder and surfaces
+  its local `sessionId` from tool details.
+- `/coms-lan-acceptance-host-a` discovers Host B from `coms_lan_peers`, picks a
+  remote `sessionId` from `coms_lan_remote_agents`, sends the acceptance prompt,
+  and polls for the response.
+
+Recommended order:
+
+1. Open Pi with `extensions/coms-lan.ts` on Host B and run
+   `/coms-lan-acceptance-host-b`.
+2. Open Pi with `extensions/coms-lan.ts` on Host A and run
+   `/coms-lan-acceptance-host-a`.
+
+The templates are intentionally asymmetric so Host B stays available to answer
+Host A's inbound test prompt instead of both hosts blocking on outbound waits.
+
 ## First Run
 
 Start Pi with the `extensions/coms-lan.ts` extension enabled.
