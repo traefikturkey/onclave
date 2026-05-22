@@ -157,8 +157,9 @@ Project/config files:
   metadata with project labels and stable defaults.
 - Initial Pi extension entrypoint bootstraps/reuses local hub state, registers
   local agents directly or through local WSS registration frames, exposes
-  status/peer/agent listing plus local and explicit trusted remote send/get/await
-  tools, injects inbound prompts, and submits `agent_end` responses.
+  trust setup, status/peer/agent listing plus local and explicit trusted remote
+  send/get/await tools, injects inbound prompts, and submits `agent_end`
+  responses.
 - Remote client helper authenticates to trusted WSS peers for agent listing,
   prompt send, and response lookup.
 - Hub runtime can aggregate agent listings from trusted remote peers.
@@ -196,5 +197,4 @@ Project/config files:
 
 1. Add end-to-end acceptance checks for local hub startup and trusted remote
    listing.
-2. Add optional trust UX commands/import guidance.
-3. Expand audit wiring to discovery/auth transport paths if needed.
+2. Expand audit wiring to discovery/auth transport paths if needed.

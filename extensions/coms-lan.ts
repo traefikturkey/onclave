@@ -106,6 +106,44 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
+  pi.registerCommand("coms-lan-trust", {
+    description: "Show coms-lan public key and authorized_keys trust setup paths",
+    handler: async (_args, ctx) => {
+      if (!bootstrap) {
+        ctx.ui.notify("coms-lan is not initialized", "error");
+        return;
+      }
+      ctx.ui.notify(
+        `Add this line to a peer authorized_keys file:\n${bootstrap.publicAuthorizedKeyLine}\n\nLocal file: ${paths.authorizedKeys}`,
+        "info"
+      );
+    },
+  });
+
+  pi.registerTool({
+    name: "coms_lan_trust_info",
+    label: "Coms LAN Trust Info",
+    description: "Show the local public key line and authorized_keys path for trust setup.",
+    parameters: Type.Object({}),
+    async execute() {
+      if (!bootstrap) throw new Error("coms-lan is not initialized");
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text:
+              `authorized_keys: ${paths.authorizedKeys}\n` +
+              `public_key: ${bootstrap.publicAuthorizedKeyLine}`,
+          },
+        ],
+        details: {
+          authorizedKeysPath: paths.authorizedKeys,
+          publicAuthorizedKeyLine: bootstrap.publicAuthorizedKeyLine,
+        },
+      };
+    },
+  });
+
   pi.registerTool({
     name: "coms_lan_status",
     label: "Coms LAN Status",
