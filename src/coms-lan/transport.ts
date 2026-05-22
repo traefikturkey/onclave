@@ -1,10 +1,14 @@
+import { randomBytes } from "node:crypto";
 import type { AuditEventName, AuditMetadata } from "./audit";
 import type { AuthorizedSshEd25519Key } from "./authorized-keys";
 import {
   ReplayCache,
+  signHandshakePayload,
   verifyClientHandshake,
   type HandshakeFailureReason,
   type HandshakePayload,
+  type ServerHelloFrame,
+  type ServerHelloPayload,
 } from "./handshake";
 import type { LocalAgent, LocalAgentRegistration } from "./local-registry";
 import type { MessageResponse, SubmitResponseResult } from "./messages";
@@ -14,6 +18,10 @@ export type ClientAuthFrame = {
   payload: HandshakePayload;
   publicKeyHex: string;
   signatureHex: string;
+};
+
+export type AuthHelloFrame = {
+  type: "auth_hello";
 };
 
 export type AuthenticatedPeer = {
@@ -64,6 +72,7 @@ export type LocalSubmitResponseFrame = MessageResponse & {
 };
 
 export type HubFrame =
+  | AuthHelloFrame
   | ClientAuthFrame
   | ListAgentsFrame
   | SendPromptFrame
@@ -79,7 +88,8 @@ export type SendPromptRouteResult =
   | { ok: false; error: string };
 
 export type HubFrameResponse =
-  | { type: "auth_ok"; peer: AuthenticatedPeer }
+  | ServerHelloFrame
+  | { type: "auth_ok"; peer: AuthenticatedPeer; publicKeyHex: string; signatureHex: string }
   | { type: "auth_failed"; reason: HandshakeFailureReason }
   | { type: "agents"; agents: LocalAgent[] }
   | { type: "local_register_ok"; agent: LocalAgent }
@@ -101,6 +111,13 @@ export type HubTransportAuthGateOptions = {
   authorizedKeys: AuthorizedSshEd25519Key[];
   now: () => Date;
   maxSkewMs: number;
+  localIdentity: {
+    nodeId: string;
+    hubInstanceId: string;
+    endpoint: () => string;
+    publicKeyHex: string;
+    privateKeyHex: string;
+  };
   audit?: (event: AuditEventName, metadata: AuditMetadata) => void | Promise<void>;
 };
 
@@ -115,7 +132,7 @@ export type HubFrameProcessorOptions = {
 };
 
 export type TransportAuthResult =
-  | { ok: true; peer: AuthenticatedPeer }
+  | { ok: true; peer: AuthenticatedPeer; publicKeyHex: string; signatureHex: string }
   | { ok: false; reason: HandshakeFailureReason };
 
 export class HubFrameProcessor {
@@ -128,6 +145,8 @@ export class HubFrameProcessor {
     if (!frame) return { type: "error", code: "invalid_frame" };
 
     switch (frame.type) {
+      case "auth_hello":
+        return this.options.gate.createServerHello();
       case "client_auth":
         return this.handleClientAuth(frame);
       case "local_register":
@@ -181,7 +200,12 @@ export class HubFrameProcessor {
     const result = await this.options.gate.authenticateClient(frame);
     if (!result.ok) return { type: "auth_failed", reason: result.reason };
     this.authenticatedNodeId = result.peer.nodeId;
-    return { type: "auth_ok", peer: result.peer };
+    return {
+      type: "auth_ok",
+      peer: result.peer,
+      publicKeyHex: result.publicKeyHex,
+      signatureHex: result.signatureHex,
+    };
   }
 
   private isAuthenticated(): boolean {
@@ -192,11 +216,36 @@ export class HubFrameProcessor {
 export class HubTransportAuthGate {
   private readonly replayCache = new ReplayCache();
   private readonly authenticated = new Map<string, AuthenticatedPeer>();
+  private currentHello: ServerHelloPayload | null = null;
 
   constructor(private readonly options: HubTransportAuthGateOptions) {}
 
+  createServerHello(): ServerHelloFrame {
+    if (!this.currentHello) {
+      const now = this.options.now().toISOString();
+      this.currentHello = {
+        protocol: "coms-lan",
+        version: 1,
+        server_node_id: this.options.localIdentity.nodeId,
+        server_instance_id: this.options.localIdentity.hubInstanceId,
+        server_endpoint: this.options.localIdentity.endpoint(),
+        server_nonce: randomBytes(16).toString("hex"),
+        server_timestamp: now,
+      };
+    }
+    return { type: "server_hello", hello: this.currentHello };
+  }
+
+  localIdentity(): HubTransportAuthGateOptions["localIdentity"] {
+    return this.options.localIdentity;
+  }
+
   async authenticateClient(frame: ClientAuthFrame): Promise<TransportAuthResult> {
     const now = this.options.now();
+    const expectedHello = this.currentHello;
+    if (!expectedHello) {
+      return { ok: false, reason: "invalid_payload" };
+    }
     void this.options.audit?.("auth_attempt", { node_id: frame.payload.client_node_id });
     const result = await verifyClientHandshake({
       payload: frame.payload,
@@ -206,6 +255,7 @@ export class HubTransportAuthGate {
       replayCache: this.replayCache,
       now,
       maxSkewMs: this.options.maxSkewMs,
+      expectedHello,
     });
 
     if (!result.ok) {
@@ -228,7 +278,12 @@ export class HubTransportAuthGate {
       node_id: peer.nodeId,
       fingerprint: peer.fingerprint,
     });
-    return { ok: true, peer };
+    return {
+      ok: true,
+      peer,
+      publicKeyHex: this.options.localIdentity.publicKeyHex,
+      signatureHex: await signHandshakePayload(frame.payload, this.options.localIdentity.privateKeyHex),
+    };
   }
 
   canListAgents(nodeId: string): boolean {
@@ -250,6 +305,8 @@ function parseFrame(raw: string | Buffer): HubFrame | null {
     if (!parsed || typeof parsed !== "object") return null;
     const record = parsed as Record<string, unknown>;
     switch (record.type) {
+      case "auth_hello":
+        return { type: "auth_hello" };
       case "client_auth":
         return isClientAuthFrame(record) ? record : null;
       case "list_agents":
@@ -299,7 +356,8 @@ function isHandshakePayload(value: unknown): value is HandshakePayload {
     typeof record.server_endpoint === "string" &&
     typeof record.client_nonce === "string" &&
     typeof record.server_nonce === "string" &&
-    typeof record.timestamp === "string"
+    typeof record.client_timestamp === "string" &&
+    typeof record.server_timestamp === "string"
   );
 }
 
@@ -364,9 +422,7 @@ function isLocalSendPromptFrame(value: Record<string, unknown>): value is LocalS
     typeof value.targetSessionId === "string" &&
     value.targetSessionId.length > 0 &&
     typeof value.prompt === "string" &&
-    typeof value.hops === "number" &&
-    Number.isInteger(value.hops) &&
-    value.hops >= 0
+    typeof value.hops === "number"
   );
 }
 
@@ -378,8 +434,6 @@ function isSendPromptFrame(value: Record<string, unknown>): value is SendPromptF
     typeof value.targetSessionId === "string" &&
     value.targetSessionId.length > 0 &&
     typeof value.prompt === "string" &&
-    typeof value.hops === "number" &&
-    Number.isInteger(value.hops) &&
-    value.hops >= 0
+    typeof value.hops === "number"
   );
 }

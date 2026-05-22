@@ -108,6 +108,24 @@ export class DiscoveryPeerCache {
     return existing ? "updated" : "discovered";
   }
 
+  markAuthInProgress(nodeId: string): void {
+    const peer = this.peers.get(nodeId);
+    if (!peer) return;
+    this.peers.set(nodeId, { ...peer, authState: "in_progress" });
+  }
+
+  markAuthenticated(nodeId: string): void {
+    const peer = this.peers.get(nodeId);
+    if (!peer) return;
+    this.peers.set(nodeId, { ...peer, trustState: "trusted", authState: "authenticated" });
+  }
+
+  markAuthFailed(nodeId: string): void {
+    const peer = this.peers.get(nodeId);
+    if (!peer) return;
+    this.peers.set(nodeId, { ...peer, trustState: "auth_failed", authState: "failed" });
+  }
+
   list(): DiscoveredPeer[] {
     return [...this.peers.values()].sort((left, right) => left.nodeId.localeCompare(right.nodeId));
   }
@@ -216,6 +234,18 @@ export class DiscoveryService {
 
   peers(): DiscoveredPeer[] {
     return this.cache.list();
+  }
+
+  markPeerAuthInProgress(nodeId: string): void {
+    this.cache.markAuthInProgress(nodeId);
+  }
+
+  markPeerAuthenticated(nodeId: string): void {
+    this.cache.markAuthenticated(nodeId);
+  }
+
+  markPeerAuthFailed(nodeId: string): void {
+    this.cache.markAuthFailed(nodeId);
   }
 
   private handleMessage(data: Buffer, remote: UdpRemoteInfo): void {

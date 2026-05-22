@@ -4,7 +4,7 @@ import { ComsLanHubRuntime, type ComsLanHubRuntimeOptions } from "./hub-runtime"
 import type { HubState } from "./local-hub";
 import { startOrDiscoverLocalHub } from "./local-hub";
 import type { ComsLanIdentity } from "./identity";
-import { loadOrCreateIdentity } from "./identity";
+import { loadIdentityPrivateKeyHex, loadOrCreateIdentity } from "./identity";
 import type { ComsLanPaths } from "./state";
 import { loadOrCreateTlsMaterial, type TlsMaterialGenerator } from "./tls";
 import { formatAuthorizedKeyLine, loadAuthorizedKeys } from "./trust";
@@ -20,10 +20,14 @@ export type HubRuntimeHandle = {
   unregisterLocalAgent?: (sessionId: string) => boolean;
   localAgents?: () => LocalAgent[];
   discoveredPeers?: () => DiscoveredPeer[];
+  markPeerAuthInProgress?: (nodeId: string) => void;
+  markPeerAuthenticated?: (nodeId: string) => void;
+  markPeerAuthFailed?: (nodeId: string) => void;
 };
 
 export type BootstrapRuntimeInput = {
   identity: ComsLanIdentity;
+  privateKeyHex: string;
   hubInstanceId: string;
   tls: TlsMaterial;
   authorizedKeys: AuthorizedSshEd25519Key[];
@@ -68,6 +72,7 @@ export async function bootstrapLocalHub(
       const hubInstanceId = `hub_${identity.nodeId.slice(-26)}`;
       runtime = await createRuntime(paths, options, {
         identity,
+        privateKeyHex: await loadIdentityPrivateKeyHex(paths),
         hubInstanceId,
         tls,
         authorizedKeys,
@@ -99,6 +104,8 @@ async function createRuntime(
     host: options.host,
     tls: input.tls,
     authorizedKeys: input.authorizedKeys,
+    localPublicKeyHex: input.identity.publicKey,
+    localPrivateKeyHex: input.privateKeyHex,
     discoverySocket: options.discoverySocketFactory?.() ?? createNodeDiscoveryUdpSocket(),
     discoveryPort: options.discoveryPort,
     broadcastAddress: options.broadcastAddress,
@@ -117,5 +124,8 @@ async function createRuntime(
     unregisterLocalAgent: (sessionId) => runtime.unregisterLocalAgent(sessionId),
     localAgents: () => runtime.localAgents(),
     discoveredPeers: () => runtime.discoveredPeers(),
+    markPeerAuthInProgress: (nodeId) => runtime.markPeerAuthInProgress(nodeId),
+    markPeerAuthenticated: (nodeId) => runtime.markPeerAuthenticated(nodeId),
+    markPeerAuthFailed: (nodeId) => runtime.markPeerAuthFailed(nodeId),
   };
 }

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import { keygenAsync } from "@noble/ed25519";
 import { parseAuthorizedKeys } from "../../src/coms-lan/authorized-keys";
-import { signHandshakePayload, type HandshakePayload } from "../../src/coms-lan/handshake";
+import {
+  signHandshakePayload,
+  type HandshakePayload,
+  type ServerHelloFrame,
+} from "../../src/coms-lan/handshake";
 import {
   HubFrameProcessor,
   HubTransportAuthGate,
@@ -14,7 +18,7 @@ const NOW = "2026-05-21T00:00:00.000Z";
 
 describe("HubFrameProcessor", () => {
   it("rejects malformed frames without throwing", async () => {
-    const processor = createProcessor([]);
+    const processor = await createProcessor([]);
 
     await expect(processor.handleRaw("not json")).resolves.toEqual({
       type: "error",
@@ -25,7 +29,7 @@ describe("HubFrameProcessor", () => {
   it("registers local agents without hub-to-hub authentication", async () => {
     const registered: LocalAgentRegistration[] = [];
     const agent = createAgent();
-    const processor = createProcessor([], {
+    const processor = await createProcessor([], {
       registerLocalAgent: (registration) => {
         registered.push(registration);
         return agent;
@@ -40,7 +44,7 @@ describe("HubFrameProcessor", () => {
 
   it("unregisters local agents without hub-to-hub authentication", async () => {
     const unregistered: string[] = [];
-    const processor = createProcessor([], {
+    const processor = await createProcessor([], {
       unregisterLocalAgent: (sessionId) => {
         unregistered.push(sessionId);
         return true;
@@ -54,7 +58,7 @@ describe("HubFrameProcessor", () => {
   });
 
   it("requires authentication before listing agents", async () => {
-    const processor = createProcessor([]);
+    const processor = await createProcessor([]);
 
     await expect(processor.handleRaw(JSON.stringify({ type: "list_agents" }))).resolves.toEqual({
       type: "error",
@@ -62,12 +66,15 @@ describe("HubFrameProcessor", () => {
     });
   });
 
-  it("authenticates a client auth frame", async () => {
-    const fixture = await createClientAuthFrame();
-    const processor = createProcessor(fixture.authorizedKeys);
+  it("authenticates a client auth frame after an auth hello", async () => {
+    const fixture = await createClientAuthFixture();
+    const processor = await createProcessor(fixture.authorizedKeys);
+    const hello = await processor.handleRaw(JSON.stringify({ type: "auth_hello" }));
+    if (hello.type !== "server_hello") throw new Error("expected server_hello");
 
-    const response = await processor.handleRaw(JSON.stringify(fixture.frame));
+    const response = await processor.handleRaw(JSON.stringify(await createClientAuthFrame(fixture, hello)));
 
+    expect(hello).toMatchObject({ type: "server_hello" });
     expect(response).toMatchObject({
       type: "auth_ok",
       peer: {
@@ -79,11 +86,13 @@ describe("HubFrameProcessor", () => {
   });
 
   it("lists agents only after authentication", async () => {
-    const fixture = await createClientAuthFrame();
+    const fixture = await createClientAuthFixture();
     const agent = createAgent();
-    const processor = createProcessor(fixture.authorizedKeys, { agents: [agent] });
+    const processor = await createProcessor(fixture.authorizedKeys, { agents: [agent] });
+    const hello = await processor.handleRaw(JSON.stringify({ type: "auth_hello" }));
+    if (hello.type !== "server_hello") throw new Error("expected server_hello");
 
-    await processor.handleRaw(JSON.stringify(fixture.frame));
+    await processor.handleRaw(JSON.stringify(await createClientAuthFrame(fixture, hello)));
     const response = await processor.handleRaw(JSON.stringify({ type: "list_agents" }));
 
     expect(response).toEqual({
@@ -94,7 +103,7 @@ describe("HubFrameProcessor", () => {
 
   it("handles local response submission without hub-to-hub authentication", async () => {
     const submitted: unknown[] = [];
-    const processor = createProcessor([], {
+    const processor = await createProcessor([], {
       submitResponse: (response) => {
         submitted.push(response);
         return { ok: true, status: "complete" };
@@ -125,7 +134,7 @@ describe("HubFrameProcessor", () => {
   });
 
   it("handles local response lookup without hub-to-hub authentication", async () => {
-    const processor = createProcessor([], {
+    const processor = await createProcessor([], {
       getResponse: () => ({ status: "complete", response: "done", error: null }),
     });
 
@@ -138,7 +147,7 @@ describe("HubFrameProcessor", () => {
 
   it("handles local prompt sends without hub-to-hub authentication", async () => {
     const sent: SendPromptFrame[] = [];
-    const processor = createProcessor([], {
+    const processor = await createProcessor([], {
       onSendPrompt: async (frame) => {
         sent.push(frame);
         return { ok: true, msgId: frame.msgId, status: "delivered" };
@@ -168,7 +177,7 @@ describe("HubFrameProcessor", () => {
   });
 
   it("requires authentication before reading message responses", async () => {
-    const processor = createProcessor([]);
+    const processor = await createProcessor([]);
 
     await expect(processor.handleRaw(JSON.stringify({ type: "get_response", msgId: "msg-1" }))).resolves.toEqual({
       type: "error",
@@ -177,12 +186,14 @@ describe("HubFrameProcessor", () => {
   });
 
   it("returns message responses after authentication", async () => {
-    const fixture = await createClientAuthFrame();
-    const processor = createProcessor(fixture.authorizedKeys, {
+    const fixture = await createClientAuthFixture();
+    const processor = await createProcessor(fixture.authorizedKeys, {
       getResponse: () => ({ status: "complete", response: "done", error: null }),
     });
+    const hello = await processor.handleRaw(JSON.stringify({ type: "auth_hello" }));
+    if (hello.type !== "server_hello") throw new Error("expected server_hello");
 
-    await processor.handleRaw(JSON.stringify(fixture.frame));
+    await processor.handleRaw(JSON.stringify(await createClientAuthFrame(fixture, hello)));
     await expect(processor.handleRaw(JSON.stringify({ type: "get_response", msgId: "msg-1" }))).resolves.toEqual({
       type: "response",
       msgId: "msg-1",
@@ -192,7 +203,7 @@ describe("HubFrameProcessor", () => {
 
   it("requires authentication before accepting prompt sends", async () => {
     const sent: SendPromptFrame[] = [];
-    const processor = createProcessor([], {
+    const processor = await createProcessor([], {
       onSendPrompt: async (frame) => {
         sent.push(frame);
       },
@@ -212,9 +223,9 @@ describe("HubFrameProcessor", () => {
   });
 
   it("accepts prompt sends after authentication", async () => {
-    const fixture = await createClientAuthFrame();
+    const fixture = await createClientAuthFixture();
     const sent: SendPromptFrame[] = [];
-    const processor = createProcessor(fixture.authorizedKeys, {
+    const processor = await createProcessor(fixture.authorizedKeys, {
       onSendPrompt: async (frame) => {
         sent.push(frame);
         return { ok: true, msgId: frame.msgId, status: "delivered" };
@@ -227,8 +238,10 @@ describe("HubFrameProcessor", () => {
       prompt: "hello",
       hops: 0,
     };
+    const hello = await processor.handleRaw(JSON.stringify({ type: "auth_hello" }));
+    if (hello.type !== "server_hello") throw new Error("expected server_hello");
 
-    await processor.handleRaw(JSON.stringify(fixture.frame));
+    await processor.handleRaw(JSON.stringify(await createClientAuthFrame(fixture, hello)));
     const response = await processor.handleRaw(JSON.stringify(frame));
 
     expect(response).toEqual({ type: "send_accepted", msgId: "msg-1", status: "delivered" });
@@ -236,12 +249,14 @@ describe("HubFrameProcessor", () => {
   });
 
   it("returns routing failures for authenticated prompt sends", async () => {
-    const fixture = await createClientAuthFrame();
-    const processor = createProcessor(fixture.authorizedKeys, {
+    const fixture = await createClientAuthFixture();
+    const processor = await createProcessor(fixture.authorizedKeys, {
       onSendPrompt: async () => ({ ok: false, error: "target_not_found" }),
     });
+    const hello = await processor.handleRaw(JSON.stringify({ type: "auth_hello" }));
+    if (hello.type !== "server_hello") throw new Error("expected server_hello");
 
-    await processor.handleRaw(JSON.stringify(fixture.frame));
+    await processor.handleRaw(JSON.stringify(await createClientAuthFrame(fixture, hello)));
     const response = await processor.handleRaw(
       JSON.stringify({
         type: "send_prompt",
@@ -256,7 +271,7 @@ describe("HubFrameProcessor", () => {
   });
 });
 
-function createProcessor(
+async function createProcessor(
   authorizedKeys: ReturnType<typeof parseAuthorizedKeys>,
   options: {
     agents?: LocalAgent[];
@@ -272,12 +287,20 @@ function createProcessor(
       completedAt: string;
     }) => { ok: true; status: "complete" | "error" } | { ok: false; error: "message_not_found" | "responder_mismatch" };
   } = {}
-): HubFrameProcessor {
+): Promise<HubFrameProcessor> {
+  const serverKeys = await keygenAsync();
   return new HubFrameProcessor({
     gate: new HubTransportAuthGate({
       authorizedKeys,
       now: () => new Date(NOW),
       maxSkewMs: 30_000,
+      localIdentity: {
+        nodeId: "node_server",
+        hubInstanceId: "hub_server",
+        endpoint: () => "wss://192.168.1.20:4444/v1/hub",
+        publicKeyHex: Buffer.from(serverKeys.publicKey).toString("hex"),
+        privateKeyHex: Buffer.from(serverKeys.secretKey).toString("hex"),
+      },
     }),
     listAgents: () => options.agents ?? [],
     registerLocalAgent: options.registerLocalAgent ?? ((registration) => ({ ...registration, status: "online", queueDepth: 0, contextUsedPct: 0, registeredAt: NOW, lastSeenAt: NOW })),
@@ -288,8 +311,9 @@ function createProcessor(
   });
 }
 
-async function createClientAuthFrame(): Promise<{
-  frame: ClientAuthFrame;
+async function createClientAuthFixture(): Promise<{
+  publicKeyHex: string;
+  privateKeyHex: string;
   authorizedKeys: ReturnType<typeof parseAuthorizedKeys>;
 }> {
   const keyPair = await keygenAsync();
@@ -298,28 +322,34 @@ async function createClientAuthFrame(): Promise<{
   const authorizedKeys = parseAuthorizedKeys(
     `ssh-ed25519 ${encodeOpenSshEd25519PublicKey(keyPair.publicKey)} test@example`
   );
+
+  return { publicKeyHex, privateKeyHex, authorizedKeys };
+}
+
+async function createClientAuthFrame(
+  fixture: { publicKeyHex: string; privateKeyHex: string },
+  hello: ServerHelloFrame
+): Promise<ClientAuthFrame> {
   const payload: HandshakePayload = {
     protocol: "coms-lan",
     version: 1,
     client_node_id: "node_client",
-    server_node_id: "node_server",
+    server_node_id: hello.hello.server_node_id,
     client_instance_id: "hub_client",
-    server_instance_id: "hub_server",
+    server_instance_id: hello.hello.server_instance_id,
     client_endpoint: "wss://192.168.1.10:4444/v1/hub",
-    server_endpoint: "wss://192.168.1.20:4444/v1/hub",
+    server_endpoint: hello.hello.server_endpoint,
     client_nonce: "client-nonce",
-    server_nonce: "server-nonce",
-    timestamp: NOW,
+    server_nonce: hello.hello.server_nonce,
+    client_timestamp: NOW,
+    server_timestamp: hello.hello.server_timestamp,
   };
 
   return {
-    authorizedKeys,
-    frame: {
-      type: "client_auth",
-      payload,
-      publicKeyHex,
-      signatureHex: await signHandshakePayload(payload, privateKeyHex),
-    },
+    type: "client_auth",
+    payload,
+    publicKeyHex: fixture.publicKeyHex,
+    signatureHex: await signHandshakePayload(payload, fixture.privateKeyHex),
   };
 }
 

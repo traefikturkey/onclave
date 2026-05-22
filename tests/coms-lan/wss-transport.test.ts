@@ -5,14 +5,24 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { keygenAsync } from "@noble/ed25519";
 import { parseAuthorizedKeys } from "../../src/coms-lan/authorized-keys";
-import { signHandshakePayload, type HandshakePayload } from "../../src/coms-lan/handshake";
+import type { RemoteHubClientIdentity } from "../../src/coms-lan/remote-client";
 import type { LocalAgent } from "../../src/coms-lan/local-registry";
 import {
   HubFrameProcessor,
   HubTransportAuthGate,
   type ClientAuthFrame,
 } from "../../src/coms-lan/transport";
-import { sendWssFrames, startWssHubServer, type TlsMaterial } from "../../src/coms-lan/wss-transport";
+import {
+  signHandshakePayload,
+  type HandshakePayload,
+  type ServerHelloFrame,
+} from "../../src/coms-lan/handshake";
+import {
+  sendAuthenticatedWssFrames,
+  sendWssFrames,
+  startWssHubServer,
+  type TlsMaterial,
+} from "../../src/coms-lan/wss-transport";
 
 const NOW = "2026-05-21T00:00:00.000Z";
 let tempDir: string | null = null;
@@ -30,7 +40,9 @@ afterAll(async () => {
 
 describe("WSS hub transport", () => {
   it("returns auth_required for gated frames before authentication", async () => {
-    const server = await startTestServer([]);
+    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.168.1.10:4444/v1/hub");
+    const serverIdentity = await createIdentity("node_server", "hub_server", "wss://127.0.0.1:0/v1/hub");
+    const server = await startTestServer([], serverIdentity);
     try {
       const responses = await sendWssFrames(server.url, [{ type: "list_agents" }], {
         rejectUnauthorized: false,
@@ -42,29 +54,41 @@ describe("WSS hub transport", () => {
     }
   });
 
-  it("authenticates and handles gated frames on the same WSS connection", async () => {
-    const fixture = await createClientAuthFrame();
+  it("issues a server hello, authenticates, and handles gated frames on the same WSS connection", async () => {
+    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.168.1.10:4444/v1/hub");
+    const serverIdentity = await createIdentity("node_server", "hub_server", "wss://127.0.0.1:0/v1/hub");
+    const authorizedKeys = parseAuthorizedKeys(
+      `ssh-ed25519 ${encodeOpenSshEd25519PublicKey(Buffer.from(clientIdentity.publicKeyHex, "hex"))} test@example`
+    );
     const agent = createAgent();
-    const server = await startTestServer(fixture.authorizedKeys, [agent]);
+    const server = await startTestServer(authorizedKeys, serverIdentity, [agent]);
     try {
-      const responses = await sendWssFrames(
-        server.url,
-        [fixture.frame, { type: "list_agents" }],
-        { rejectUnauthorized: false }
-      );
+      const responses = await sendAuthenticatedWssFrames(server.url, {
+        createAuthFrame: (hello) => createClientAuthFrame(clientIdentity, hello),
+        frames: [{ type: "list_agents" }],
+        rejectUnauthorized: false,
+      });
 
       expect(responses[0]).toMatchObject({
+        type: "server_hello",
+        hello: { server_node_id: serverIdentity.nodeId },
+      });
+      expect(responses[1]).toMatchObject({
         type: "auth_ok",
         peer: { nodeId: "node_client" },
       });
-      expect(responses[1]).toEqual({ type: "agents", agents: [agent] });
+      expect(responses[2]).toEqual({ type: "agents", agents: [agent] });
     } finally {
       server.stop();
     }
   });
 });
 
-async function startTestServer(authorizedKeys: ReturnType<typeof parseAuthorizedKeys>, agents: LocalAgent[] = []) {
+async function startTestServer(
+  authorizedKeys: ReturnType<typeof parseAuthorizedKeys>,
+  serverIdentity: RemoteHubClientIdentity,
+  agents: LocalAgent[] = []
+) {
   return startWssHubServer({
     host: "127.0.0.1",
     port: 0,
@@ -75,6 +99,13 @@ async function startTestServer(authorizedKeys: ReturnType<typeof parseAuthorized
           authorizedKeys,
           now: () => new Date(NOW),
           maxSkewMs: 30_000,
+          localIdentity: {
+            nodeId: serverIdentity.nodeId,
+            hubInstanceId: serverIdentity.hubInstanceId,
+            endpoint: () => serverIdentity.endpoint,
+            publicKeyHex: serverIdentity.publicKeyHex,
+            privateKeyHex: serverIdentity.privateKeyHex,
+          },
         }),
         listAgents: () => agents,
         registerLocalAgent: (registration) => ({ ...registration, status: "online", queueDepth: 0, contextUsedPct: 0, registeredAt: NOW, lastSeenAt: NOW }),
@@ -84,6 +115,17 @@ async function startTestServer(authorizedKeys: ReturnType<typeof parseAuthorized
         submitResponse: () => ({ ok: false, error: "message_not_found" }),
       }),
   });
+}
+
+async function createIdentity(nodeId: string, hubInstanceId: string, endpoint: string): Promise<RemoteHubClientIdentity> {
+  const keyPair = await keygenAsync();
+  return {
+    nodeId,
+    hubInstanceId,
+    endpoint,
+    publicKeyHex: Buffer.from(keyPair.publicKey).toString("hex"),
+    privateKeyHex: Buffer.from(keyPair.secretKey).toString("hex"),
+  };
 }
 
 async function generateSelfSignedTls(): Promise<{ tempDir: string; tls: TlsMaterial }> {
@@ -121,41 +163,6 @@ async function generateSelfSignedTls(): Promise<{ tempDir: string; tls: TlsMater
   };
 }
 
-async function createClientAuthFrame(): Promise<{
-  frame: ClientAuthFrame;
-  authorizedKeys: ReturnType<typeof parseAuthorizedKeys>;
-}> {
-  const keyPair = await keygenAsync();
-  const publicKeyHex = Buffer.from(keyPair.publicKey).toString("hex");
-  const privateKeyHex = Buffer.from(keyPair.secretKey).toString("hex");
-  const authorizedKeys = parseAuthorizedKeys(
-    `ssh-ed25519 ${encodeOpenSshEd25519PublicKey(keyPair.publicKey)} test@example`
-  );
-  const payload: HandshakePayload = {
-    protocol: "coms-lan",
-    version: 1,
-    client_node_id: "node_client",
-    server_node_id: "node_server",
-    client_instance_id: "hub_client",
-    server_instance_id: "hub_server",
-    client_endpoint: "wss://192.168.1.10:4444/v1/hub",
-    server_endpoint: "wss://127.0.0.1:4444/v1/hub",
-    client_nonce: "client-nonce",
-    server_nonce: "server-nonce",
-    timestamp: NOW,
-  };
-
-  return {
-    authorizedKeys,
-    frame: {
-      type: "client_auth",
-      payload,
-      publicKeyHex,
-      signatureHex: await signHandshakePayload(payload, privateKeyHex),
-    },
-  };
-}
-
 function createAgent(): LocalAgent {
   return {
     sessionId: "session-1",
@@ -172,6 +179,29 @@ function createAgent(): LocalAgent {
     contextUsedPct: 0,
     registeredAt: NOW,
     lastSeenAt: NOW,
+  };
+}
+
+async function createClientAuthFrame(identity: RemoteHubClientIdentity, hello: ServerHelloFrame): Promise<ClientAuthFrame> {
+  const payload: HandshakePayload = {
+    protocol: "coms-lan",
+    version: 1,
+    client_node_id: identity.nodeId,
+    server_node_id: hello.hello.server_node_id,
+    client_instance_id: identity.hubInstanceId,
+    server_instance_id: hello.hello.server_instance_id,
+    client_endpoint: identity.endpoint,
+    server_endpoint: hello.hello.server_endpoint,
+    client_nonce: "client-nonce",
+    server_nonce: hello.hello.server_nonce,
+    client_timestamp: NOW,
+    server_timestamp: hello.hello.server_timestamp,
+  };
+  return {
+    type: "client_auth",
+    payload,
+    publicKeyHex: identity.publicKeyHex,
+    signatureHex: await signHandshakePayload(payload, identity.privateKeyHex),
   };
 }
 

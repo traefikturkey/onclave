@@ -2,6 +2,21 @@ import { signAsync, verifyAsync } from "@noble/ed25519";
 import type { AuthorizedSshEd25519Key } from "./authorized-keys";
 import { canonicalJson, type CanonicalJsonValue } from "./canonical-json";
 
+export type ServerHelloPayload = {
+  protocol: "coms-lan";
+  version: 1;
+  server_node_id: string;
+  server_instance_id: string;
+  server_endpoint: string;
+  server_nonce: string;
+  server_timestamp: string;
+};
+
+export type ServerHelloFrame = {
+  type: "server_hello";
+  hello: ServerHelloPayload;
+};
+
 export type HandshakePayload = {
   protocol: "coms-lan";
   version: 1;
@@ -13,7 +28,8 @@ export type HandshakePayload = {
   server_endpoint: string;
   client_nonce: string;
   server_nonce: string;
-  timestamp: string;
+  client_timestamp: string;
+  server_timestamp: string;
 };
 
 export type HandshakeFailureReason =
@@ -35,6 +51,21 @@ export type VerifyClientHandshakeInput = {
   replayCache: ReplayCache;
   now: Date;
   maxSkewMs: number;
+  expectedHello: ServerHelloPayload;
+};
+
+export type VerifyServerHandshakeInput = {
+  payload: HandshakePayload;
+  signatureHex: string;
+  publicKeyHex: string;
+  authorizedKeys: AuthorizedSshEd25519Key[];
+  now: Date;
+  maxSkewMs: number;
+  expectedServer: {
+    nodeId: string;
+    hubInstanceId: string;
+    endpoint: string;
+  };
 };
 
 export class ReplayCache {
@@ -61,6 +92,10 @@ export async function signHandshakePayload(
 export async function verifyClientHandshake(
   input: VerifyClientHandshakeInput
 ): Promise<HandshakeVerificationResult> {
+  if (!matchesServerHello(input.payload, input.expectedHello)) {
+    return { ok: false, reason: "invalid_payload" };
+  }
+
   if (!isValidHandshakePayload(input.payload)) {
     return { ok: false, reason: "invalid_payload" };
   }
@@ -68,7 +103,11 @@ export async function verifyClientHandshake(
   const authorizedKey = findAuthorizedKey(input.publicKeyHex, input.authorizedKeys);
   if (!authorizedKey) return { ok: false, reason: "unknown_public_key" };
 
-  if (isStale(input.payload.timestamp, input.now, input.maxSkewMs)) {
+  if (isStale(input.payload.client_timestamp, input.now, input.maxSkewMs)) {
+    return { ok: false, reason: "stale_handshake" };
+  }
+
+  if (isStale(input.payload.server_timestamp, input.now, input.maxSkewMs)) {
     return { ok: false, reason: "stale_handshake" };
   }
 
@@ -84,6 +123,42 @@ export async function verifyClientHandshake(
   if (!verified) return { ok: false, reason: "invalid_signature" };
 
   input.replayCache.remember(input.payload);
+  return { ok: true, fingerprint: authorizedKey.fingerprint };
+}
+
+export async function verifyServerHandshake(
+  input: VerifyServerHandshakeInput
+): Promise<HandshakeVerificationResult> {
+  if (!isValidHandshakePayload(input.payload)) {
+    return { ok: false, reason: "invalid_payload" };
+  }
+
+  if (
+    input.payload.server_node_id !== input.expectedServer.nodeId ||
+    input.payload.server_instance_id !== input.expectedServer.hubInstanceId ||
+    input.payload.server_endpoint !== input.expectedServer.endpoint
+  ) {
+    return { ok: false, reason: "invalid_payload" };
+  }
+
+  const authorizedKey = findAuthorizedKey(input.publicKeyHex, input.authorizedKeys);
+  if (!authorizedKey) return { ok: false, reason: "unknown_public_key" };
+
+  if (isStale(input.payload.client_timestamp, input.now, input.maxSkewMs)) {
+    return { ok: false, reason: "stale_handshake" };
+  }
+
+  if (isStale(input.payload.server_timestamp, input.now, input.maxSkewMs)) {
+    return { ok: false, reason: "stale_handshake" };
+  }
+
+  const message = new TextEncoder().encode(canonicalJson(input.payload as unknown as CanonicalJsonValue));
+  const signature = safeHexToBytes(input.signatureHex);
+  if (!signature) return { ok: false, reason: "invalid_signature" };
+
+  const verified = await verifyAsync(signature, message, authorizedKey.publicKeyBytes);
+  if (!verified) return { ok: false, reason: "invalid_signature" };
+
   return { ok: true, fingerprint: authorizedKey.fingerprint };
 }
 
@@ -112,7 +187,20 @@ function isValidHandshakePayload(payload: HandshakePayload): boolean {
     nonEmpty(payload.server_endpoint) &&
     nonEmpty(payload.client_nonce) &&
     nonEmpty(payload.server_nonce) &&
-    nonEmpty(payload.timestamp)
+    nonEmpty(payload.client_timestamp) &&
+    nonEmpty(payload.server_timestamp)
+  );
+}
+
+function matchesServerHello(payload: HandshakePayload, hello: ServerHelloPayload): boolean {
+  return (
+    hello.protocol === "coms-lan" &&
+    hello.version === 1 &&
+    payload.server_node_id === hello.server_node_id &&
+    payload.server_instance_id === hello.server_instance_id &&
+    payload.server_endpoint === hello.server_endpoint &&
+    payload.server_nonce === hello.server_nonce &&
+    payload.server_timestamp === hello.server_timestamp
   );
 }
 

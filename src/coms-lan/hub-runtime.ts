@@ -27,6 +27,8 @@ export type ComsLanHubRuntimeOptions = {
   host: string;
   tls: TlsMaterial;
   authorizedKeys: AuthorizedSshEd25519Key[];
+  localPublicKeyHex: string;
+  localPrivateKeyHex: string;
   discoverySocket: DiscoveryUdpSocket;
   discoveryPort: number;
   broadcastAddress: string;
@@ -163,6 +165,18 @@ export class ComsLanHubRuntime {
     return this.discovery?.peers() ?? [];
   }
 
+  markPeerAuthInProgress(nodeId: string): void {
+    this.discovery?.markPeerAuthInProgress(nodeId);
+  }
+
+  markPeerAuthenticated(nodeId: string): void {
+    this.discovery?.markPeerAuthenticated(nodeId);
+  }
+
+  markPeerAuthFailed(nodeId: string): void {
+    this.discovery?.markPeerAuthFailed(nodeId);
+  }
+
   async listTrustedRemoteAgents(peers: DiscoveredPeer[] = this.discoveredPeers()): Promise<RemoteAgentListing[]> {
     const trusted = peers.filter((peer) => peer.trustState === "trusted");
     const listings: RemoteAgentListing[] = [];
@@ -180,6 +194,13 @@ export class ComsLanHubRuntime {
         authorizedKeys: this.options.authorizedKeys,
         now: () => new Date(this.options.now()),
         maxSkewMs: 30_000,
+        localIdentity: {
+          nodeId: this.options.nodeId,
+          hubInstanceId: this.options.hubInstanceId,
+          endpoint: () => this.wssUrl(),
+          publicKeyHex: this.options.localPublicKeyHex,
+          privateKeyHex: this.options.localPrivateKeyHex,
+        },
         audit: this.options.audit,
       }),
       listAgents: () => this.registry.list(),
@@ -214,6 +235,7 @@ export class ComsLanHubRuntime {
     }
     return createRemoteHubClient({
       identity: this.options.remoteIdentity,
+      authorizedKeys: this.options.authorizedKeys,
       remote: {
         nodeId: peer.nodeId,
         hubInstanceId: peer.hubInstanceId,

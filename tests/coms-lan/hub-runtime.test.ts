@@ -6,12 +6,12 @@ import { tmpdir } from "node:os";
 import { keygenAsync } from "@noble/ed25519";
 import { parseAuthorizedKeys } from "../../src/coms-lan/authorized-keys";
 import type { DiscoveryUdpSocket, UdpRemoteInfo } from "../../src/coms-lan/discovery";
-import { signHandshakePayload, type HandshakePayload } from "../../src/coms-lan/handshake";
+import { signHandshakePayload, type HandshakePayload, type ServerHelloFrame } from "../../src/coms-lan/handshake";
 import type { RemoteHubClient } from "../../src/coms-lan/remote-client";
 import { ComsLanHubRuntime } from "../../src/coms-lan/hub-runtime";
 import type { LocalAgent, LocalAgentRegistration } from "../../src/coms-lan/local-registry";
 import type { ClientAuthFrame } from "../../src/coms-lan/transport";
-import { sendWssFrames, type TlsMaterial } from "../../src/coms-lan/wss-transport";
+import { sendAuthenticatedWssFrames, type TlsMaterial } from "../../src/coms-lan/wss-transport";
 
 const NOW = "2026-05-21T00:00:00.000Z";
 let tempDir: string | null = null;
@@ -31,12 +31,15 @@ describe("ComsLanHubRuntime", () => {
   it("audits registration, message routing, and response submission", async () => {
     const events: Array<{ event: string; metadata: unknown }> = [];
     const delivered: unknown[] = [];
+    const serverKeys = await createKeyMaterial();
     const runtime = new ComsLanHubRuntime({
       nodeId: "node_server",
       hubInstanceId: "hub_server",
       host: "127.0.0.1",
       tls,
       authorizedKeys: [],
+      localPublicKeyHex: serverKeys.publicKeyHex,
+      localPrivateKeyHex: serverKeys.privateKeyHex,
       discoverySocket: new FakeUdpSocket(),
       discoveryPort: 48889,
       broadcastAddress: "255.255.255.255",
@@ -82,12 +85,15 @@ describe("ComsLanHubRuntime", () => {
 
   it("lists trusted remote agents through remote clients", async () => {
     const remoteAgent = createAgent();
+    const serverKeys = await createKeyMaterial();
     const runtime = new ComsLanHubRuntime({
       nodeId: "node_server",
       hubInstanceId: "hub_server",
       host: "127.0.0.1",
       tls,
       authorizedKeys: [],
+      localPublicKeyHex: serverKeys.publicKeyHex,
+      localPrivateKeyHex: serverKeys.privateKeyHex,
       discoverySocket: new FakeUdpSocket(),
       discoveryPort: 48889,
       broadcastAddress: "255.255.255.255",
@@ -129,12 +135,15 @@ describe("ComsLanHubRuntime", () => {
     const discoverySocket = new FakeUdpSocket();
     const delivered: unknown[] = [];
     const auth = await createClientAuthFrame();
+    const serverKeys = await createKeyMaterial();
     const runtime = new ComsLanHubRuntime({
       nodeId: "node_server",
       hubInstanceId: "hub_server",
       host: "0.0.0.0",
       tls,
       authorizedKeys: auth.authorizedKeys,
+      localPublicKeyHex: serverKeys.publicKeyHex,
+      localPrivateKeyHex: serverKeys.privateKeyHex,
       discoverySocket,
       discoveryPort: 48889,
       broadcastAddress: "255.255.255.255",
@@ -159,10 +168,9 @@ describe("ComsLanHubRuntime", () => {
       });
 
       const agent = runtime.registerLocalAgent(createRegistration());
-      const responses = await sendWssFrames(
-        runtime.wssUrl(),
-        [
-          auth.frame,
+      const responses = await sendAuthenticatedWssFrames(runtime.wssUrl(), {
+        createAuthFrame: (hello) => createClientAuthFrameForHello(auth, hello),
+        frames: [
           { type: "list_agents" },
           {
             type: "send_prompt",
@@ -172,12 +180,13 @@ describe("ComsLanHubRuntime", () => {
             hops: 0,
           },
         ],
-        { rejectUnauthorized: false }
-      );
+        rejectUnauthorized: false,
+      });
 
-      expect(responses[0]).toMatchObject({ type: "auth_ok" });
-      expect(responses[1]).toEqual({ type: "agents", agents: [agent] });
-      expect(responses[2]).toEqual({ type: "send_accepted", msgId: "msg-1", status: "delivered" });
+      expect(responses[0]).toMatchObject({ type: "server_hello" });
+      expect(responses[1]).toMatchObject({ type: "auth_ok" });
+      expect(responses[2]).toEqual({ type: "agents", agents: [agent] });
+      expect(responses[3]).toEqual({ type: "send_accepted", msgId: "msg-1", status: "delivered" });
       expect(delivered).toEqual([
         {
           msgId: "msg-1",
@@ -257,37 +266,52 @@ async function generateSelfSignedTls(): Promise<{ tempDir: string; tls: TlsMater
 }
 
 async function createClientAuthFrame(): Promise<{
-  frame: ClientAuthFrame;
+  publicKeyHex: string;
+  privateKeyHex: string;
   authorizedKeys: ReturnType<typeof parseAuthorizedKeys>;
 }> {
   const keyPair = await keygenAsync();
-  const publicKeyHex = Buffer.from(keyPair.publicKey).toString("hex");
-  const privateKeyHex = Buffer.from(keyPair.secretKey).toString("hex");
-  const authorizedKeys = parseAuthorizedKeys(
-    `ssh-ed25519 ${encodeOpenSshEd25519PublicKey(keyPair.publicKey)} test@example`
-  );
+  return {
+    publicKeyHex: Buffer.from(keyPair.publicKey).toString("hex"),
+    privateKeyHex: Buffer.from(keyPair.secretKey).toString("hex"),
+    authorizedKeys: parseAuthorizedKeys(
+      `ssh-ed25519 ${encodeOpenSshEd25519PublicKey(keyPair.publicKey)} test@example`
+    ),
+  };
+}
+
+async function createClientAuthFrameForHello(
+  fixture: { publicKeyHex: string; privateKeyHex: string },
+  hello: ServerHelloFrame
+): Promise<ClientAuthFrame> {
   const payload: HandshakePayload = {
     protocol: "coms-lan",
     version: 1,
     client_node_id: "node_client",
-    server_node_id: "node_server",
+    server_node_id: hello.hello.server_node_id,
     client_instance_id: "hub_client",
-    server_instance_id: "hub_server",
+    server_instance_id: hello.hello.server_instance_id,
     client_endpoint: "wss://192.168.1.10:4444/v1/hub",
-    server_endpoint: "wss://127.0.0.1:4444/v1/hub",
+    server_endpoint: hello.hello.server_endpoint,
     client_nonce: "client-nonce",
-    server_nonce: "server-nonce",
-    timestamp: NOW,
+    server_nonce: hello.hello.server_nonce,
+    client_timestamp: NOW,
+    server_timestamp: hello.hello.server_timestamp,
   };
 
   return {
-    authorizedKeys,
-    frame: {
-      type: "client_auth",
-      payload,
-      publicKeyHex,
-      signatureHex: await signHandshakePayload(payload, privateKeyHex),
-    },
+    type: "client_auth",
+    payload,
+    publicKeyHex: fixture.publicKeyHex,
+    signatureHex: await signHandshakePayload(payload, fixture.privateKeyHex),
+  };
+}
+
+async function createKeyMaterial(): Promise<{ publicKeyHex: string; privateKeyHex: string }> {
+  const keyPair = await keygenAsync();
+  return {
+    publicKeyHex: Buffer.from(keyPair.publicKey).toString("hex"),
+    privateKeyHex: Buffer.from(keyPair.secretKey).toString("hex"),
   };
 }
 

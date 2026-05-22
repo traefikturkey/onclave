@@ -8,6 +8,7 @@ import { parseAuthorizedKeys } from "../../src/coms-lan/authorized-keys";
 import type { LocalAgent } from "../../src/coms-lan/local-registry";
 import {
   createRemoteHubClient,
+  RemoteHubAuthError,
   type RemoteHubClientIdentity,
 } from "../../src/coms-lan/remote-client";
 import {
@@ -32,16 +33,20 @@ afterAll(async () => {
 });
 
 describe("RemoteHubClient", () => {
-  it("authenticates and lists remote agents", async () => {
-    const identity = await createClientIdentity();
+  it("authenticates and lists remote agents with mutual verification", async () => {
+    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.168.1.10:4444/v1/hub");
+    const serverIdentity = await createIdentity("node_server", "hub_server", "wss://127.0.0.1:0/v1/hub");
     const agent = createAgent();
-    const server = await startTestServer(identity, { agents: [agent] });
+    const server = await startTestServer(clientIdentity, serverIdentity, { agents: [agent] });
     try {
       const client = createRemoteHubClient({
-        identity,
+        identity: clientIdentity,
+        authorizedKeys: parseAuthorizedKeys(
+          `ssh-ed25519 ${encodeOpenSshEd25519PublicKey(Buffer.from(serverIdentity.publicKeyHex, "hex"))} server@example`
+        ),
         remote: {
-          nodeId: "node_server",
-          hubInstanceId: "hub_server",
+          nodeId: serverIdentity.nodeId,
+          hubInstanceId: serverIdentity.hubInstanceId,
           endpoint: server.url,
         },
         now: () => NOW,
@@ -55,10 +60,11 @@ describe("RemoteHubClient", () => {
   });
 
   it("authenticates, sends a prompt to the remote hub, and audits metadata", async () => {
-    const identity = await createClientIdentity();
+    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.168.1.10:4444/v1/hub");
+    const serverIdentity = await createIdentity("node_server", "hub_server", "wss://127.0.0.1:0/v1/hub");
     const events: unknown[] = [];
     const sent: SendPromptFrame[] = [];
-    const server = await startTestServer(identity, {
+    const server = await startTestServer(clientIdentity, serverIdentity, {
       onSendPrompt: async (frame) => {
         sent.push(frame);
         return { ok: true, msgId: frame.msgId, status: "delivered" };
@@ -66,10 +72,13 @@ describe("RemoteHubClient", () => {
     });
     try {
       const client = createRemoteHubClient({
-        identity,
+        identity: clientIdentity,
+        authorizedKeys: parseAuthorizedKeys(
+          `ssh-ed25519 ${encodeOpenSshEd25519PublicKey(Buffer.from(serverIdentity.publicKeyHex, "hex"))} server@example`
+        ),
         remote: {
-          nodeId: "node_server",
-          hubInstanceId: "hub_server",
+          nodeId: serverIdentity.nodeId,
+          hubInstanceId: serverIdentity.hubInstanceId,
           endpoint: server.url,
         },
         now: () => NOW,
@@ -98,7 +107,7 @@ describe("RemoteHubClient", () => {
       ]);
       expect(events).toEqual([
         { event: "auth_attempt", metadata: { node_id: "node_server" } },
-        { event: "auth_success", metadata: { node_id: "node_client", fingerprint: expect.any(String) } },
+        { event: "auth_success", metadata: { node_id: "node_server", fingerprint: expect.any(String) } },
         { event: "message_outbound", metadata: { msg_id: "msg-1", target_session_id: "session-1", node_id: "node_server", status: "delivered" } },
       ]);
       expect(JSON.stringify(events)).not.toContain("hello");
@@ -107,17 +116,47 @@ describe("RemoteHubClient", () => {
     }
   });
 
+  it("rejects a remote auth response signed by an unknown server key", async () => {
+    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.168.1.10:4444/v1/hub");
+    const trustedServerIdentity = await createIdentity("node_server", "hub_server", "wss://127.0.0.1:0/v1/hub");
+    const untrustedServerIdentity = await createIdentity("node_server", "hub_server", "wss://127.0.0.1:0/v1/hub");
+    const server = await startTestServer(clientIdentity, untrustedServerIdentity, { agents: [] });
+    try {
+      const client = createRemoteHubClient({
+        identity: clientIdentity,
+        authorizedKeys: parseAuthorizedKeys(
+          `ssh-ed25519 ${encodeOpenSshEd25519PublicKey(Buffer.from(trustedServerIdentity.publicKeyHex, "hex"))} server@example`
+        ),
+        remote: {
+          nodeId: untrustedServerIdentity.nodeId,
+          hubInstanceId: untrustedServerIdentity.hubInstanceId,
+          endpoint: server.url,
+        },
+        now: () => NOW,
+        rejectUnauthorized: false,
+      });
+
+      await expect(client.listAgents()).rejects.toBeInstanceOf(RemoteHubAuthError);
+    } finally {
+      server.stop();
+    }
+  });
+
   it("authenticates and gets a remote response", async () => {
-    const identity = await createClientIdentity();
-    const server = await startTestServer(identity, {
+    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.168.1.10:4444/v1/hub");
+    const serverIdentity = await createIdentity("node_server", "hub_server", "wss://127.0.0.1:0/v1/hub");
+    const server = await startTestServer(clientIdentity, serverIdentity, {
       getResponse: () => ({ status: "complete", response: "done", error: null }),
     });
     try {
       const client = createRemoteHubClient({
-        identity,
+        identity: clientIdentity,
+        authorizedKeys: parseAuthorizedKeys(
+          `ssh-ed25519 ${encodeOpenSshEd25519PublicKey(Buffer.from(serverIdentity.publicKeyHex, "hex"))} server@example`
+        ),
         remote: {
-          nodeId: "node_server",
-          hubInstanceId: "hub_server",
+          nodeId: serverIdentity.nodeId,
+          hubInstanceId: serverIdentity.hubInstanceId,
           endpoint: server.url,
         },
         now: () => NOW,
@@ -136,7 +175,8 @@ describe("RemoteHubClient", () => {
 });
 
 async function startTestServer(
-  identity: RemoteHubClientIdentity,
+  clientIdentity: RemoteHubClientIdentity,
+  serverIdentity: RemoteHubClientIdentity,
   options: {
     agents?: LocalAgent[];
     onSendPrompt?: (frame: SendPromptFrame) => Promise<{ ok: true; msgId: string; status: "delivered" } | { ok: false; error: string } | void>;
@@ -144,7 +184,7 @@ async function startTestServer(
   } = {}
 ) {
   const authorizedKeys = parseAuthorizedKeys(
-    `ssh-ed25519 ${encodeOpenSshEd25519PublicKey(Buffer.from(identity.publicKeyHex, "hex"))} client@example`
+    `ssh-ed25519 ${encodeOpenSshEd25519PublicKey(Buffer.from(clientIdentity.publicKeyHex, "hex"))} client@example`
   );
   return startWssHubServer({
     host: "127.0.0.1",
@@ -156,6 +196,13 @@ async function startTestServer(
           authorizedKeys,
           now: () => new Date(NOW),
           maxSkewMs: 30_000,
+          localIdentity: {
+            nodeId: serverIdentity.nodeId,
+            hubInstanceId: serverIdentity.hubInstanceId,
+            endpoint: () => serverIdentity.endpoint,
+            publicKeyHex: serverIdentity.publicKeyHex,
+            privateKeyHex: serverIdentity.privateKeyHex,
+          },
         }),
         listAgents: () => options.agents ?? [],
         registerLocalAgent: (registration) => ({
@@ -174,12 +221,12 @@ async function startTestServer(
   });
 }
 
-async function createClientIdentity(): Promise<RemoteHubClientIdentity> {
+async function createIdentity(nodeId: string, hubInstanceId: string, endpoint: string): Promise<RemoteHubClientIdentity> {
   const keyPair = await keygenAsync();
   return {
-    nodeId: "node_client",
-    hubInstanceId: "hub_client",
-    endpoint: "wss://192.168.1.10:4444/v1/hub",
+    nodeId,
+    hubInstanceId,
+    endpoint,
     publicKeyHex: Buffer.from(keyPair.publicKey).toString("hex"),
     privateKeyHex: Buffer.from(keyPair.secretKey).toString("hex"),
   };

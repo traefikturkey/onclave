@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { homedir } from "node:os";
+import { homedir, networkInterfaces } from "node:os";
 import { basename } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -8,10 +8,11 @@ import { bootstrapLocalHub, type BootstrapLocalHubResult } from "../src/coms-lan
 import { findStaticPeer, loadComsLanConfig } from "../src/coms-lan/config";
 import { createLocalAgentRegistration } from "../src/coms-lan/extension-helpers";
 import { loadIdentityPrivateKeyHex } from "../src/coms-lan/identity";
-import { createRemoteHubClient } from "../src/coms-lan/remote-client";
+import { createRemoteHubClient, RemoteHubAuthError } from "../src/coms-lan/remote-client";
 import type { DeliveredPrompt } from "../src/coms-lan/messages";
 import type { LocalAgentRegistration } from "../src/coms-lan/local-registry";
 import { getComsLanPaths } from "../src/coms-lan/state";
+import { buildComsLanStatus } from "../src/coms-lan/status";
 import { addAuthorizedKeyLine } from "../src/coms-lan/trust";
 import { sendWssFrames } from "../src/coms-lan/wss-transport";
 
@@ -188,20 +189,24 @@ export default function (pi: ExtensionAPI) {
     parameters: Type.Object({}),
     async execute() {
       if (!bootstrap) throw new Error("coms-lan is not initialized");
+      const status = buildComsLanStatus({
+        endpoint: bootstrap.state.endpoint,
+        started: bootstrap.started,
+        publicAuthorizedKeyLine: bootstrap.publicAuthorizedKeyLine,
+        networkInterfaces: networkInterfaces(),
+      });
       return {
         content: [
           {
             type: "text" as const,
-            text:
-              `hub: ${bootstrap.state.endpoint}\n` +
-              `started_here: ${bootstrap.started}\n` +
-              `public_key: ${bootstrap.publicAuthorizedKeyLine}`,
+            text: status.text,
           },
         ],
         details: {
           state: bootstrap.state,
           started: bootstrap.started,
           publicAuthorizedKeyLine: bootstrap.publicAuthorizedKeyLine,
+          remoteEndpoints: status.details.remoteEndpoints,
         },
       };
     },
@@ -331,11 +336,20 @@ export default function (pi: ExtensionAPI) {
       if (!bootstrap) throw new Error("coms-lan is not initialized");
       const remote = await resolveRemotePeer(paths, params);
       const client = await createRemoteClient(bootstrap, paths, remote.endpoint, remote.nodeId, remote.hubInstanceId);
-      const agents = await client.listAgents();
-      return {
-        content: [{ type: "text" as const, text: `${agents.length} remote agent(s)` }],
-        details: { agents, endpoint: remote.endpoint, node_id: remote.nodeId },
-      };
+      bootstrap.runtime?.markPeerAuthInProgress?.(remote.nodeId);
+      try {
+        const agents = await client.listAgents();
+        bootstrap.runtime?.markPeerAuthenticated?.(remote.nodeId);
+        return {
+          content: [{ type: "text" as const, text: `${agents.length} remote agent(s)` }],
+          details: { agents, endpoint: remote.endpoint, node_id: remote.nodeId },
+        };
+      } catch (error) {
+        if (error instanceof RemoteHubAuthError) {
+          bootstrap.runtime?.markPeerAuthFailed?.(remote.nodeId);
+        }
+        throw error;
+      }
     },
   });
 
@@ -356,19 +370,28 @@ export default function (pi: ExtensionAPI) {
       const msgId = `msg_${randomId()}`;
       const remote = await resolveRemotePeer(paths, params);
       const client = await createRemoteClient(bootstrap, paths, remote.endpoint, remote.nodeId, remote.hubInstanceId);
-      const response = await client.sendPrompt({
-        msgId,
-        targetSessionId: params.target_session_id,
-        prompt: params.prompt,
-        hops: 0,
-      });
-      if (response.type !== "send_accepted") {
-        throw new Error(`remote send failed: ${JSON.stringify(response)}`);
+      bootstrap.runtime?.markPeerAuthInProgress?.(remote.nodeId);
+      try {
+        const response = await client.sendPrompt({
+          msgId,
+          targetSessionId: params.target_session_id,
+          prompt: params.prompt,
+          hops: 0,
+        });
+        bootstrap.runtime?.markPeerAuthenticated?.(remote.nodeId);
+        if (response.type !== "send_accepted") {
+          throw new Error(`remote send failed: ${JSON.stringify(response)}`);
+        }
+        return {
+          content: [{ type: "text" as const, text: `coms_lan_remote_send → ${params.target_session_id}\nmsg_id ${msgId}` }],
+          details: { msg_id: msgId, target_session_id: params.target_session_id, status: response.status, endpoint: remote.endpoint },
+        };
+      } catch (error) {
+        if (error instanceof RemoteHubAuthError) {
+          bootstrap.runtime?.markPeerAuthFailed?.(remote.nodeId);
+        }
+        throw error;
       }
-      return {
-        content: [{ type: "text" as const, text: `coms_lan_remote_send → ${params.target_session_id}\nmsg_id ${msgId}` }],
-        details: { msg_id: msgId, target_session_id: params.target_session_id, status: response.status, endpoint: remote.endpoint },
-      };
     },
   });
 
@@ -387,11 +410,20 @@ export default function (pi: ExtensionAPI) {
       if (!bootstrap) throw new Error("coms-lan is not initialized");
       const remote = await resolveRemotePeer(paths, params);
       const client = await createRemoteClient(bootstrap, paths, remote.endpoint, remote.nodeId, remote.hubInstanceId);
-      const result = await client.getResponse(params.msg_id);
-      return {
-        content: [{ type: "text" as const, text: formatResponseResult(result) }],
-        details: { msg_id: params.msg_id, result, endpoint: remote.endpoint },
-      };
+      bootstrap.runtime?.markPeerAuthInProgress?.(remote.nodeId);
+      try {
+        const result = await client.getResponse(params.msg_id);
+        bootstrap.runtime?.markPeerAuthenticated?.(remote.nodeId);
+        return {
+          content: [{ type: "text" as const, text: formatResponseResult(result) }],
+          details: { msg_id: params.msg_id, result, endpoint: remote.endpoint },
+        };
+      } catch (error) {
+        if (error instanceof RemoteHubAuthError) {
+          bootstrap.runtime?.markPeerAuthFailed?.(remote.nodeId);
+        }
+        throw error;
+      }
     },
   });
 
@@ -486,6 +518,7 @@ async function createRemoteClient(
       publicKeyHex: bootstrap.identity.publicKey,
       privateKeyHex: await loadIdentityPrivateKeyHex(paths),
     },
+    authorizedKeys: bootstrap.authorizedKeys,
     remote: {
       nodeId,
       hubInstanceId,

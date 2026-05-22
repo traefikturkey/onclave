@@ -5,27 +5,30 @@ import {
   ReplayCache,
   signHandshakePayload,
   verifyClientHandshake,
+  verifyServerHandshake,
   type HandshakePayload,
+  type ServerHelloPayload,
 } from "../../src/coms-lan/handshake";
 
 const NOW = "2026-05-21T00:00:00.000Z";
 
 describe("hub challenge-response handshake", () => {
-  it("accepts a valid authorized Ed25519 signature", async () => {
+  it("accepts a valid authorized Ed25519 signature bound to a server hello", async () => {
     const fixture = await createFixture();
 
     const result = await verifyClientHandshake({
       payload: fixture.payload,
-      signatureHex: fixture.signatureHex,
-      publicKeyHex: fixture.publicKeyHex,
-      authorizedKeys: fixture.authorizedKeys,
+      signatureHex: fixture.clientSignatureHex,
+      publicKeyHex: fixture.clientPublicKeyHex,
+      authorizedKeys: fixture.clientAuthorizedKeys,
       replayCache: new ReplayCache(),
       now: new Date(NOW),
       maxSkewMs: 30_000,
+      expectedHello: fixture.serverHello,
     });
 
     if (!result.ok) throw new Error(`expected handshake success, got ${result.reason}`);
-    expect(result.fingerprint).toBe(fixture.authorizedKeys[0]?.fingerprint);
+    expect(result.fingerprint).toBe(fixture.clientAuthorizedKeys[0]?.fingerprint);
   });
 
   it("rejects unknown public keys", async () => {
@@ -33,12 +36,13 @@ describe("hub challenge-response handshake", () => {
 
     const result = await verifyClientHandshake({
       payload: fixture.payload,
-      signatureHex: fixture.signatureHex,
-      publicKeyHex: fixture.publicKeyHex,
+      signatureHex: fixture.clientSignatureHex,
+      publicKeyHex: fixture.clientPublicKeyHex,
       authorizedKeys: [],
       replayCache: new ReplayCache(),
       now: new Date(NOW),
       maxSkewMs: 30_000,
+      expectedHello: fixture.serverHello,
     });
 
     expect(result).toEqual({ ok: false, reason: "unknown_public_key" });
@@ -50,28 +54,51 @@ describe("hub challenge-response handshake", () => {
 
     const result = await verifyClientHandshake({
       payload: tampered,
-      signatureHex: fixture.signatureHex,
-      publicKeyHex: fixture.publicKeyHex,
-      authorizedKeys: fixture.authorizedKeys,
+      signatureHex: fixture.clientSignatureHex,
+      publicKeyHex: fixture.clientPublicKeyHex,
+      authorizedKeys: fixture.clientAuthorizedKeys,
       replayCache: new ReplayCache(),
       now: new Date(NOW),
       maxSkewMs: 30_000,
+      expectedHello: fixture.serverHello,
     });
 
     expect(result).toEqual({ ok: false, reason: "invalid_signature" });
   });
 
-  it("rejects stale handshakes", async () => {
-    const fixture = await createFixture({ timestamp: "2026-05-20T23:00:00.000Z" });
+  it("rejects payloads that do not match the issued server hello", async () => {
+    const fixture = await createFixture();
+    const mismatched = { ...fixture.payload, server_nonce: "other-server-nonce" };
 
     const result = await verifyClientHandshake({
-      payload: fixture.payload,
-      signatureHex: fixture.signatureHex,
-      publicKeyHex: fixture.publicKeyHex,
-      authorizedKeys: fixture.authorizedKeys,
+      payload: mismatched,
+      signatureHex: fixture.clientSignatureHex,
+      publicKeyHex: fixture.clientPublicKeyHex,
+      authorizedKeys: fixture.clientAuthorizedKeys,
       replayCache: new ReplayCache(),
       now: new Date(NOW),
       maxSkewMs: 30_000,
+      expectedHello: fixture.serverHello,
+    });
+
+    expect(result).toEqual({ ok: false, reason: "invalid_payload" });
+  });
+
+  it("rejects stale handshakes", async () => {
+    const fixture = await createFixture({
+      serverHello: { server_timestamp: "2026-05-20T23:00:00.000Z" },
+      payload: { client_timestamp: "2026-05-20T23:00:00.000Z", server_timestamp: "2026-05-20T23:00:00.000Z" },
+    });
+
+    const result = await verifyClientHandshake({
+      payload: fixture.payload,
+      signatureHex: fixture.clientSignatureHex,
+      publicKeyHex: fixture.clientPublicKeyHex,
+      authorizedKeys: fixture.clientAuthorizedKeys,
+      replayCache: new ReplayCache(),
+      now: new Date(NOW),
+      maxSkewMs: 30_000,
+      expectedHello: fixture.serverHello,
     });
 
     expect(result).toEqual({ ok: false, reason: "stale_handshake" });
@@ -83,52 +110,145 @@ describe("hub challenge-response handshake", () => {
 
     const first = await verifyClientHandshake({
       payload: fixture.payload,
-      signatureHex: fixture.signatureHex,
-      publicKeyHex: fixture.publicKeyHex,
-      authorizedKeys: fixture.authorizedKeys,
+      signatureHex: fixture.clientSignatureHex,
+      publicKeyHex: fixture.clientPublicKeyHex,
+      authorizedKeys: fixture.clientAuthorizedKeys,
       replayCache,
       now: new Date(NOW),
       maxSkewMs: 30_000,
+      expectedHello: fixture.serverHello,
     });
     const second = await verifyClientHandshake({
       payload: fixture.payload,
-      signatureHex: fixture.signatureHex,
-      publicKeyHex: fixture.publicKeyHex,
-      authorizedKeys: fixture.authorizedKeys,
+      signatureHex: fixture.clientSignatureHex,
+      publicKeyHex: fixture.clientPublicKeyHex,
+      authorizedKeys: fixture.clientAuthorizedKeys,
       replayCache,
       now: new Date(NOW),
       maxSkewMs: 30_000,
+      expectedHello: fixture.serverHello,
     });
 
     expect(first.ok).toBe(true);
     expect(second).toEqual({ ok: false, reason: "replayed_handshake" });
   });
+
+  it("accepts a valid authorized server signature over the handshake payload", async () => {
+    const fixture = await createFixture();
+
+    const result = await verifyServerHandshake({
+      payload: fixture.payload,
+      signatureHex: fixture.serverSignatureHex,
+      publicKeyHex: fixture.serverPublicKeyHex,
+      authorizedKeys: fixture.serverAuthorizedKeys,
+      now: new Date(NOW),
+      maxSkewMs: 30_000,
+      expectedServer: {
+        nodeId: fixture.serverHello.server_node_id,
+        hubInstanceId: fixture.serverHello.server_instance_id,
+        endpoint: fixture.serverHello.server_endpoint,
+      },
+    });
+
+    if (!result.ok) throw new Error(`expected server verification success, got ${result.reason}`);
+    expect(result.fingerprint).toBe(fixture.serverAuthorizedKeys[0]?.fingerprint);
+  });
+
+  it("rejects unknown server keys", async () => {
+    const fixture = await createFixture();
+
+    const result = await verifyServerHandshake({
+      payload: fixture.payload,
+      signatureHex: fixture.serverSignatureHex,
+      publicKeyHex: fixture.serverPublicKeyHex,
+      authorizedKeys: [],
+      now: new Date(NOW),
+      maxSkewMs: 30_000,
+      expectedServer: {
+        nodeId: fixture.serverHello.server_node_id,
+        hubInstanceId: fixture.serverHello.server_instance_id,
+        endpoint: fixture.serverHello.server_endpoint,
+      },
+    });
+
+    expect(result).toEqual({ ok: false, reason: "unknown_public_key" });
+  });
+
+  it("rejects tampered server auth responses", async () => {
+    const fixture = await createFixture();
+
+    const result = await verifyServerHandshake({
+      payload: { ...fixture.payload, server_endpoint: "wss://evil.example/v1/hub" },
+      signatureHex: fixture.serverSignatureHex,
+      publicKeyHex: fixture.serverPublicKeyHex,
+      authorizedKeys: fixture.serverAuthorizedKeys,
+      now: new Date(NOW),
+      maxSkewMs: 30_000,
+      expectedServer: {
+        nodeId: fixture.serverHello.server_node_id,
+        hubInstanceId: fixture.serverHello.server_instance_id,
+        endpoint: fixture.serverHello.server_endpoint,
+      },
+    });
+
+    expect(result).toEqual({ ok: false, reason: "invalid_payload" });
+  });
 });
 
-async function createFixture(overrides: Partial<HandshakePayload> = {}) {
-  const keyPair = await keygenAsync();
-  const publicKeyHex = Buffer.from(keyPair.publicKey).toString("hex");
-  const privateKeyHex = Buffer.from(keyPair.secretKey).toString("hex");
-  const authorizedKeys = parseAuthorizedKeys(
-    `ssh-ed25519 ${encodeOpenSshEd25519PublicKey(keyPair.publicKey)} test@example`
+async function createFixture(overrides: {
+  serverHello?: Partial<ServerHelloPayload>;
+  payload?: Partial<HandshakePayload>;
+} = {}) {
+  const clientKeyPair = await keygenAsync();
+  const serverKeyPair = await keygenAsync();
+  const clientPublicKeyHex = Buffer.from(clientKeyPair.publicKey).toString("hex");
+  const clientPrivateKeyHex = Buffer.from(clientKeyPair.secretKey).toString("hex");
+  const serverPublicKeyHex = Buffer.from(serverKeyPair.publicKey).toString("hex");
+  const serverPrivateKeyHex = Buffer.from(serverKeyPair.secretKey).toString("hex");
+  const clientAuthorizedKeys = parseAuthorizedKeys(
+    `ssh-ed25519 ${encodeOpenSshEd25519PublicKey(clientKeyPair.publicKey)} client@example`
   );
+  const serverAuthorizedKeys = parseAuthorizedKeys(
+    `ssh-ed25519 ${encodeOpenSshEd25519PublicKey(serverKeyPair.publicKey)} server@example`
+  );
+  const serverHello: ServerHelloPayload = {
+    protocol: "coms-lan",
+    version: 1,
+    server_node_id: "node_server",
+    server_instance_id: "hub_server",
+    server_endpoint: "wss://192.168.1.20:4444/v1/hub",
+    server_nonce: "server-nonce",
+    server_timestamp: NOW,
+    ...overrides.serverHello,
+  };
   const payload: HandshakePayload = {
     protocol: "coms-lan",
     version: 1,
     client_node_id: "node_client",
-    server_node_id: "node_server",
+    server_node_id: serverHello.server_node_id,
     client_instance_id: "hub_client",
-    server_instance_id: "hub_server",
+    server_instance_id: serverHello.server_instance_id,
     client_endpoint: "wss://192.168.1.10:4444/v1/hub",
-    server_endpoint: "wss://192.168.1.20:4444/v1/hub",
+    server_endpoint: serverHello.server_endpoint,
     client_nonce: "client-nonce",
-    server_nonce: "server-nonce",
-    timestamp: NOW,
-    ...overrides,
+    server_nonce: serverHello.server_nonce,
+    client_timestamp: NOW,
+    server_timestamp: serverHello.server_timestamp,
+    ...overrides.payload,
   };
-  const signatureHex = await signHandshakePayload(payload, privateKeyHex);
+  const clientSignatureHex = await signHandshakePayload(payload, clientPrivateKeyHex);
+  const serverSignatureHex = await signHandshakePayload(payload, serverPrivateKeyHex);
 
-  return { payload, signatureHex, publicKeyHex, authorizedKeys };
+  return {
+    serverHello,
+    payload,
+    clientSignatureHex,
+    serverSignatureHex,
+    clientPublicKeyHex,
+    serverPublicKeyHex,
+    clientAuthorizedKeys,
+    serverAuthorizedKeys,
+  };
 }
 
 function encodeOpenSshEd25519PublicKey(publicKey: Uint8Array): string {

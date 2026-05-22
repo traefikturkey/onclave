@@ -140,6 +140,8 @@ describe("coms-lan acceptance coverage", () => {
       host: "127.0.0.1",
       tls,
       authorizedKeys: authorizedKeysFor(clientIdentity, "client@example"),
+      localPublicKeyHex: serverIdentity.publicKeyHex,
+      localPrivateKeyHex: serverIdentity.privateKeyHex,
       discoverySocket: new FakeUdpSocket(),
       discoveryPort: DISCOVERY_PORT + 1,
       broadcastAddress: "255.255.255.255",
@@ -157,6 +159,7 @@ describe("coms-lan acceptance coverage", () => {
       const agent = server.registerLocalAgent(createRegistration("session-remote"));
       const client = createRemoteHubClient({
         identity: { ...clientIdentity, endpoint: "wss://127.0.0.1:0/v1/hub" },
+        authorizedKeys: authorizedKeysFor(serverIdentity, "server@example"),
         remote: {
           nodeId: serverIdentity.nodeId,
           hubInstanceId: serverIdentity.hubInstanceId,

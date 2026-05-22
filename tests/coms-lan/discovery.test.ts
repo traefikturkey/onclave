@@ -104,4 +104,41 @@ describe("DiscoveryPeerCache", () => {
       },
     ]);
   });
+
+  it("tracks auth state transitions for discovered peers", () => {
+    const cache = new DiscoveryPeerCache("node_self");
+    cache.upsertFromPacket(
+      {
+        m: "PI-COMS-LAN",
+        v: 1,
+        node_id: "node_peer",
+        hub_instance_id: "hub_peer",
+        wss_port: 4444,
+        started_at: "2026-05-21T00:00:00.000Z",
+      },
+      "192.168.1.10",
+      "2026-05-21T00:00:01.000Z"
+    );
+
+    cache.markAuthInProgress("node_peer");
+    expect(cache.list()[0]).toMatchObject({
+      nodeId: "node_peer",
+      trustState: "untrusted",
+      authState: "in_progress",
+    });
+
+    cache.markAuthenticated("node_peer");
+    expect(cache.list()[0]).toMatchObject({
+      nodeId: "node_peer",
+      trustState: "trusted",
+      authState: "authenticated",
+    });
+
+    cache.markAuthFailed("node_peer");
+    expect(cache.list()[0]).toMatchObject({
+      nodeId: "node_peer",
+      trustState: "auth_failed",
+      authState: "failed",
+    });
+  });
 });

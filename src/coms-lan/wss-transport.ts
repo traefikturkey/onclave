@@ -1,7 +1,8 @@
 import { createServer, type Server as HttpsServer } from "node:https";
 import type { AddressInfo } from "node:net";
 import { WebSocket, WebSocketServer } from "ws";
-import type { HubFrame, HubFrameProcessor, HubFrameResponse } from "./transport";
+import type { ServerHelloFrame } from "./handshake";
+import type { ClientAuthFrame, HubFrame, HubFrameProcessor, HubFrameResponse } from "./transport";
 
 export type TlsMaterial = {
   cert: string;
@@ -24,6 +25,11 @@ export type WssHubServer = {
 export type WssClientOptions = {
   rejectUnauthorized?: boolean;
   timeoutMs?: number;
+};
+
+export type AuthenticatedWssClientOptions = WssClientOptions & {
+  createAuthFrame: (hello: ServerHelloFrame) => Promise<ClientAuthFrame>;
+  frames: HubFrame[];
 };
 
 export async function startWssHubServer(options: WssHubServerOptions): Promise<WssHubServer> {
@@ -114,6 +120,93 @@ export async function sendWssFrames(
   });
 }
 
+export async function sendAuthenticatedWssFrames(
+  url: string,
+  options: AuthenticatedWssClientOptions
+): Promise<HubFrameResponse[]> {
+  const timeoutMs = options.timeoutMs ?? 5_000;
+
+  return new Promise((resolve, reject) => {
+    const responses: HubFrameResponse[] = [];
+    let nextFrameIndex = 0;
+    let authFrameSent = false;
+    const rejectUnauthorized = options.rejectUnauthorized !== false;
+    const websocket = new WebSocket(url, {
+      rejectUnauthorized,
+      tls: { rejectUnauthorized },
+    } as WebSocket.ClientOptions & { tls: { rejectUnauthorized: boolean } });
+    const timeout = setTimeout(() => {
+      websocket.close();
+      reject(new Error("timed out waiting for WSS frame response"));
+    }, timeoutMs);
+
+    const cleanup = () => clearTimeout(timeout);
+
+    websocket.on("open", () => {
+      websocket.send(JSON.stringify({ type: "auth_hello" }));
+    });
+
+    websocket.on("message", async (data) => {
+      try {
+        const response = JSON.parse(data.toString("utf8")) as HubFrameResponse;
+        responses.push(response);
+        if (!authFrameSent) {
+          if (response.type !== "server_hello") {
+            cleanup();
+            websocket.close();
+            reject(new Error(`expected server_hello, got ${JSON.stringify(response)}`));
+            return;
+          }
+          const authFrame = await options.createAuthFrame(response);
+          websocket.send(JSON.stringify(authFrame));
+          authFrameSent = true;
+          return;
+        }
+        if (responses.length === 2) {
+          if (response.type !== "auth_ok" && response.type !== "auth_failed") {
+            cleanup();
+            websocket.close();
+            reject(new Error(`expected auth response, got ${JSON.stringify(response)}`));
+            return;
+          }
+          if (response.type === "auth_failed") {
+            cleanup();
+            websocket.close();
+            resolve(responses);
+            return;
+          }
+          if (options.frames.length === 0) {
+            cleanup();
+            websocket.close();
+            resolve(responses);
+            return;
+          }
+          sendNextFrame(websocket, options.frames, nextFrameIndex);
+          nextFrameIndex += 1;
+          return;
+        }
+        if (nextFrameIndex >= options.frames.length) {
+          cleanup();
+          websocket.close();
+          resolve(responses);
+          return;
+        }
+        sendNextFrame(websocket, options.frames, nextFrameIndex);
+        nextFrameIndex += 1;
+      } catch (error) {
+        cleanup();
+        websocket.close();
+        reject(error);
+      }
+    });
+
+    websocket.on("error", (error) => {
+      cleanup();
+      reject(new Error(`WSS frame exchange failed: ${error.message}`));
+    });
+  });
+}
+
 async function handleWebSocketMessage(
   websocket: WebSocket,
   processor: HubFrameProcessor,
@@ -174,3 +267,4 @@ function endpointHost(host: string): string {
   if (host === "0.0.0.0" || host === "::") return "127.0.0.1";
   return host;
 }
+

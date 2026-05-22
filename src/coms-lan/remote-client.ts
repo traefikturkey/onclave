@@ -1,6 +1,12 @@
 import { randomBytes } from "node:crypto";
 import type { AuditEventName, AuditMetadata } from "./audit";
-import { signHandshakePayload, type HandshakePayload } from "./handshake";
+import type { AuthorizedSshEd25519Key } from "./authorized-keys";
+import {
+  signHandshakePayload,
+  verifyServerHandshake,
+  type HandshakePayload,
+  type ServerHelloFrame,
+} from "./handshake";
 import type { LocalAgent } from "./local-registry";
 import type {
   ClientAuthFrame,
@@ -9,7 +15,7 @@ import type {
   MessageResponseResult,
   SendPromptFrame,
 } from "./transport";
-import { sendWssFrames } from "./wss-transport";
+import { sendAuthenticatedWssFrames } from "./wss-transport";
 
 export type RemoteHubClientIdentity = {
   nodeId: string;
@@ -27,6 +33,7 @@ export type RemoteHubDescriptor = {
 
 export type RemoteHubClientOptions = {
   identity: RemoteHubClientIdentity;
+  authorizedKeys: AuthorizedSshEd25519Key[];
   remote: RemoteHubDescriptor;
   now: () => string;
   rejectUnauthorized?: boolean;
@@ -34,6 +41,16 @@ export type RemoteHubClientOptions = {
 };
 
 export type RemoteSendPromptInput = Omit<SendPromptFrame, "type">;
+
+export class RemoteHubAuthError extends Error {
+  constructor(
+    message: string,
+    readonly reason: string
+  ) {
+    super(message);
+    this.name = "RemoteHubAuthError";
+  }
+}
 
 export function createRemoteHubClient(options: RemoteHubClientOptions): RemoteHubClient {
   return new RemoteHubClient(options);
@@ -81,41 +98,71 @@ export class RemoteHubClient {
   }
 
   private async sendAuthenticatedFrames(frames: HubFrame[]): Promise<HubFrameResponse[]> {
-    const auth = await this.createAuthFrame();
     void this.options.audit?.("auth_attempt", { node_id: this.options.remote.nodeId });
-    const responses = await sendWssFrames(this.options.remote.endpoint, [auth, ...frames], {
+    let authPayload: HandshakePayload | null = null;
+    const responses = await sendAuthenticatedWssFrames(this.options.remote.endpoint, {
+      createAuthFrame: async (hello) => {
+        const frame = await this.createAuthFrame(hello);
+        authPayload = frame.payload;
+        return frame;
+      },
+      frames,
       rejectUnauthorized: this.options.rejectUnauthorized !== false,
       timeoutMs: 5_000,
     });
-    const authResponse = responses[0];
-    if (!authResponse || authResponse.type !== "auth_ok") {
+
+    const hello = responses[0];
+    const authResponse = responses[1];
+    if (!hello || hello.type !== "server_hello") {
       void this.options.audit?.("auth_failure", {
         node_id: this.options.remote.nodeId,
-        reason: authResponse?.type === "auth_failed" ? authResponse.reason : "unexpected_response",
+        reason: "missing_server_hello",
       });
-      throw new Error(`remote authentication failed: ${JSON.stringify(authResponse ?? null)}`);
+      throw new RemoteHubAuthError(`remote authentication failed: ${JSON.stringify(hello ?? null)}`, "missing_server_hello");
     }
-    void this.options.audit?.("auth_success", {
-      node_id: authResponse.peer.nodeId,
-      fingerprint: authResponse.peer.fingerprint,
+    if (!authResponse || authResponse.type !== "auth_ok") {
+      const reason = authResponse?.type === "auth_failed" ? authResponse.reason : "unexpected_response";
+      void this.options.audit?.("auth_failure", {
+        node_id: this.options.remote.nodeId,
+        reason,
+      });
+      throw new RemoteHubAuthError(`remote authentication failed: ${JSON.stringify(authResponse ?? null)}`, reason);
+    }
+
+    if (!authPayload) {
+      throw new RemoteHubAuthError("remote authentication failed", "missing_auth_payload");
+    }
+
+    const verification = await verifyServerHandshake({
+      payload: authPayload,
+      signatureHex: authResponse.signatureHex,
+      publicKeyHex: authResponse.publicKeyHex,
+      authorizedKeys: this.options.authorizedKeys,
+      now: new Date(this.options.now()),
+      maxSkewMs: 30_000,
+      expectedServer: {
+        nodeId: this.options.remote.nodeId,
+        hubInstanceId: this.options.remote.hubInstanceId,
+        endpoint: hello.hello.server_endpoint,
+      },
     });
-    return responses.slice(1);
+    if (!verification.ok) {
+      void this.options.audit?.("auth_failure", {
+        node_id: this.options.remote.nodeId,
+        reason: verification.reason,
+      });
+      throw new RemoteHubAuthError("remote server verification failed", verification.reason);
+    }
+
+    void this.options.audit?.("auth_success", {
+      node_id: this.options.remote.nodeId,
+      fingerprint: verification.fingerprint,
+    });
+    return responses.slice(2);
   }
 
-  private async createAuthFrame(): Promise<ClientAuthFrame> {
-    const payload: HandshakePayload = {
-      protocol: "coms-lan",
-      version: 1,
-      client_node_id: this.options.identity.nodeId,
-      server_node_id: this.options.remote.nodeId,
-      client_instance_id: this.options.identity.hubInstanceId,
-      server_instance_id: this.options.remote.hubInstanceId,
-      client_endpoint: this.options.identity.endpoint,
-      server_endpoint: this.options.remote.endpoint,
-      client_nonce: randomNonce(),
-      server_nonce: randomNonce(),
-      timestamp: this.options.now(),
-    };
+  private async createAuthFrame(hello: ServerHelloFrame): Promise<ClientAuthFrame> {
+    const payload = await this.createHandshakePayload(hello);
     return {
       type: "client_auth",
       payload,
@@ -123,8 +170,25 @@ export class RemoteHubClient {
       signatureHex: await signHandshakePayload(payload, this.options.identity.privateKeyHex),
     };
   }
+
+  private async createHandshakePayload(hello: ServerHelloFrame): Promise<HandshakePayload> {
+    return {
+      protocol: "coms-lan",
+      version: 1,
+      client_node_id: this.options.identity.nodeId,
+      server_node_id: hello.hello.server_node_id,
+      client_instance_id: this.options.identity.hubInstanceId,
+      server_instance_id: hello.hello.server_instance_id,
+      client_endpoint: this.options.identity.endpoint,
+      server_endpoint: hello.hello.server_endpoint,
+      client_nonce: randomNonce(),
+      server_nonce: hello.hello.server_nonce,
+      client_timestamp: this.options.now(),
+      server_timestamp: hello.hello.server_timestamp,
+    };
+  }
 }
 
-function randomNonce(): string {
+export function randomNonce(): string {
   return randomBytes(16).toString("hex");
 }
