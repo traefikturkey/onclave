@@ -96,7 +96,7 @@ export function renderAcceptanceHostReport(state: LocalAcceptanceState, options:
     lines.push("```text");
     lines.push(`onclave_remote_agents peer_name=\"${peerName}\"`);
     lines.push(`onclave_remote_send peer_name=\"${peerName}\" target_session_id=\"REMOTE_SESSION_ID\" prompt=\"Reply with: onclave acceptance ok\"`);
-    lines.push(`onclave_remote_get peer_name=\"${peerName}\" msg_id=\"MSG_ID\"`);
+    lines.push("# Wait for the inbound async reply; do not poll onclave_remote_get for this check.");
     lines.push("```");
   } else {
     lines.push("## Step D: after you know the other host endpoint, rerun with peer details");

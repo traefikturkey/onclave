@@ -1,8 +1,9 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { copyFile, readFile, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
+import { basename, dirname, join } from "node:path";
 import { keygenAsync } from "@noble/ed25519";
 import type { OnclavePaths } from "./state";
-import { atomicWriteJson, ensureOnclaveRoot } from "./state";
+import { atomicWriteJson, ensureOnclaveRoot, getOnclavePaths } from "./state";
 
 export type OnclaveIdentity = {
   version: 1;
@@ -19,6 +20,9 @@ export async function loadOrCreateIdentity(paths: OnclavePaths): Promise<Onclave
 
   const existing = await readIdentity(paths);
   if (existing) return existing;
+
+  const migrated = await migrateLegacyIdentity(paths);
+  if (migrated) return migrated;
 
   const keyPair = await keygenAsync();
   const identity: OnclaveIdentity = {
@@ -47,6 +51,40 @@ async function readIdentity(paths: OnclavePaths): Promise<OnclaveIdentity | null
     const parsed = JSON.parse(await readFile(paths.identity, "utf8")) as unknown;
     if (!isIdentity(parsed)) return null;
     return parsed;
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function migrateLegacyIdentity(paths: OnclavePaths): Promise<OnclaveIdentity | null> {
+  const legacyPaths = getLegacyPaths(paths);
+  if (!legacyPaths) return null;
+
+  const legacyIdentity = await readIdentity(legacyPaths);
+  if (!legacyIdentity) return null;
+
+  const legacyPrivateKeyHex = await readPrivateKeyHex(legacyPaths.privateKey);
+  if (!legacyPrivateKeyHex) return null;
+
+  await copyFile(legacyPaths.privateKey, paths.privateKey);
+  const migrated: OnclaveIdentity = {
+    ...legacyIdentity,
+    privateKeyPath: paths.privateKey,
+  };
+  await atomicWriteJson(paths.identity, migrated, 0o600);
+  return migrated;
+}
+
+function getLegacyPaths(paths: OnclavePaths): OnclavePaths | null {
+  if (basename(paths.root) !== "onclave") return null;
+  return getOnclavePaths(join(dirname(paths.root), "coms-lan"));
+}
+
+async function readPrivateKeyHex(path: string): Promise<string | null> {
+  try {
+    const privateKeyHex = (await readFile(path, "utf8")).trim().toLowerCase();
+    return /^[a-f0-9]{64}$/i.test(privateKeyHex) ? privateKeyHex : null;
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") return null;
     throw error;

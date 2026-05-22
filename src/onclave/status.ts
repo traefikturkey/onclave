@@ -61,9 +61,7 @@ export function buildOnclavePeers(input: {
 }): {
   text: string;
 } {
-  const lines = [
-    `discovered_peers: ${input.discoveredPeers.length}`,
-  ];
+  const lines = [`discovered_peers: ${input.discoveredPeers.length}`];
   for (const peer of input.discoveredPeers) {
     lines.push(
       [
@@ -86,7 +84,9 @@ export function buildOnclavePeers(input: {
         `node_id=${peer.nodeId}`,
         `hub_instance_id=${peer.hubInstanceId}`,
         `endpoint=${peer.endpoint}`,
-      ].filter(Boolean).join(" ")
+      ]
+        .filter(Boolean)
+        .join(" ")
     );
   }
   return { text: lines.join("\n") };
@@ -114,7 +114,7 @@ export function buildOnclaveAgentList(input: {
   return { text: lines.join("\n") };
 }
 
-function deriveRemoteEndpoints(
+export function deriveRemoteEndpoints(
   endpoint: string,
   interfaces: Record<string, NetworkInterfaceInfo[] | undefined>
 ): string[] {
@@ -123,14 +123,76 @@ function deriveRemoteEndpoints(
   if (!port) return [];
 
   const remoteEndpoints = new Set<string>();
-  for (const entries of Object.values(interfaces)) {
+  for (const [interfaceName, entries] of Object.entries(interfaces)) {
+    if (isLikelyVirtualInterface(interfaceName)) continue;
     for (const entry of entries ?? []) {
-      if (!entry || entry.internal || !entry.address) continue;
-      const family = typeof entry.family === "string" ? entry.family : entry.family === 6 ? "IPv6" : "IPv4";
-      if (family !== "IPv4" && family !== "IPv6") continue;
-      const host = family === "IPv6" ? `[${entry.address}]` : entry.address;
-      remoteEndpoints.add(`wss://${host}:${port}/v1/hub`);
+      const candidate = createRemoteEndpointCandidate(entry, port);
+      if (!candidate) continue;
+      remoteEndpoints.add(candidate.endpoint);
     }
   }
-  return [...remoteEndpoints].sort();
+  return [...remoteEndpoints].sort(compareRemoteEndpoints);
+}
+
+export function choosePreferredRemoteEndpoint(
+  endpoint: string,
+  interfaces: Record<string, NetworkInterfaceInfo[] | undefined>
+): string {
+  return deriveRemoteEndpoints(endpoint, interfaces)[0] ?? endpoint.replace(/^https:/, "wss:").replace(/\/$/, "") + "/v1/hub";
+}
+
+function createRemoteEndpointCandidate(
+  entry: NetworkInterfaceInfo | undefined,
+  port: string
+): { endpoint: string } | null {
+  if (!entry || entry.internal || !entry.address) return null;
+
+  const family = normalizeFamily(entry.family);
+  if (!family) return null;
+  if (family === "IPv4" && isExcludedIpv4Address(entry.address)) return null;
+  if (family === "IPv6" && isExcludedIpv6Address(entry.address)) return null;
+
+  const host = family === "IPv6" ? `[${entry.address}]` : entry.address;
+  return { endpoint: `wss://${host}:${port}/v1/hub` };
+}
+
+function compareRemoteEndpoints(left: string, right: string): number {
+  const leftWeight = remoteEndpointSortWeight(left);
+  const rightWeight = remoteEndpointSortWeight(right);
+  return leftWeight - rightWeight || left.localeCompare(right);
+}
+
+function remoteEndpointSortWeight(endpoint: string): number {
+  try {
+    const url = new URL(endpoint);
+    const host = url.hostname.replace(/^\[/, "").replace(/\]$/, "");
+    if (isRfc1918Ipv4(host)) return 0;
+    if (/^[0-9.]+$/.test(host)) return 1;
+    if (host.includes(":")) return 2;
+  } catch {
+    return 99;
+  }
+  return 50;
+}
+
+function normalizeFamily(family: string | number): "IPv4" | "IPv6" | null {
+  const normalized = typeof family === "string" ? family : family === 6 ? "IPv6" : family === 4 ? "IPv4" : null;
+  return normalized === "IPv4" || normalized === "IPv6" ? normalized : null;
+}
+
+function isExcludedIpv4Address(address: string): boolean {
+  return address === "0.0.0.0" || address.startsWith("127.");
+}
+
+function isExcludedIpv6Address(address: string): boolean {
+  const normalized = address.toLowerCase();
+  return normalized === "::" || normalized === "::1" || normalized.startsWith("fe80:");
+}
+
+function isRfc1918Ipv4(address: string): boolean {
+  return /^10\./.test(address) || /^192\.168\./.test(address) || /^172\.(1[6-9]|2\d|3[0-1])\./.test(address);
+}
+
+function isLikelyVirtualInterface(interfaceName: string): boolean {
+  return /^(lo|loopback|docker\d*|br-|veth|virbr|cni|podman|vboxnet|vmnet|zt|tailscale|tun|tap)/i.test(interfaceName);
 }

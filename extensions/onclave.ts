@@ -11,9 +11,17 @@ import { loadIdentityPrivateKeyHex } from "../src/onclave/identity";
 import { createRemoteHubClient, RemoteHubAuthError } from "../src/onclave/remote-client";
 import type { DeliveredPrompt } from "../src/onclave/messages";
 import type { LocalAgentRegistration } from "../src/onclave/local-registry";
-import type { PromptOriginMetadata } from "../src/onclave/prompt-metadata";
+import {
+  assertAsyncReplyablePrompt,
+  type PromptOriginMetadata,
+} from "../src/onclave/prompt-metadata";
 import { getOnclavePaths } from "../src/onclave/state";
-import { buildOnclaveAgentList, buildOnclavePeers, buildOnclaveStatus } from "../src/onclave/status";
+import {
+  buildOnclaveAgentList,
+  buildOnclavePeers,
+  buildOnclaveStatus,
+  choosePreferredRemoteEndpoint,
+} from "../src/onclave/status";
 import { addAuthorizedKeyLine } from "../src/onclave/trust";
 import { sendWssFrames } from "../src/onclave/wss-transport";
 
@@ -499,13 +507,16 @@ export default function (pi: ExtensionAPI) {
     async execute(_callId, params) {
       if (!bootstrap || !localSessionId || !localRegistration) throw new Error("onclave is not initialized");
       const inbound = resolveInboundPromptForReply(inboundPrompts, params.msg_id);
-      if (!inbound.origin) {
-        throw new Error("selected inbound message does not include reply routing metadata");
-      }
+      assertAsyncReplyablePrompt({
+        msgId: inbound.msgId,
+        replyMode: inbound.replyMode,
+        origin: inbound.origin,
+      });
+      const origin = inbound.origin as NonNullable<typeof inbound.origin>;
       const remote = {
-        endpoint: inbound.origin.endpoint,
-        nodeId: inbound.origin.nodeId,
-        hubInstanceId: inbound.origin.hubInstanceId,
+        endpoint: origin.endpoint,
+        nodeId: origin.nodeId,
+        hubInstanceId: origin.hubInstanceId,
       };
       const client = await createRemoteClient(bootstrap, paths, remote.endpoint, remote.nodeId, remote.hubInstanceId);
       const msgId = `msg_${randomId()}`;
@@ -514,7 +525,7 @@ export default function (pi: ExtensionAPI) {
       try {
         const response = await client.sendPrompt({
           msgId,
-          targetSessionId: inbound.origin.sessionId,
+          targetSessionId: origin.sessionId,
           prompt: formatAsyncReplyPrompt(inbound, status, params.response),
           hops: 0,
           replyMode: "async_message",
@@ -522,7 +533,7 @@ export default function (pi: ExtensionAPI) {
             bootstrap,
             localSessionId,
             localRegistration,
-            correlationId: inbound.origin.correlationId,
+            correlationId: origin.correlationId,
             inReplyToMsgId: inbound.msgId,
           }),
         });
@@ -537,20 +548,20 @@ export default function (pi: ExtensionAPI) {
             {
               type: "text" as const,
               text:
-                `onclave_reply → ${inbound.origin.sessionId}\n` +
+                `onclave_reply → ${origin.sessionId}\n` +
                 `msg_id ${msgId}\n` +
                 `in_reply_to ${inbound.msgId}\n` +
-                `correlation_id ${inbound.origin.correlationId}\n` +
+                `correlation_id ${origin.correlationId}\n` +
                 `status ${status}`,
             },
           ],
           details: {
             msg_id: msgId,
             in_reply_to: inbound.msgId,
-            correlation_id: inbound.origin.correlationId,
+            correlation_id: origin.correlationId,
             status,
             endpoint: remote.endpoint,
-            target_session_id: inbound.origin.sessionId,
+            target_session_id: origin.sessionId,
           },
         };
       } catch (error) {
@@ -616,6 +627,7 @@ function formatInboundPromptMessage(prompt: DeliveredPrompt): string {
     lines.push(`[msg_id ${prompt.msgId}; use onclave_reply when you are ready to respond.]`);
   } else if (prompt.replyMode !== "async_message") {
     lines.push(`[msg_id ${prompt.msgId}; reply with a normal assistant response.]`);
+    lines.push("[do not use onclave_reply for this message.]");
   }
   lines.push("", prompt.prompt);
   return lines.join("\n");
@@ -634,7 +646,9 @@ function resolveInboundPromptForReply(
     if (!prompt) throw new Error(`inbound onclave message not found: ${msgId}`);
     return prompt;
   }
-  const latestReplyable = [...inboundPrompts.values()].reverse().find((prompt) => Boolean(prompt.origin));
+  const latestReplyable = [...inboundPrompts.values()]
+    .reverse()
+    .find((prompt) => Boolean(prompt.origin) && !prompt.origin?.inReplyToMsgId);
   if (!latestReplyable) {
     throw new Error("no inbound Onclave message with reply routing metadata is available");
   }
@@ -703,38 +717,13 @@ function createOriginMetadata(input: {
   return {
     nodeId: input.bootstrap.identity.nodeId,
     hubInstanceId: input.bootstrap.state.hubInstanceId,
-    endpoint: preferredRemoteHubEndpoint(input.bootstrap.state.endpoint),
+    endpoint: choosePreferredRemoteEndpoint(input.bootstrap.state.endpoint, networkInterfaces()),
     sessionId: input.localSessionId,
     correlationId: input.correlationId,
     agentName: input.localRegistration.name,
     projectLabel: input.localRegistration.projectLabel,
     ...(input.inReplyToMsgId ? { inReplyToMsgId: input.inReplyToMsgId } : {}),
   };
-}
-
-function preferredRemoteHubEndpoint(endpoint: string): string {
-  const localFallback = localHubWssUrl(endpoint);
-  try {
-    const port = new URL(endpoint).port;
-    if (!port) return localFallback;
-
-    const candidates: string[] = [];
-    for (const entries of Object.values(networkInterfaces())) {
-      for (const entry of entries ?? []) {
-        if (!entry || entry.internal || !entry.address) continue;
-        const familyValue = (entry as { family?: string | number }).family;
-        const family = typeof familyValue === "string" ? familyValue : familyValue === 6 ? "IPv6" : "IPv4";
-        if (family !== "IPv4" && family !== "IPv6") continue;
-        const host = family === "IPv6" ? `[${entry.address}]` : entry.address;
-        candidates.push(`wss://${host}:${port}/v1/hub`);
-      }
-    }
-
-    const ipv4 = candidates.find((candidate) => !candidate.includes("["));
-    return ipv4 ?? candidates[0] ?? localFallback;
-  } catch {
-    return localFallback;
-  }
 }
 
 function shortEndpoint(endpoint: string): string {
@@ -798,7 +787,7 @@ async function createRemoteClient(
     identity: {
       nodeId: bootstrap.identity.nodeId,
       hubInstanceId: bootstrap.state.hubInstanceId,
-      endpoint: preferredRemoteHubEndpoint(bootstrap.state.endpoint),
+      endpoint: choosePreferredRemoteEndpoint(bootstrap.state.endpoint, networkInterfaces()),
       publicKeyHex: bootstrap.identity.publicKey,
       privateKeyHex: await loadIdentityPrivateKeyHex(paths),
     },

@@ -41,11 +41,20 @@ describe("Onclave acceptance host script", () => {
         config: { version: 1, staticPeers: [] },
         auditLogExists: false,
       },
-      createOptions()
+      {
+        ...createOptions(),
+        peer: {
+          name: "host-b",
+          nodeId: "node_b",
+          hubInstanceId: "hub_b",
+          endpoint: "wss://172.30.20.51:4444/v1/hub",
+        },
+      }
     );
 
     expect(report).toContain("onclave_trust_add");
     expect(report).toContain("wss://127.0.0.1:4444/v1/hub");
+    expect(report).toContain("do not poll onclave_remote_get");
     expect(report).not.toContain("identity.key");
     expect(report).not.toContain("privateKey");
   });

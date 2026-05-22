@@ -34,3 +34,21 @@ export function isPromptOriginMetadata(value: unknown): value is PromptOriginMet
     (record.inReplyToMsgId === undefined || typeof record.inReplyToMsgId === "string")
   );
 }
+
+export function assertAsyncReplyablePrompt(input: {
+  msgId: string;
+  replyMode?: PromptReplyMode;
+  origin?: PromptOriginMetadata;
+}): void {
+  if (!input.origin) {
+    throw new Error(`inbound Onclave message ${input.msgId} does not include reply routing metadata`);
+  }
+  if (input.replyMode !== "async_message") {
+    throw new Error(
+      `inbound Onclave message ${input.msgId} expects a normal assistant response; do not use onclave_reply`
+    );
+  }
+  if (input.origin.inReplyToMsgId) {
+    throw new Error(`inbound Onclave message ${input.msgId} is already a reply; do not use onclave_reply`);
+  }
+}

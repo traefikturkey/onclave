@@ -252,9 +252,12 @@ Send to a remote agent:
 onclave_remote_send peer_name="bench" target_session_id="session-id" prompt="..."
 ```
 
-Poll the remote response:
+By default, the remote host replies asynchronously with a new inbound Onclave
+message. Only poll the remote response when you explicitly opted into the
+pollable path:
 
 ```text
+onclave_remote_send peer_name="bench" target_session_id="session-id" prompt="..." reply_mode="pollable"
 onclave_remote_get peer_name="bench" msg_id="msg_..."
 ```
 

@@ -154,14 +154,17 @@ Expected result:
 2. Call `onclave_remote_send` with the trusted remote endpoint, node ID, hub
    instance ID, target session ID, and a harmless test prompt.
 3. Record the returned message ID.
-4. Wait for the remote session to produce an assistant response.
-5. Call `onclave_remote_get` with the same trusted remote endpoint metadata and
-   message ID.
+4. By default, wait for the remote session to reply asynchronously with a new
+   inbound Onclave message. Do not poll `onclave_remote_get` for this default
+   async path.
+5. Only call `onclave_remote_get` when the original send explicitly used
+   `reply_mode="pollable"`.
 
 Expected result:
 
 - Prompt delivery succeeds only after trusted-key authentication.
-- The response correlates to the returned message ID.
+- The default async path returns through a new inbound Onclave reply.
+- The pollable path correlates to the returned message ID when used.
 - Unknown message IDs return a non-success lookup result.
 
 ## Check 7: Audit Log Review

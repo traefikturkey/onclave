@@ -9,7 +9,7 @@ import {
 } from "../../src/onclave/status";
 
 describe("buildOnclaveStatus", () => {
-  it("includes live node and hub IDs plus LAN-reachable endpoints", () => {
+  it("includes live node and hub IDs plus filtered LAN-reachable endpoints", () => {
     const status = buildOnclaveStatus({
       endpoint: "https://127.0.0.1:43837",
       started: true,
@@ -19,7 +19,10 @@ describe("buildOnclaveStatus", () => {
       networkInterfaces: {
         lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
         eth0: [{ address: "172.30.20.50", family: "IPv4", internal: false }],
+        docker0: [{ address: "172.18.0.1", family: "IPv4", internal: false }],
+        "br-123": [{ address: "172.19.0.1", family: "IPv4", internal: false }],
         wlan0: [{ address: "fe80::1", family: "IPv6", internal: false }],
+        en0: [{ address: "2001:db8::10", family: "IPv6", internal: false }],
       },
     });
 
@@ -28,14 +31,17 @@ describe("buildOnclaveStatus", () => {
     expect(status.text).toContain("hub_instance_id: hub_01TESTNODEID00000000000000");
     expect(status.text).toContain("remote_endpoints:");
     expect(status.text).toContain("wss://172.30.20.50:43837/v1/hub");
-    expect(status.text).toContain("wss://[fe80::1]:43837/v1/hub");
+    expect(status.text).toContain("wss://[2001:db8::10]:43837/v1/hub");
+    expect(status.text).not.toContain("172.18.0.1");
+    expect(status.text).not.toContain("172.19.0.1");
+    expect(status.text).not.toContain("fe80::1");
     expect(status.details.remoteEndpoints).toEqual([
       "wss://172.30.20.50:43837/v1/hub",
-      "wss://[fe80::1]:43837/v1/hub",
+      "wss://[2001:db8::10]:43837/v1/hub",
     ]);
   });
 
-  it("omits remote endpoints when only loopback is available", () => {
+  it("omits remote endpoints when only loopback or filtered interfaces are available", () => {
     const status = buildOnclaveStatus({
       endpoint: "https://127.0.0.1:43837",
       started: false,
@@ -44,6 +50,8 @@ describe("buildOnclaveStatus", () => {
       publicAuthorizedKeyLine: "ssh-ed25519 AAAA node_test",
       networkInterfaces: {
         lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+        docker0: [{ address: "172.18.0.1", family: "IPv4", internal: false }],
+        wlan0: [{ address: "fe80::1", family: "IPv6", internal: false }],
       },
     });
 

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadOrCreateIdentity } from "../../src/onclave/identity";
@@ -41,5 +41,31 @@ describe("loadOrCreateIdentity", () => {
     const second = await loadOrCreateIdentity(paths);
 
     expect(second).toEqual(first);
+  });
+
+  it("migrates the legacy coms-lan identity into the Onclave root", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "onclave-identity-migrate-"));
+    tempDirs.push(parent);
+    const legacyPaths = getOnclavePaths(join(parent, "coms-lan"));
+    const paths = getOnclavePaths(join(parent, "onclave"));
+    const legacyIdentity = {
+      version: 1 as const,
+      nodeId: "node_01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      publicKey: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      privateKeyPath: legacyPaths.privateKey,
+      createdAt: "2026-05-21T00:00:00.000Z",
+    };
+
+    await mkdir(legacyPaths.root, { recursive: true });
+    await writeFile(legacyPaths.privateKey, `${"ab".repeat(32)}\n`);
+    await writeFile(legacyPaths.identity, `${JSON.stringify(legacyIdentity, null, 2)}\n`);
+
+    const identity = await loadOrCreateIdentity(paths);
+
+    expect(identity).toEqual({
+      ...legacyIdentity,
+      privateKeyPath: paths.privateKey,
+    });
+    expect(await readFile(paths.privateKey, "utf8")).toBe(`${"ab".repeat(32)}\n`);
   });
 });
