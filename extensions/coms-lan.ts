@@ -116,6 +116,82 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: "coms_lan_send",
+    label: "Coms LAN Send",
+    description: "Send a prompt to a local coms-lan agent by session ID through the local hub.",
+    parameters: Type.Object({
+      target_session_id: Type.String({ description: "Target local agent session ID." }),
+      prompt: Type.String({ description: "Prompt to deliver." }),
+    }),
+    async execute(_callId, params) {
+      if (!bootstrap) throw new Error("coms-lan is not initialized");
+      const msgId = `msg_${randomId()}`;
+      const responses = await sendWssFrames(
+        localHubWssUrl(bootstrap.state.endpoint),
+        [
+          {
+            type: "local_send_prompt",
+            msgId,
+            targetSessionId: params.target_session_id,
+            prompt: params.prompt,
+            hops: 0,
+          },
+        ],
+        { rejectUnauthorized: false, timeoutMs: 5_000 }
+      );
+      const response = responses[0];
+      if (!response || response.type !== "send_accepted") {
+        throw new Error(`coms-lan send failed: ${JSON.stringify(response ?? null)}`);
+      }
+      return {
+        content: [{ type: "text" as const, text: `coms_lan_send → ${params.target_session_id}\nmsg_id ${msgId}` }],
+        details: { msg_id: msgId, target_session_id: params.target_session_id, status: response.status },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "coms_lan_get",
+    label: "Coms LAN Get",
+    description: "Poll a coms-lan message response by msg_id.",
+    parameters: Type.Object({
+      msg_id: Type.String({ description: "Message ID returned by coms_lan_send." }),
+    }),
+    async execute(_callId, params) {
+      if (!bootstrap) throw new Error("coms-lan is not initialized");
+      const result = await getLocalResponse(bootstrap.state.endpoint, params.msg_id);
+      return {
+        content: [{ type: "text" as const, text: formatResponseResult(result) }],
+        details: { msg_id: params.msg_id, result },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "coms_lan_await",
+    label: "Coms LAN Await",
+    description: "Wait for a coms-lan message response by msg_id until timeout.",
+    parameters: Type.Object({
+      msg_id: Type.String({ description: "Message ID returned by coms_lan_send." }),
+      timeout_ms: Type.Optional(Type.Number({ description: "Maximum wait time in milliseconds. Default 30000." })),
+    }),
+    async execute(_callId, params) {
+      const timeoutMs = typeof params.timeout_ms === "number" && params.timeout_ms > 0 ? params.timeout_ms : 30_000;
+      const deadline = Date.now() + timeoutMs;
+      if (!bootstrap) throw new Error("coms-lan is not initialized");
+      let result = await getLocalResponse(bootstrap.state.endpoint, params.msg_id);
+      while (result.status === "pending" && Date.now() < deadline) {
+        await sleep(250);
+        result = await getLocalResponse(bootstrap.state.endpoint, params.msg_id);
+      }
+      return {
+        content: [{ type: "text" as const, text: formatResponseResult(result) }],
+        details: { msg_id: params.msg_id, result },
+      };
+    },
+  });
+
+  pi.registerTool({
     name: "coms_lan_agents",
     label: "Coms LAN Agents",
     description: "List local agents registered with this coms-lan runtime.",
@@ -177,6 +253,31 @@ async function checkHubHealth(endpoint: string): Promise<boolean> {
 
 function localHubWssUrl(endpoint: string): string {
   return endpoint.replace(/^https:/, "wss:").replace(/\/$/, "") + "/v1/hub";
+}
+
+async function getLocalResponse(endpoint: string, msgId: string) {
+  const responses = await sendWssFrames(
+    localHubWssUrl(endpoint),
+    [{ type: "local_get_response", msgId }],
+    { rejectUnauthorized: false, timeoutMs: 5_000 }
+  );
+  const response = responses[0];
+  if (!response || response.type !== "response") {
+    throw new Error(`coms-lan get failed: ${JSON.stringify(response ?? null)}`);
+  }
+  return response.result;
+}
+
+function formatResponseResult(result: { status: string; response?: unknown; error?: string | null }): string {
+  if (result.status === "complete") {
+    return typeof result.response === "string" ? result.response : JSON.stringify(result.response, null, 2);
+  }
+  if (result.error) return `${result.status}: ${result.error}`;
+  return result.status;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function sessionIdFromContext(ctx: ExtensionContext): string {

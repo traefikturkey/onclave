@@ -49,7 +49,23 @@ export type LocalUnregisterFrame = {
   sessionId: string;
 };
 
-export type HubFrame = ClientAuthFrame | ListAgentsFrame | SendPromptFrame | LocalRegisterFrame | LocalUnregisterFrame | GetResponseFrame;
+export type LocalSendPromptFrame = Omit<SendPromptFrame, "type"> & {
+  type: "local_send_prompt";
+};
+
+export type LocalGetResponseFrame = Omit<GetResponseFrame, "type"> & {
+  type: "local_get_response";
+};
+
+export type HubFrame =
+  | ClientAuthFrame
+  | ListAgentsFrame
+  | SendPromptFrame
+  | LocalRegisterFrame
+  | LocalUnregisterFrame
+  | LocalSendPromptFrame
+  | LocalGetResponseFrame
+  | GetResponseFrame;
 
 export type SendPromptRouteResult =
   | { ok: true; msgId: string; status: "delivered" }
@@ -111,6 +127,15 @@ export class HubFrameProcessor {
           sessionId: frame.sessionId,
           removed: this.options.unregisterLocalAgent(frame.sessionId),
         };
+      case "local_get_response":
+        return { type: "response", msgId: frame.msgId, result: this.options.getResponse(frame.msgId) };
+      case "local_send_prompt": {
+        const result = await this.options.onSendPrompt({ ...frame, type: "send_prompt" });
+        if (result && !result.ok) {
+          return { type: "send_rejected", msgId: frame.msgId, error: result.error };
+        }
+        return { type: "send_accepted", msgId: frame.msgId, status: "delivered" };
+      }
       case "list_agents":
         if (!this.isAuthenticated()) return { type: "error", code: "auth_required" };
         return { type: "agents", agents: this.options.listAgents() };
@@ -200,6 +225,10 @@ function parseFrame(raw: string | Buffer): HubFrame | null {
         return isLocalRegisterFrame(record) ? record : null;
       case "local_unregister":
         return isLocalUnregisterFrame(record) ? record : null;
+      case "local_get_response":
+        return isLocalGetResponseFrame(record) ? record : null;
+      case "local_send_prompt":
+        return isLocalSendPromptFrame(record) ? record : null;
       case "get_response":
         return isGetResponseFrame(record) ? record : null;
       case "send_prompt":
@@ -272,6 +301,24 @@ function isLocalAgentRegistration(value: unknown): value is LocalAgentRegistrati
 
 function isGetResponseFrame(value: Record<string, unknown>): value is GetResponseFrame {
   return value.type === "get_response" && typeof value.msgId === "string" && value.msgId.length > 0;
+}
+
+function isLocalGetResponseFrame(value: Record<string, unknown>): value is LocalGetResponseFrame {
+  return value.type === "local_get_response" && typeof value.msgId === "string" && value.msgId.length > 0;
+}
+
+function isLocalSendPromptFrame(value: Record<string, unknown>): value is LocalSendPromptFrame {
+  return (
+    value.type === "local_send_prompt" &&
+    typeof value.msgId === "string" &&
+    value.msgId.length > 0 &&
+    typeof value.targetSessionId === "string" &&
+    value.targetSessionId.length > 0 &&
+    typeof value.prompt === "string" &&
+    typeof value.hops === "number" &&
+    Number.isInteger(value.hops) &&
+    value.hops >= 0
+  );
 }
 
 function isSendPromptFrame(value: Record<string, unknown>): value is SendPromptFrame {

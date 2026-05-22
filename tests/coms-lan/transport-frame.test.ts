@@ -92,6 +92,49 @@ describe("HubFrameProcessor", () => {
     });
   });
 
+  it("handles local response lookup without hub-to-hub authentication", async () => {
+    const processor = createProcessor([], {
+      getResponse: () => ({ status: "complete", response: "done", error: null }),
+    });
+
+    await expect(processor.handleRaw(JSON.stringify({ type: "local_get_response", msgId: "msg-1" }))).resolves.toEqual({
+      type: "response",
+      msgId: "msg-1",
+      result: { status: "complete", response: "done", error: null },
+    });
+  });
+
+  it("handles local prompt sends without hub-to-hub authentication", async () => {
+    const sent: SendPromptFrame[] = [];
+    const processor = createProcessor([], {
+      onSendPrompt: async (frame) => {
+        sent.push(frame);
+        return { ok: true, msgId: frame.msgId, status: "delivered" };
+      },
+    });
+
+    await expect(
+      processor.handleRaw(
+        JSON.stringify({
+          type: "local_send_prompt",
+          msgId: "msg-1",
+          targetSessionId: "session-1",
+          prompt: "hello",
+          hops: 0,
+        })
+      )
+    ).resolves.toEqual({ type: "send_accepted", msgId: "msg-1", status: "delivered" });
+    expect(sent).toEqual([
+      {
+        type: "send_prompt",
+        msgId: "msg-1",
+        targetSessionId: "session-1",
+        prompt: "hello",
+        hops: 0,
+      },
+    ]);
+  });
+
   it("requires authentication before reading message responses", async () => {
     const processor = createProcessor([]);
 
