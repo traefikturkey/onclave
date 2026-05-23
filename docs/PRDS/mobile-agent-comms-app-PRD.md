@@ -43,10 +43,13 @@ LAN/Tailnet Pi communication network.
 4. Support task creation, status monitoring, event subscriptions, approvals, and
    audit review.
 5. Provide push notifications for selected observer events.
-6. Support human approval flows for tool authorization and guardrail decisions.
-7. Preserve prompt/response correlation, agent identity, project labels, and hub
-   identity in the UI.
-8. Avoid exposing agent hubs publicly by default.
+6. Support human approval flows for tool authorization, guardrail decisions, and
+   workspace infrastructure requests.
+7. Allow operators to approve, monitor, terminate, and retain Proxmox/LXC agent
+   workspaces through hub-mediated controls.
+8. Preserve prompt/response correlation, agent identity, project labels, hub
+   identity, and workspace identity in the UI.
+9. Avoid exposing agent hubs publicly by default.
 
 ## Non-Goals
 
@@ -54,6 +57,7 @@ LAN/Tailnet Pi communication network.
 - No public multi-tenant cloud service requirement in v1.
 - No generic Telegram/Discord/Slack clone.
 - No direct mobile-to-agent sockets bypassing the hub.
+- No direct mobile-to-Proxmox API access.
 - No local model execution on the mobile device in v1.
 - No unrestricted file browser for agent machines.
 - No production deployment approval without explicit policy support.
@@ -122,10 +126,23 @@ mobile gateway over the tailnet.
   authorization services.
 - The app must support approval, denial, and request-more-info actions for
   tool-call authorization events.
+- The app must support approval, denial, and request-more-info actions for
+  Proxmox/LXC workspace provisioning requests when policy requires human review.
+- Workspace approval details must show repo, ref, requested template, CPU, memory,
+  disk, TTL, network policy, requester identity, target agent profile, risk
+  flags, and policy reason.
 - Approval decisions must include operator identity, timestamp, policy context,
   decision, optional comment, and correlation ID.
 - The app must support acknowledging or muting notifications.
 - The app must support viewing recent audit entries with redacted evidence.
+- The app must show workspace lifecycle state for approved LXC workspaces,
+  including requested, approval required, provisioning, running, failed,
+  terminating, retained for debugging, and destroyed.
+- The app must allow authorized operators to request workspace termination.
+- The app must allow authorized operators to request retain-for-debugging when a
+  workspace would otherwise be destroyed by TTL.
+- The app must not expose raw Proxmox credentials, node credentials, or direct
+  Proxmox API controls.
 - The app must support secure local storage for hub configuration and session
   tokens where required.
 - The app must not store raw provider API keys.
@@ -160,6 +177,8 @@ mobile gateway over the tailnet.
 - New task/prompt composer
 - Approval queue
 - Approval detail
+- Workspace/provisioning queue
+- Workspace detail
 - Security/guardrail events
 - Notification subscription settings
 - Audit/event search
@@ -176,6 +195,8 @@ The app must understand these event categories:
 - approval decision recorded
 - guardrail/security event
 - budget/quota event
+- workspace provisioning event
+- workspace cleanup/retention event
 - hub trust/connectivity event
 - runtime integration event
 
@@ -207,10 +228,14 @@ Pi Mobile Gateway or Pi Hub Mobile API
   +--> Observer subscriptions
   +--> Task/prompt routing
   +--> Approval decisions
+  +--> Workspace provisioning status/control
   +--> Audit/event search
   |
   v
 Pi Hub Network  <====> Agents / OpenClaw/Hermes / Aperture guardrails
+       |
+       v
+Workspace Provisioner <====> Proxmox API / LXC workspaces
 ```
 
 For push notifications:
@@ -228,6 +253,8 @@ Pi Hub event
 - The mobile app should never be treated as an agent hub.
 - The mobile app is an operator client with scoped permissions.
 - The hub must authorize every mobile action.
+- The mobile app must never call the Proxmox API directly; all infrastructure
+  actions must go through the Pi hub and Workspace Provisioner.
 - Push notification payloads are pointers, not full sensitive content.
 - Approval decisions must be signed or otherwise strongly attributed where
   practical.
@@ -262,24 +289,41 @@ Pi Hub event
      hub records the decision with operator identity.
    - Fail: The decision is unaudited or the tool executes without approval.
 
-5. [ ] Push notifications do not leak sensitive content.
+5. [ ] Workspace infrastructure approvals work from mobile.
+   - Verify: Trigger a Proxmox/LXC workspace request that requires approval due
+     to repo, resource, TTL, template, or network policy.
+   - Pass: The app shows repo/ref, resource request, template, TTL, network
+     policy, requester, risk flags, and allows approve/deny/request-info through
+     the hub.
+   - Fail: The app calls Proxmox directly, omits critical risk context, or the
+     provisioner acts without an auditable hub decision.
+
+6. [ ] Workspace lifecycle can be monitored and controlled from mobile.
+   - Verify: Approve a workspace, watch it provision and run, then terminate or
+     retain it for debugging.
+   - Pass: The app shows lifecycle events and authorized actions are routed
+     through the hub to the Workspace Provisioner.
+   - Fail: The app shows stale lifecycle state or bypasses hub/provisioner
+     authorization.
+
+7. [ ] Push notifications do not leak sensitive content.
    - Verify: Trigger events containing prompt text, command arguments, and secret
      fixtures.
    - Pass: Push payloads contain only minimal routing metadata and safe summaries.
    - Fail: Raw prompts, secrets, or sensitive command arguments appear in push
      payloads.
 
-6. [ ] Offline and reconnect behavior is clear.
+8. [ ] Offline and reconnect behavior is clear.
    - Verify: Disconnect the phone from the tailnet, trigger events, then
      reconnect.
    - Pass: The app shows stale state while offline and resumes event streams or
      fetches missed events after reconnect.
    - Fail: The app silently shows stale data as current.
 
-7. [ ] Device revocation blocks access.
+9. [ ] Device revocation blocks access.
    - Verify: Revoke the mobile device or session and attempt to reconnect.
    - Pass: The hub rejects the client and the app shows a clear re-auth message.
-   - Fail: The app continues to control agents after revocation.
+   - Fail: The app continues to control agents or workspaces after revocation.
 
 ## Alternatives Considered
 
@@ -290,6 +334,7 @@ Pi Hub event
 | Native mobile apps | Best mobile UX and notifications | More platform work | Accepted goal |
 | Public cloud relay | Easy mobile connectivity | Conflicts with private tailnet-first model | Rejected for v1 |
 | Direct mobile-to-agent control | Low latency | Bypasses hub security and audit | Rejected |
+| Direct mobile-to-Proxmox control | Full infra control from phone | Exposes privileged infrastructure API and bypasses provisioner policy | Rejected |
 | Push payloads with full details | Convenient | Leaks sensitive content to APNs/FCM surfaces | Rejected |
 
 ## Risks
@@ -300,7 +345,8 @@ Pi Hub event
 | Approval UX lacks enough context | Operators approve unsafe actions | Show command/path/risk summaries and policy reason |
 | Tailnet mobile connectivity is hard for users | App adoption suffers | Provide setup guide and manual endpoint fallback |
 | App becomes a full chat client | Scope creep | Center UI on tasks, events, approvals, and agents |
-| Lost phone can control agents | Security incident | Use Tailscale revocation, scoped sessions, and hub authz |
+| Lost phone can control agents or workspaces | Security incident | Use Tailscale revocation, scoped sessions, and hub authz |
+| Insufficient workspace approval context | Operator approves expensive or unsafe LXC creation | Show repo/ref, resources, template, TTL, network policy, and risk flags |
 | Offline events are missed | Operators lose trust | Use durable event cursors and reconnect replay |
 
 ## Open Questions
@@ -311,6 +357,8 @@ Pi Hub event
   gateway service?
 - How should Tailscale mobile identity be surfaced to the hub on iOS and Android?
 - What approval actions should require biometric confirmation?
+- Which workspace actions should require biometric confirmation: provision,
+  terminate, retain for debugging, or resource escalation?
 - What event retention window should be available to mobile clients?
 - Should the app support attachments in v1, or only text, links, and task IDs?
 - Should notification routing use a self-hosted push bridge, vendor push services,
