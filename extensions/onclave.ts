@@ -18,6 +18,7 @@ import {
 } from "../src/onclave/prompt-metadata";
 import { getOnclavePaths } from "../src/onclave/state";
 import {
+  buildKnownOnclavePeers,
   buildOnclaveAgentList,
   buildOnclavePeers,
   buildOnclaveStatus,
@@ -699,12 +700,20 @@ async function refreshOnclaveUi(
 
   const peers = bootstrap.runtime?.discoveredPeers?.() ?? [];
   const config = await loadOnclaveConfig(paths).catch(() => ({ version: 1 as const, staticPeers: [] }));
-  const peerNames = new Map(config.staticPeers.filter((peer) => peer.name).map((peer) => [peer.nodeId, peer.name as string]));
-  const widgetPeers = peers.slice(0, 6).map((peer) => {
+  const knownPeers = buildKnownOnclavePeers({
+    discoveredPeers: peers,
+    staticPeers: config.staticPeers,
+    learnedPeerNames: new Map(
+      [...peerDisplayCache.entries()]
+        .filter(([, value]) => Boolean(value.peerName))
+        .map(([nodeId, value]) => [nodeId, value.peerName as string])
+    ),
+  });
+  const widgetPeers = knownPeers.slice(0, 6).map((peer) => {
     const cachedDisplay = peerDisplayCache.get(peer.nodeId);
     return {
       ...peer,
-      displayName: peerNames.get(peer.nodeId) ?? cachedDisplay?.peerName ?? shortNodeId(peer.nodeId),
+      displayName: peer.name ?? cachedDisplay?.peerName ?? shortNodeId(peer.nodeId),
       model: cachedDisplay?.model,
     };
   });

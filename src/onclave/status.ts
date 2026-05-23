@@ -1,5 +1,5 @@
 import type { StaticPeerConfig } from "./config";
-import type { DiscoveredPeer } from "./discovery";
+import type { DiscoveredPeer, PeerAuthState, PeerTrustState } from "./discovery";
 import type { LocalAgent } from "./local-registry";
 
 type NetworkInterfaceInfo = {
@@ -55,6 +55,56 @@ export function buildOnclaveStatus(input: BuildOnclaveStatusInput): {
   };
 }
 
+export type KnownOnclavePeerSource = "discovered" | "discovered+static" | "static";
+
+export type KnownOnclavePeer = {
+  nodeId: string;
+  hubInstanceId: string;
+  endpoint: string;
+  trustState: PeerTrustState;
+  authState: PeerAuthState;
+  source: KnownOnclavePeerSource;
+  lastSeenAt?: string;
+  name?: string;
+  peerName?: string;
+};
+
+export function buildKnownOnclavePeers(input: {
+  discoveredPeers: DiscoveredPeer[];
+  staticPeers: StaticPeerConfig[];
+  learnedPeerNames?: ReadonlyMap<string, string>;
+}): KnownOnclavePeer[] {
+  const staticPeersByNodeId = new Map(input.staticPeers.map((peer) => [peer.nodeId, peer]));
+  const knownPeers = input.discoveredPeers.map((peer): KnownOnclavePeer => {
+    const staticPeer = staticPeersByNodeId.get(peer.nodeId);
+    const learnedPeerName = input.learnedPeerNames?.get(peer.nodeId);
+    return {
+      ...peer,
+      source: staticPeer ? "discovered+static" : "discovered",
+      ...(staticPeer?.name ? { name: staticPeer.name } : {}),
+      ...(learnedPeerName ? { peerName: learnedPeerName } : {}),
+    };
+  });
+
+  const discoveredNodeIds = new Set(input.discoveredPeers.map((peer) => peer.nodeId));
+  for (const peer of input.staticPeers) {
+    if (discoveredNodeIds.has(peer.nodeId)) continue;
+    const learnedPeerName = input.learnedPeerNames?.get(peer.nodeId);
+    knownPeers.push({
+      nodeId: peer.nodeId,
+      hubInstanceId: peer.hubInstanceId,
+      endpoint: peer.endpoint,
+      trustState: "stale",
+      authState: "not_attempted",
+      source: "static",
+      ...(peer.name ? { name: peer.name } : {}),
+      ...(learnedPeerName ? { peerName: learnedPeerName } : {}),
+    });
+  }
+
+  return knownPeers;
+}
+
 export function buildOnclavePeers(input: {
   discoveredPeers: DiscoveredPeer[];
   staticPeers: StaticPeerConfig[];
@@ -62,22 +112,20 @@ export function buildOnclavePeers(input: {
 }): {
   text: string;
   details: {
-    discoveredPeers: Array<DiscoveredPeer & { name?: string; peerName?: string }>;
+    knownPeers: KnownOnclavePeer[];
+    discoveredPeers: Array<KnownOnclavePeer & DiscoveredPeer>;
     staticPeers: StaticPeerConfig[];
   };
 } {
-  const staticPeersByNodeId = new Map(input.staticPeers.map((peer) => [peer.nodeId, peer]));
-  const discoveredPeers = input.discoveredPeers.map((peer) => {
-    const staticPeer = staticPeersByNodeId.get(peer.nodeId);
-    const learnedPeerName = input.learnedPeerNames?.get(peer.nodeId);
-    return {
-      ...peer,
-      ...(staticPeer?.name ? { name: staticPeer.name } : {}),
-      ...(learnedPeerName ? { peerName: learnedPeerName } : {}),
-    };
-  });
+  const knownPeers = buildKnownOnclavePeers(input);
+  const discoveredPeers = knownPeers.filter((peer): peer is KnownOnclavePeer & DiscoveredPeer => peer.source !== "static");
 
-  const lines = [`discovered_peers: ${input.discoveredPeers.length}`];
+  const lines = [`known_peers: ${knownPeers.length}`];
+  for (const peer of knownPeers) {
+    lines.push(formatKnownPeerLine(peer));
+  }
+
+  lines.push(`discovered_peers: ${input.discoveredPeers.length}`);
   for (const peer of discoveredPeers) {
     lines.push(
       [
@@ -109,7 +157,24 @@ export function buildOnclavePeers(input: {
         .join(" ")
     );
   }
-  return { text: lines.join("\n"), details: { discoveredPeers, staticPeers: input.staticPeers } };
+  return { text: lines.join("\n"), details: { knownPeers, discoveredPeers, staticPeers: input.staticPeers } };
+}
+
+function formatKnownPeerLine(peer: KnownOnclavePeer): string {
+  return [
+    "-",
+    peer.name ? `name=${peer.name}` : null,
+    peer.peerName ? `peer_name=${peer.peerName}` : null,
+    `source=${peer.source}`,
+    `node_id=${peer.nodeId}`,
+    `hub_instance_id=${peer.hubInstanceId}`,
+    `endpoint=${peer.endpoint}`,
+    `trust_state=${peer.trustState}`,
+    `auth_state=${peer.authState}`,
+    peer.lastSeenAt ? `last_seen_at=${peer.lastSeenAt}` : null,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 export function buildOnclaveAgentList(input: {
