@@ -81,9 +81,15 @@ describe("buildOnclavePeers", () => {
       },
     ];
 
-    const peers = buildOnclavePeers({ discoveredPeers, staticPeers });
+    const peers = buildOnclavePeers({
+      discoveredPeers,
+      staticPeers,
+      learnedPeerNames: new Map([["node_01PEER00000000000000000000", "nxs-dev1"]]),
+    });
 
     expect(peers.text).toContain("discovered_peers: 1");
+    expect(peers.text).toContain("name=host-b");
+    expect(peers.text).toContain("peer_name=nxs-dev1");
     expect(peers.text).toContain("node_id=node_01PEER00000000000000000000");
     expect(peers.text).toContain("hub_instance_id=hub_01PEER00000000000000000000");
     expect(peers.text).toContain("endpoint=wss://172.30.20.51:33105/v1/hub");
@@ -91,6 +97,18 @@ describe("buildOnclavePeers", () => {
     expect(peers.text).toContain("auth_state=authenticated");
     expect(peers.text).toContain("static_peers: 1");
     expect(peers.text).toContain("name=host-b");
+    expect(peers.details.discoveredPeers).toEqual([
+      {
+        nodeId: "node_01PEER00000000000000000000",
+        name: "host-b",
+        peerName: "nxs-dev1",
+        hubInstanceId: "hub_01PEER00000000000000000000",
+        endpoint: "wss://172.30.20.51:33105/v1/hub",
+        lastSeenAt: "2026-05-22T16:00:00.000Z",
+        trustState: "trusted",
+        authState: "authenticated",
+      },
+    ]);
   });
 });
 
