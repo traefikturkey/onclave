@@ -58,21 +58,41 @@ export function buildOnclaveStatus(input: BuildOnclaveStatusInput): {
 export function buildOnclavePeers(input: {
   discoveredPeers: DiscoveredPeer[];
   staticPeers: StaticPeerConfig[];
+  learnedPeerNames?: ReadonlyMap<string, string>;
 }): {
   text: string;
+  details: {
+    discoveredPeers: Array<DiscoveredPeer & { name?: string; peerName?: string }>;
+    staticPeers: StaticPeerConfig[];
+  };
 } {
+  const staticPeersByNodeId = new Map(input.staticPeers.map((peer) => [peer.nodeId, peer]));
+  const discoveredPeers = input.discoveredPeers.map((peer) => {
+    const staticPeer = staticPeersByNodeId.get(peer.nodeId);
+    const learnedPeerName = input.learnedPeerNames?.get(peer.nodeId);
+    return {
+      ...peer,
+      ...(staticPeer?.name ? { name: staticPeer.name } : {}),
+      ...(learnedPeerName ? { peerName: learnedPeerName } : {}),
+    };
+  });
+
   const lines = [`discovered_peers: ${input.discoveredPeers.length}`];
-  for (const peer of input.discoveredPeers) {
+  for (const peer of discoveredPeers) {
     lines.push(
       [
         "-",
+        peer.name ? `name=${peer.name}` : null,
+        peer.peerName ? `peer_name=${peer.peerName}` : null,
         `node_id=${peer.nodeId}`,
         `hub_instance_id=${peer.hubInstanceId}`,
         `endpoint=${peer.endpoint}`,
         `trust_state=${peer.trustState}`,
         `auth_state=${peer.authState}`,
         `last_seen_at=${peer.lastSeenAt}`,
-      ].join(" ")
+      ]
+        .filter(Boolean)
+        .join(" ")
     );
   }
   lines.push(`static_peers: ${input.staticPeers.length}`);
@@ -89,7 +109,7 @@ export function buildOnclavePeers(input: {
         .join(" ")
     );
   }
-  return { text: lines.join("\n") };
+  return { text: lines.join("\n"), details: { discoveredPeers, staticPeers: input.staticPeers } };
 }
 
 export function buildOnclaveAgentList(input: {

@@ -58,7 +58,7 @@ export default function (pi: ExtensionAPI) {
   let localRegistration: LocalAgentRegistration | null = null;
   let sessionUi: ExtensionContext["ui"] | null = null;
   let peerWidgetTimer: ReturnType<typeof setInterval> | null = null;
-  const peerDisplayCache = new Map<string, { model?: string }>();
+  const peerDisplayCache = new Map<string, { peerName?: string; model?: string }>();
   const inboundPrompts = new Map<string, DeliveredPrompt>();
 
   pi.on("session_start", async (_event, ctx) => {
@@ -250,7 +250,15 @@ export default function (pi: ExtensionAPI) {
     async execute() {
       const peers = bootstrap?.runtime?.discoveredPeers?.() ?? [];
       const config = await loadOnclaveConfig(paths);
-      const peerList = buildOnclavePeers({ discoveredPeers: peers, staticPeers: config.staticPeers });
+      const peerList = buildOnclavePeers({
+        discoveredPeers: peers,
+        staticPeers: config.staticPeers,
+        learnedPeerNames: new Map(
+          [...peerDisplayCache.entries()]
+            .filter(([, value]) => Boolean(value.peerName))
+            .map(([nodeId, value]) => [nodeId, value.peerName as string])
+        ),
+      });
       return {
         content: [
           {
@@ -258,7 +266,7 @@ export default function (pi: ExtensionAPI) {
             text: peerList.text,
           },
         ],
-        details: { peers, staticPeers: config.staticPeers },
+        details: peerList.details,
       };
     },
   });
@@ -680,7 +688,7 @@ async function refreshOnclaveUi(
   bootstrap: BootstrapLocalHubResult | null,
   paths: ReturnType<typeof getOnclavePaths>,
   localRegistration: LocalAgentRegistration | null,
-  peerDisplayCache: Map<string, { model?: string }>
+  peerDisplayCache: Map<string, { peerName?: string; model?: string }>
 ): Promise<void> {
   if (!ui) return;
   if (!bootstrap) {
@@ -692,11 +700,14 @@ async function refreshOnclaveUi(
   const peers = bootstrap.runtime?.discoveredPeers?.() ?? [];
   const config = await loadOnclaveConfig(paths).catch(() => ({ version: 1 as const, staticPeers: [] }));
   const peerNames = new Map(config.staticPeers.filter((peer) => peer.name).map((peer) => [peer.nodeId, peer.name as string]));
-  const widgetPeers = peers.slice(0, 6).map((peer) => ({
-    ...peer,
-    displayName: peerNames.get(peer.nodeId) ?? shortNodeId(peer.nodeId),
-    model: peerDisplayCache.get(peer.nodeId)?.model,
-  }));
+  const widgetPeers = peers.slice(0, 6).map((peer) => {
+    const cachedDisplay = peerDisplayCache.get(peer.nodeId);
+    return {
+      ...peer,
+      displayName: peerNames.get(peer.nodeId) ?? cachedDisplay?.peerName ?? shortNodeId(peer.nodeId),
+      model: cachedDisplay?.model,
+    };
+  });
 
   ui.setWidget?.(
     "onclave-peers",
@@ -720,13 +731,13 @@ async function refreshOnclaveUi(
 }
 
 function cachePeerDisplay(
-  peerDisplayCache: Map<string, { model?: string }>,
+  peerDisplayCache: Map<string, { peerName?: string; model?: string }>,
   nodeId: string,
-  agents: Array<{ model: string; status: string }>
+  agents: Array<{ name: string; model: string; status: string }>
 ): void {
   const preferred = agents.find((agent) => agent.status === "online") ?? agents[0];
   if (!preferred) return;
-  peerDisplayCache.set(nodeId, { model: preferred.model });
+  peerDisplayCache.set(nodeId, { peerName: preferred.name, model: preferred.model });
 }
 
 function shortNodeId(nodeId: string): string {
