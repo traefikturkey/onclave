@@ -4,6 +4,7 @@ import type { DiscoveredPeer } from "./discovery";
 export type OnclavePeerWidgetPeer = Pick<DiscoveredPeer, "nodeId" | "endpoint" | "trustState" | "authState"> & {
   displayName: string;
   model?: string;
+  source?: "discovered" | "discovered+static" | "static";
 };
 
 export type OnclavePeerWidgetInput = {
@@ -29,7 +30,7 @@ export function renderOnclavePeerWidget(
   if (input.peers.length === 0) {
     return [
       topBorder,
-      truncateToWidth(" " + theme.fg("muted", "no peers discovered"), safeWidth),
+      truncateToWidth(" " + theme.fg("muted", "no peers configured or discovered"), safeWidth),
       bottomBorder,
     ];
   }
@@ -51,7 +52,8 @@ export function renderOnclavePeerWidget(
   return out;
 }
 
-export function formatPeerState(peer: Pick<OnclavePeerWidgetPeer, "trustState" | "authState">): string {
+export function formatPeerState(peer: Pick<OnclavePeerWidgetPeer, "trustState" | "authState" | "source">): string {
+  if (peer.source === "static") return "configured";
   if (peer.authState === "authenticated") return "trusted/auth";
   if (peer.authState === "in_progress") return "authing";
   if (peer.authState === "failed" || peer.trustState === "auth_failed") return "auth_failed";

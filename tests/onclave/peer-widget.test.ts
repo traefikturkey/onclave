@@ -78,11 +78,37 @@ describe("renderOnclavePeerWidget", () => {
     expect(normalized).not.toContain("claude-sonnet…");
   });
 
+  it("renders configured static peers separately from live discovered peers", () => {
+    const lines = renderOnclavePeerWidget(
+      72,
+      {
+        localLabel: "host-a",
+        peers: [
+          {
+            nodeId: "node_01STATIC000000000000000000",
+            displayName: "base-ops",
+            endpoint: "wss://172.30.10.20:64993/v1/hub",
+            trustState: "stale",
+            authState: "not_attempted",
+            source: "static",
+          },
+        ],
+      },
+      theme
+    );
+
+    const normalized = lines.map(stripAnsi);
+    expect(normalized[1]).toContain("~");
+    expect(normalized[1]).toContain("base-ops");
+    expect(normalized[1]).toContain("configured");
+    expect(normalized[1]).toContain("172.30.10.20:64993");
+  });
+
   it("renders an empty-state panel when no peers are available", () => {
     const lines = renderOnclavePeerWidget(40, { localLabel: "host-a", peers: [] }, theme);
 
     expect(lines).toHaveLength(3);
-    expect(stripAnsi(lines[1])).toContain("no peers discovered");
+    expect(stripAnsi(lines[1])).toContain("no peers configured or discovered");
   });
 });
 
@@ -92,5 +118,6 @@ describe("formatPeerState", () => {
     expect(formatPeerState({ trustState: "trusted", authState: "not_attempted" })).toBe("trusted/seen");
     expect(formatPeerState({ trustState: "untrusted", authState: "not_attempted" })).toBe("untrusted/seen");
     expect(formatPeerState({ trustState: "auth_failed", authState: "failed" })).toBe("auth_failed");
+    expect(formatPeerState({ trustState: "stale", authState: "not_attempted", source: "static" })).toBe("configured");
   });
 });

@@ -79,6 +79,12 @@ describe("buildOnclavePeers", () => {
         hubInstanceId: "hub_01PEER00000000000000000000",
         endpoint: "wss://172.30.20.51:33105/v1/hub",
       },
+      {
+        name: "base-ops",
+        nodeId: "node_01STATIC000000000000000000",
+        hubInstanceId: "hub_01STATIC000000000000000000",
+        endpoint: "wss://172.30.10.20:64993/v1/hub",
+      },
     ];
 
     const peers = buildOnclavePeers({
@@ -87,6 +93,12 @@ describe("buildOnclavePeers", () => {
       learnedPeerNames: new Map([["node_01PEER00000000000000000000", "nxs-dev1"]]),
     });
 
+    expect(peers.text).toContain("known_peers: 2");
+    expect(peers.text).toContain("source=discovered+static");
+    expect(peers.text).toContain("name=base-ops");
+    expect(peers.text).toContain("source=static");
+    expect(peers.text).toContain("endpoint=wss://172.30.10.20:64993/v1/hub");
+    expect(peers.text).toContain("trust_state=stale");
     expect(peers.text).toContain("discovered_peers: 1");
     expect(peers.text).toContain("name=host-b");
     expect(peers.text).toContain("peer_name=nxs-dev1");
@@ -95,8 +107,30 @@ describe("buildOnclavePeers", () => {
     expect(peers.text).toContain("endpoint=wss://172.30.20.51:33105/v1/hub");
     expect(peers.text).toContain("trust_state=trusted");
     expect(peers.text).toContain("auth_state=authenticated");
-    expect(peers.text).toContain("static_peers: 1");
+    expect(peers.text).toContain("static_peers: 2");
     expect(peers.text).toContain("name=host-b");
+    expect(peers.details.knownPeers).toEqual([
+      {
+        nodeId: "node_01PEER00000000000000000000",
+        name: "host-b",
+        peerName: "nxs-dev1",
+        hubInstanceId: "hub_01PEER00000000000000000000",
+        endpoint: "wss://172.30.20.51:33105/v1/hub",
+        lastSeenAt: "2026-05-22T16:00:00.000Z",
+        trustState: "trusted",
+        authState: "authenticated",
+        source: "discovered+static",
+      },
+      {
+        nodeId: "node_01STATIC000000000000000000",
+        name: "base-ops",
+        hubInstanceId: "hub_01STATIC000000000000000000",
+        endpoint: "wss://172.30.10.20:64993/v1/hub",
+        trustState: "stale",
+        authState: "not_attempted",
+        source: "static",
+      },
+    ]);
     expect(peers.details.discoveredPeers).toEqual([
       {
         nodeId: "node_01PEER00000000000000000000",
@@ -107,6 +141,7 @@ describe("buildOnclavePeers", () => {
         lastSeenAt: "2026-05-22T16:00:00.000Z",
         trustState: "trusted",
         authState: "authenticated",
+        source: "discovered+static",
       },
     ]);
   });
