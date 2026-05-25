@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { AuditedHubRuntime } from "../../src/onclave/audited-runtime";
-import type { AuditEventName, AuditMetadata } from "../../src/onclave/audit";
-import type { DeliveredPrompt, MessageResponse } from "../../src/onclave/messages";
-import type { LocalAgentRegistration } from "../../src/onclave/local-registry";
+import { AuditedHubRuntime } from "../../packages/core/src/onclave/audited-runtime";
+import type { AuditEventName, AuditMetadata } from "../../packages/core/src/onclave/audit";
+import type { DeliveredPrompt, MessageResponse } from "../../packages/core/src/onclave/messages";
+import type { LocalAgentRegistration } from "../../packages/core/src/onclave/local-registry";
 
 const NOW = "2026-05-21T00:00:00.000Z";
 

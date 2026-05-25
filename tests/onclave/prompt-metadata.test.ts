@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { assertAsyncReplyablePrompt } from "../../src/onclave/prompt-metadata";
+import { assertAsyncReplyablePrompt } from "../../packages/core/src/onclave/prompt-metadata";
 
 describe("assertAsyncReplyablePrompt", () => {
   it("accepts async messages with origin routing metadata", () => {

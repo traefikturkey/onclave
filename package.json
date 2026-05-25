@@ -6,12 +6,15 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "onclave:acceptance-host": "bun scripts/onclave-acceptance-host.ts"
+    "onclave:acceptance-host": "bun scripts/onclave-acceptance-host.ts",
+    "setup": "pnpm install",
+    "check": "pnpm typecheck && pnpm test"
   },
   "dependencies": {
     "@noble/ed25519": "^3.0.0",
     "selfsigned": "^5.5.0",
-    "ws": "^8.20.1"
+    "ws": "^8.20.1",
+    "@earendil-works/pi-tui": "^0.75.5"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.75.4",
@@ -19,5 +22,11 @@
     "@types/ws": "^8.18.1",
     "typebox": "^1.1.38",
     "typescript": "^5.9.3"
+  },
+  "packageManager": "pnpm@10.0.0",
+  "pi": {
+    "extensions": [
+      "./extensions/pi-onclave/src/onclave.ts"
+    ]
   }
 }

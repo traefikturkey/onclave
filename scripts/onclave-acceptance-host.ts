@@ -2,11 +2,11 @@
 import { access, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { loadOnclaveConfig, writeOnclaveConfig, type OnclaveConfig, type StaticPeerConfig } from "../src/onclave/config";
-import { loadOrCreateIdentity, type OnclaveIdentity } from "../src/onclave/identity";
-import type { HubState } from "../src/onclave/local-hub";
-import { getOnclavePaths } from "../src/onclave/state";
-import { formatAuthorizedKeyLine } from "../src/onclave/trust";
+import { loadOnclaveConfig, writeOnclaveConfig, type OnclaveConfig, type StaticPeerConfig } from "../packages/core/src/onclave/config";
+import { loadOrCreateIdentity, type OnclaveIdentity } from "../packages/core/src/onclave/identity";
+import type { HubState } from "../packages/core/src/onclave/local-hub";
+import { getOnclavePaths } from "../packages/core/src/onclave/state";
+import { formatAuthorizedKeyLine } from "../packages/core/src/onclave/trust";
 
 export type AcceptanceHostOptions = {
   root: string;

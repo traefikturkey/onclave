@@ -3,7 +3,7 @@ import {
   createDiscoveryPacket,
   DiscoveryPeerCache,
   parseDiscoveryPacket,
-} from "../../src/onclave/discovery";
+} from "../../packages/core/src/onclave/discovery";
 
 describe("discovery packets", () => {
   it("creates metadata-only discovery packets", () => {

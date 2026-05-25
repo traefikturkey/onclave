@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createServer, type Server } from "node:net";
-import { bindLocalService } from "../../src/onclave/local-service";
+import { bindLocalService } from "../../packages/core/src/onclave/local-service";
 
 const servers: Server[] = [];
 

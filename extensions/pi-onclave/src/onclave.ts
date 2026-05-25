@@ -3,29 +3,29 @@ import { homedir, networkInterfaces } from "node:os";
 import { basename } from "node:path";
 import { Type } from "typebox";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { appendAuditEvent, type AuditEventName, type AuditMetadata } from "../src/onclave/audit";
-import { bootstrapLocalHub, type BootstrapLocalHubResult } from "../src/onclave/bootstrap";
-import { findStaticPeer, loadOnclaveConfig } from "../src/onclave/config";
-import { createLocalAgentRegistration } from "../src/onclave/extension-helpers";
-import { loadIdentityPrivateKeyHex } from "../src/onclave/identity";
-import { createRemoteHubClient, RemoteHubAuthError } from "../src/onclave/remote-client";
-import type { DeliveredPrompt } from "../src/onclave/messages";
-import { renderOnclavePeerWidget } from "../src/onclave/peer-widget";
-import type { LocalAgentRegistration } from "../src/onclave/local-registry";
+import { appendAuditEvent, type AuditEventName, type AuditMetadata } from "../../../packages/core/src/onclave/audit";
+import { bootstrapLocalHub, type BootstrapLocalHubResult } from "../../../packages/core/src/onclave/bootstrap";
+import { findStaticPeer, loadOnclaveConfig } from "../../../packages/core/src/onclave/config";
+import { createLocalAgentRegistration } from "../../../packages/core/src/onclave/extension-helpers";
+import { loadIdentityPrivateKeyHex } from "../../../packages/core/src/onclave/identity";
+import { createRemoteHubClient, RemoteHubAuthError } from "../../../packages/core/src/onclave/remote-client";
+import type { DeliveredPrompt } from "../../../packages/core/src/onclave/messages";
+import { renderOnclavePeerWidget } from "../../../packages/core/src/onclave/peer-widget";
+import type { LocalAgentRegistration } from "../../../packages/core/src/onclave/local-registry";
 import {
   assertAsyncReplyablePrompt,
   type PromptOriginMetadata,
-} from "../src/onclave/prompt-metadata";
-import { getOnclavePaths } from "../src/onclave/state";
+} from "../../../packages/core/src/onclave/prompt-metadata";
+import { getOnclavePaths } from "../../../packages/core/src/onclave/state";
 import {
   buildKnownOnclavePeers,
   buildOnclaveAgentList,
   buildOnclavePeers,
   buildOnclaveStatus,
   choosePreferredRemoteEndpoint,
-} from "../src/onclave/status";
-import { addAuthorizedKeyLine } from "../src/onclave/trust";
-import { sendWssFrames } from "../src/onclave/wss-transport";
+} from "../../../packages/core/src/onclave/status";
+import { addAuthorizedKeyLine } from "../../../packages/core/src/onclave/trust";
+import { sendWssFrames } from "../../../packages/core/src/onclave/wss-transport";
 
 const DEFAULT_DISCOVERY_PORT = 48889;
 const DEFAULT_BROADCAST_ADDRESS = "255.255.255.255";

@@ -1,11 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { LocalAgentRegistry } from "../../src/onclave/local-registry";
+import { LocalAgentRegistry } from "../../packages/core/src/onclave/local-registry";
 import {
   MessageRouter,
   type DeliveredPrompt,
   type MessageResponse,
-} from "../../src/onclave/messages";
-import type { SendPromptFrame } from "../../src/onclave/transport";
+} from "../../packages/core/src/onclave/messages";
+import type { SendPromptFrame } from "../../packages/core/src/onclave/transport";
 
 const NOW = "2026-05-21T00:00:00.000Z";
 

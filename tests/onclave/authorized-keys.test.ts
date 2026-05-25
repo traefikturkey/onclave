@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   parseAuthorizedKeys,
   parseSshEd25519PublicKeyLine,
-} from "../../src/onclave/authorized-keys";
+} from "../../packages/core/src/onclave/authorized-keys";
 
 const VALID_KEY_LINE =
   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIM1NZk8j6HsQb8Bv0yFVCNLU4lSxt1z0XkTPMFCBmbix test@example";

@@ -2,9 +2,9 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { addAuthorizedKeyLine, formatAuthorizedKeyLine, loadAuthorizedKeys } from "../../src/onclave/trust";
-import { getOnclavePaths } from "../../src/onclave/state";
-import type { OnclaveIdentity } from "../../src/onclave/identity";
+import { addAuthorizedKeyLine, formatAuthorizedKeyLine, loadAuthorizedKeys } from "../../packages/core/src/onclave/trust";
+import { getOnclavePaths } from "../../packages/core/src/onclave/state";
+import type { OnclaveIdentity } from "../../packages/core/src/onclave/identity";
 
 const tempDirs: string[] = [];
 const VALID_KEY_LINE =
@@ -59,7 +59,7 @@ describe("formatAuthorizedKeyLine", () => {
     const identity: OnclaveIdentity = {
       version: 1,
       nodeId: "node_01KS6QDHA43K8FH6AATBTMATHD",
-      publicKey: "cd4d664f23e87b106fc06fd3215508d2d4e254b1b75cf45e44cf30508199b8b1",
+      publicKey: "cd4d664f23e87b106fc06fd3215508d2d4e254b1b75cf45e44cf30508199b8b1", // pragma: allowlist secret
       privateKeyPath: "/tmp/onclave/identity.key",
       createdAt: "2026-05-21T00:00:00.000Z",
     };

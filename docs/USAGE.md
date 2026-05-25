@@ -31,13 +31,13 @@ From this repository, the most direct way to load `Onclave` is with Pi's
 `--extension` flag:
 
 ```bash
-pi -e ./extensions/onclave.ts
+pi -e ./extensions/pi-onclave
 ```
 
 If you want Pi to ignore other discovered extensions and load only this one:
 
 ```bash
-pi --no-extensions -e ./extensions/onclave.ts
+pi --no-extensions -e ./extensions/pi-onclave
 ```
 
 Pi also supports loading extensions from auto-discovered locations such as
@@ -48,7 +48,7 @@ from a checkout of this repository.
 
 | Flag | Meaning |
 | --- | --- |
-| `-e`, `--extension <source>` | Load `extensions/onclave.ts` directly |
+| `-e`, `--extension <source>` | Load `extensions/pi-onclave` directly |
 | `--no-extensions` | Disable extension auto-discovery and load only explicitly provided extensions |
 
 ### Onclave Extension Flags
@@ -65,18 +65,18 @@ from a checkout of this repository.
 Examples:
 
 ```bash
-pi -e ./extensions/onclave.ts --name host-a
+pi -e ./extensions/pi-onclave --name host-a
 ```
 
 ```bash
-pi -e ./extensions/onclave.ts \
+pi -e ./extensions/pi-onclave \
   --name reviewer \
   --purpose "Respond to remote review requests" \
   --color "#22c55e"
 ```
 
 ```bash
-pi --no-extensions -e ./extensions/onclave.ts --explicit
+pi --no-extensions -e ./extensions/pi-onclave --explicit
 ```
 
 ## Quick Starts
@@ -89,7 +89,7 @@ registration work.
 Start Pi with `Onclave` enabled:
 
 ```bash
-pi -e ./extensions/onclave.ts --name local-a
+pi -e ./extensions/pi-onclave --name local-a
 ```
 
 Then run:
@@ -102,7 +102,7 @@ onclave_agents
 Open a second Pi session with the same extension:
 
 ```bash
-pi -e ./extensions/onclave.ts --name local-b
+pi -e ./extensions/pi-onclave --name local-b
 ```
 
 Then run:
@@ -126,13 +126,13 @@ Use this when you want two trusted machines to talk over the LAN.
 On Host A:
 
 ```bash
-pi -e ./extensions/onclave.ts --name host-a
+pi -e ./extensions/pi-onclave --name host-a
 ```
 
 On Host B:
 
 ```bash
-pi -e ./extensions/onclave.ts --name host-b
+pi -e ./extensions/pi-onclave --name host-b
 ```
 
 On both hosts, run:
@@ -459,7 +459,7 @@ Use this only when the inbound message explicitly tells you to use
 ### Load Onclave for a named responder session
 
 ```bash
-pi -e ./extensions/onclave.ts \
+pi -e ./extensions/pi-onclave \
   --name responder \
   --purpose "Handle inbound Onclave prompts" \
   --color "#3b82f6"
@@ -468,7 +468,7 @@ pi -e ./extensions/onclave.ts \
 ### Start clean with only this extension
 
 ```bash
-pi --no-extensions -e ./extensions/onclave.ts --name host-a
+pi --no-extensions -e ./extensions/pi-onclave --name host-a
 ```
 
 ### Trust a peer after it sends you its key

@@ -1,13 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import { keygenAsync } from "@noble/ed25519";
-import type { AuditEventName, AuditMetadata } from "../../src/onclave/audit";
-import { parseAuthorizedKeys } from "../../src/onclave/authorized-keys";
+import type { AuditEventName, AuditMetadata } from "../../packages/core/src/onclave/audit";
+import { parseAuthorizedKeys } from "../../packages/core/src/onclave/authorized-keys";
 import {
   signHandshakePayload,
   type HandshakePayload,
   type ServerHelloFrame,
-} from "../../src/onclave/handshake";
-import { HubTransportAuthGate, type ClientAuthFrame } from "../../src/onclave/transport";
+} from "../../packages/core/src/onclave/handshake";
+import { HubTransportAuthGate, type ClientAuthFrame } from "../../packages/core/src/onclave/transport";
 
 const NOW = "2026-05-21T00:00:00.000Z";
 

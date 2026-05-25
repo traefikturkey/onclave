@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import onclaveExtension from "../../extensions/onclave";
+import onclaveExtension from "../../extensions/pi-onclave/src/onclave";
 
 type RegisteredTool = { name: string; parameters?: unknown; execute?: (...args: any[]) => unknown };
 type RegisteredCommand = { name: string; handler?: (...args: any[]) => unknown };

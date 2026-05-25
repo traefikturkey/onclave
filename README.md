@@ -21,11 +21,67 @@ prompt routing between Pi sessions on trusted machines.
 
 ## Quick Start
 
-From this repository:
+From this repository, the happy developer path is:
 
 ```bash
-pi --no-extensions -e ./extensions/onclave.ts --name host-a
+just setup
+just check
+just pi-local
 ```
+
+- `just setup` installs dependencies with pnpm.
+- `just check` runs typecheck and tests.
+- `just pi-local` starts Pi with `./extensions/pi-onclave` loaded.
+
+For a named local session, run Pi directly:
+
+```bash
+pi -e ./extensions/pi-onclave --name host-a
+```
+
+## Install the Pi Extension
+
+Use one of these install/load paths depending on what you are trying to do.
+
+### Local development load
+
+Use this while working in this repo:
+
+```bash
+just setup
+just pi-local
+```
+
+Equivalent direct Pi command:
+
+```bash
+pi -e ./extensions/pi-onclave
+```
+
+### Local package install
+
+Use this to test package metadata from a local checkout:
+
+```bash
+pi install .
+```
+
+### Git package install
+
+Use this to install from a Git remote:
+
+```bash
+pi install git:git@github.com:traefikturkey/onclave.git
+```
+
+After installing from a local path or Git URL, start Pi normally and run:
+
+```text
+onclave_status
+```
+
+Loading `extensions/pi-onclave` directly is supported when the directory remains
+inside this repo checkout; it is not a standalone copied package yet.
 
 Then inside Pi:
 
@@ -56,7 +112,7 @@ bun run onclave:acceptance-host -- --host-name host-a
 
 ## Current Usage Model
 
-1. Start Pi with `extensions/onclave.ts` loaded.
+1. Start Pi with `extensions/pi-onclave` loaded from inside this repo checkout.
 2. Run `onclave_status` to initialize or reuse the local hub.
 3. Exchange `ssh-ed25519` public key lines with trusted peers.
 4. Use `onclave_peers` and `onclave_remote_agents` to find reachable remote

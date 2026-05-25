@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadIdentityPrivateKeyHex, loadOrCreateIdentity } from "../../src/onclave/identity";
-import { getOnclavePaths } from "../../src/onclave/state";
+import { loadIdentityPrivateKeyHex, loadOrCreateIdentity } from "../../packages/core/src/onclave/identity";
+import { getOnclavePaths } from "../../packages/core/src/onclave/state";
 
 const tempDirs: string[] = [];
 

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { atomicWriteJson, ensureOnclaveRoot, getOnclavePaths } from "../../src/onclave/state";
+import { atomicWriteJson, ensureOnclaveRoot, getOnclavePaths } from "../../packages/core/src/onclave/state";
 
 const tempDirs: string[] = [];
 

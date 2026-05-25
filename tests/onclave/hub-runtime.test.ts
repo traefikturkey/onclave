@@ -4,15 +4,15 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { keygenAsync } from "@noble/ed25519";
-import { parseAuthorizedKeys } from "../../src/onclave/authorized-keys";
-import { formatAuthorizedKeyLine } from "../../src/onclave/trust";
-import type { DiscoveryUdpSocket, UdpRemoteInfo } from "../../src/onclave/discovery";
-import { signHandshakePayload, type HandshakePayload, type ServerHelloFrame } from "../../src/onclave/handshake";
-import type { RemoteHubClient } from "../../src/onclave/remote-client";
-import { OnclaveHubRuntime } from "../../src/onclave/hub-runtime";
-import type { LocalAgent, LocalAgentRegistration } from "../../src/onclave/local-registry";
-import type { ClientAuthFrame } from "../../src/onclave/transport";
-import { sendAuthenticatedWssFrames, type TlsMaterial } from "../../src/onclave/wss-transport";
+import { parseAuthorizedKeys } from "../../packages/core/src/onclave/authorized-keys";
+import { formatAuthorizedKeyLine } from "../../packages/core/src/onclave/trust";
+import type { DiscoveryUdpSocket, UdpRemoteInfo } from "../../packages/core/src/onclave/discovery";
+import { signHandshakePayload, type HandshakePayload, type ServerHelloFrame } from "../../packages/core/src/onclave/handshake";
+import type { RemoteHubClient } from "../../packages/core/src/onclave/remote-client";
+import { OnclaveHubRuntime } from "../../packages/core/src/onclave/hub-runtime";
+import type { LocalAgent, LocalAgentRegistration } from "../../packages/core/src/onclave/local-registry";
+import type { ClientAuthFrame } from "../../packages/core/src/onclave/transport";
+import { sendAuthenticatedWssFrames, type TlsMaterial } from "../../packages/core/src/onclave/wss-transport";
 
 const NOW = "2026-05-21T00:00:00.000Z";
 let tempDir: string | null = null;
@@ -137,8 +137,8 @@ describe("OnclaveHubRuntime", () => {
     const serverKeys = await createKeyMaterial();
     const authorizedIdentity = {
       version: 1 as const,
-      nodeId: "node_01ARZ3NDEKTSV4RRFFQ69G5FAV",
-      publicKey: serverKeys.publicKeyHex,
+      nodeId: "node_01ARZ3NDEKTSV4RRFFQ69G5FAV", // pragma: allowlist secret
+      publicKey: serverKeys.publicKeyHex, // pragma: allowlist secret
       privateKeyPath: "/tmp/identity.key",
       createdAt: NOW,
     };
