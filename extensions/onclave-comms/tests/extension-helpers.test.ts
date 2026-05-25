@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { createLocalAgentRegistration } from "../src/lib/extension-helpers";
 
 describe("createLocalAgentRegistration", () => {

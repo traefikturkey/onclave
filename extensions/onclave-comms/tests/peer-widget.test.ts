@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { formatPeerState, renderOnclavePeerWidget } from "../src/lib/peer-widget";
 
 const stripAnsi = (value: string) => value.replace(/\x1b\[[0-9;]*m/g, "");

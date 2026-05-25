@@ -46,7 +46,7 @@ keys under `~/.ssh/` for this system.
 From this repository on each host, run:
 
 ```bash
-bun run onclave:acceptance-host -- --host-name host-a
+pnpm run onclave:acceptance-host -- --host-name host-a
 ```
 
 The helper creates the local Onclave identity if needed, then prints:
@@ -64,7 +64,7 @@ helper to print endpoint metadata.
 After you know the peer's endpoint and IDs, you can also write a static peer:
 
 ```bash
-bun run onclave:acceptance-host -- \
+pnpm run onclave:acceptance-host -- \
   --host-name host-a \
   --peer-name host-b \
   --peer-node-id node_... \
@@ -76,7 +76,7 @@ bun run onclave:acceptance-host -- \
 Optional audit check:
 
 ```bash
-bun run onclave:acceptance-host -- --audit-scan
+pnpm run onclave:acceptance-host -- --audit-scan
 ```
 
 ## Acceptance Helper Script
@@ -96,9 +96,9 @@ Use it to reduce manual copy/paste during LAN acceptance runs. The helper can:
 
 Recommended order:
 
-1. Run `bun run onclave:acceptance-host -- --host-name host-b` on Host B and
+1. Run `pnpm run onclave:acceptance-host -- --host-name host-b` on Host B and
    keep one Pi session available to receive inbound prompts.
-2. Run `bun run onclave:acceptance-host -- --host-name host-a` on Host A.
+2. Run `pnpm run onclave:acceptance-host -- --host-name host-a` on Host A.
 3. Follow the printed trust and remote-send instructions in the two Pi sessions.
 
 ## First Run

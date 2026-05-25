@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { keygenAsync } from "@noble/ed25519";
 import type { AuditEventName, AuditMetadata } from "../src/lib/audit";
 import { parseAuthorizedKeys } from "../src/lib/authorized-keys";

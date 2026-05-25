@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import onclaveExtension from "../src/onclave-comms";
 
 type RegisteredTool = { name: string; parameters?: unknown; execute?: (...args: any[]) => unknown };

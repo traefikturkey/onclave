@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import type { StaticPeerConfig } from "../src/lib/config";
 import type { DiscoveredPeer } from "../src/lib/discovery";
 import type { LocalAgent } from "../src/lib/local-registry";

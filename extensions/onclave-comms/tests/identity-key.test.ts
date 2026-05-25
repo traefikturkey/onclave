@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { afterEach, describe, expect, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { loadIdentityPrivateKeyHex, loadOrCreateIdentity } from "../src/lib/identity";
@@ -28,7 +28,7 @@ describe("loadIdentityPrivateKeyHex", () => {
     const root = await mkdtemp(join(tmpdir(), "onclave-identity-key-"));
     tempDirs.push(root);
     const paths = getOnclavePaths(root);
-    await Bun.write(paths.privateKey, "not-a-key\n");
+    await writeFile(paths.privateKey, "not-a-key\n", "utf8");
 
     await expect(loadIdentityPrivateKeyHex(paths)).rejects.toThrow(/private key must be 32 bytes/);
   });

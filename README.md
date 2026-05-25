@@ -94,7 +94,7 @@ onclave_peers
 If you want help preparing a host for manual acceptance testing:
 
 ```bash
-bun run onclave:acceptance-host -- --host-name host-a
+pnpm run onclave:acceptance-host -- --host-name host-a
 ```
 
 ## Documentation

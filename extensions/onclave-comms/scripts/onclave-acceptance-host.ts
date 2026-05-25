@@ -1,4 +1,3 @@
-#!/usr/bin/env bun
 import { access, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -71,7 +70,7 @@ export function renderAcceptanceHostReport(state: LocalAcceptanceState, options:
 
   lines.push("## Step B: in Pi on the other host, trust this host");
   lines.push("```text");
-  lines.push(state.authorizedKeyLine ? `onclave_trust_add public_key_line=\"${state.authorizedKeyLine}\"` : "bun run onclave:acceptance-host -- --host-name host-a");
+  lines.push(state.authorizedKeyLine ? `onclave_trust_add public_key_line=\"${state.authorizedKeyLine}\"` : "pnpm run onclave:acceptance-host -- --host-name host-a");
   lines.push("```");
   lines.push("");
 
@@ -101,7 +100,7 @@ export function renderAcceptanceHostReport(state: LocalAcceptanceState, options:
   } else {
     lines.push("## Step D: after you know the other host endpoint, rerun with peer details");
     lines.push("```bash");
-    lines.push("bun run onclave:acceptance-host -- --host-name host-a \\");
+    lines.push("pnpm run onclave:acceptance-host -- --host-name host-a \\");
     lines.push("  --peer-name host-b \\");
     lines.push("  --peer-node-id node_... \\");
     lines.push("  --peer-hub-instance-id hub_... \\");
@@ -246,7 +245,7 @@ async function fileExists(path: string): Promise<boolean> {
 }
 
 function usage(): void {
-  console.log(`Usage: bun run onclave:acceptance-host -- [options]
+  console.log(`Usage: pnpm run onclave:acceptance-host -- [options]
 
 Options:
   --root PATH                  Override Onclave state root. Default: ~/.pi/onclave

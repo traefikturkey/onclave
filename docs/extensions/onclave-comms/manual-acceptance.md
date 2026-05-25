@@ -41,7 +41,7 @@ Default discovery port: `48889/udp`.
 From this repository on each host, run:
 
 ```bash
-bun run onclave:acceptance-host -- --host-name host-a
+pnpm run onclave:acceptance-host -- --host-name host-a
 ```
 
 Run it once before starting Pi to create the local Onclave identity and print
@@ -52,7 +52,7 @@ says `not started yet` on the first run, that is expected.
 After collecting peer endpoint metadata, you can write a static peer entry:
 
 ```bash
-bun run onclave:acceptance-host -- \
+pnpm run onclave:acceptance-host -- \
   --host-name host-a \
   --peer-name host-b \
   --peer-node-id node_... \

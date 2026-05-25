@@ -19,4 +19,4 @@ pi-local-no-extensions:
     pi --no-extensions
 
 pi-smoke:
-    bun test extensions/onclave-comms/tests/extension.test.ts
+    pnpm exec vitest run extensions/onclave-comms/tests/extension.test.ts

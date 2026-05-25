@@ -19,8 +19,8 @@ surface, audit-safe runtime events, and physical two-host LAN acceptance.
 Last verified commands:
 
 ```bash
-bun test
-bun run typecheck
+pnpm test
+pnpm typecheck
 ```
 
 Manual verification:
@@ -31,8 +31,8 @@ Manual verification:
 
 Result:
 
-- `bun test`: 127 passing tests
-- `bun run typecheck`: passing
+- `pnpm test`: 142 passing tests
+- `pnpm typecheck`: passing
 - manual LAN acceptance: passed on two physical hosts
 
 ## Phase Progress
@@ -125,8 +125,7 @@ Scripts:
 Project/config files:
 
 - `package.json`
-- `bun.lock`
-- `bunfig.toml`
+- `pnpm-lock.yaml`
 - `tsconfig.json`
 - `./decisions.md`
 - `./manual-acceptance.md`

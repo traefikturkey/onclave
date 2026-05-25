@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it } from "vitest";
 import { AuditedHubRuntime } from "../src/lib/audited-runtime";
 import type { AuditEventName, AuditMetadata } from "../src/lib/audit";
 import type { DeliveredPrompt, MessageResponse } from "../src/lib/messages";
