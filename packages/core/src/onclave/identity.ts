@@ -13,7 +13,7 @@ export type OnclaveIdentity = {
   createdAt: string;
 };
 
-const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // pragma: allowlist secret
 
 export async function loadOrCreateIdentity(paths: OnclavePaths): Promise<OnclaveIdentity> {
   await ensureOnclaveRoot(paths.root);

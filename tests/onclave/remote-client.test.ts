@@ -4,19 +4,19 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { keygenAsync } from "@noble/ed25519";
-import { parseAuthorizedKeys } from "../../src/onclave/authorized-keys";
-import type { LocalAgent } from "../../src/onclave/local-registry";
+import { parseAuthorizedKeys } from "../../packages/core/src/onclave/authorized-keys";
+import type { LocalAgent } from "../../packages/core/src/onclave/local-registry";
 import {
   createRemoteHubClient,
   RemoteHubAuthError,
   type RemoteHubClientIdentity,
-} from "../../src/onclave/remote-client";
+} from "../../packages/core/src/onclave/remote-client";
 import {
   HubFrameProcessor,
   HubTransportAuthGate,
   type SendPromptFrame,
-} from "../../src/onclave/transport";
-import { startWssHubServer, type TlsMaterial } from "../../src/onclave/wss-transport";
+} from "../../packages/core/src/onclave/transport";
+import { startWssHubServer, type TlsMaterial } from "../../packages/core/src/onclave/wss-transport";
 
 const NOW = "2026-05-21T00:00:00.000Z";
 let tempDir: string | null = null;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { formatPeerState, renderOnclavePeerWidget } from "../../src/onclave/peer-widget";
+import { formatPeerState, renderOnclavePeerWidget } from "../../packages/core/src/onclave/peer-widget";
 
 const stripAnsi = (value: string) => value.replace(/\x1b\[[0-9;]*m/g, "");
 

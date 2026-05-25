@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
-import { resolveProjectLabel } from "../../src/onclave/project-label";
+import { resolveProjectLabel } from "../../packages/core/src/onclave/project-label";
 
 const tempDirs: string[] = [];
 

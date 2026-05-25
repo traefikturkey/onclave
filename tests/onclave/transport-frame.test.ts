@@ -1,18 +1,18 @@
 import { describe, expect, it } from "bun:test";
 import { keygenAsync } from "@noble/ed25519";
-import { parseAuthorizedKeys } from "../../src/onclave/authorized-keys";
+import { parseAuthorizedKeys } from "../../packages/core/src/onclave/authorized-keys";
 import {
   signHandshakePayload,
   type HandshakePayload,
   type ServerHelloFrame,
-} from "../../src/onclave/handshake";
+} from "../../packages/core/src/onclave/handshake";
 import {
   HubFrameProcessor,
   HubTransportAuthGate,
   type ClientAuthFrame,
   type SendPromptFrame,
-} from "../../src/onclave/transport";
-import type { LocalAgent, LocalAgentRegistration } from "../../src/onclave/local-registry";
+} from "../../packages/core/src/onclave/transport";
+import type { LocalAgent, LocalAgentRegistration } from "../../packages/core/src/onclave/local-registry";
 
 const NOW = "2026-05-21T00:00:00.000Z";
 

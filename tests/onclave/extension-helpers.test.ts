@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { createLocalAgentRegistration } from "../../src/onclave/extension-helpers";
+import { createLocalAgentRegistration } from "../../packages/core/src/onclave/extension-helpers";
 
 describe("createLocalAgentRegistration", () => {
   it("creates a local registration with explicit metadata", async () => {

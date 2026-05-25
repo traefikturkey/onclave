@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { appendAuditEvent } from "../../src/onclave/audit";
+import { appendAuditEvent } from "../../packages/core/src/onclave/audit";
 
 const tempDirs: string[] = [];
 

@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { findStaticPeer, loadOnclaveConfig, parseOnclaveConfig, writeOnclaveConfig } from "../../src/onclave/config";
-import { getOnclavePaths } from "../../src/onclave/state";
+import { findStaticPeer, loadOnclaveConfig, parseOnclaveConfig, writeOnclaveConfig } from "../../packages/core/src/onclave/config";
+import { getOnclavePaths } from "../../packages/core/src/onclave/state";
 
 const tempDirs: string[] = [];
 

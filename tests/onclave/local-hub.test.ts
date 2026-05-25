@@ -7,8 +7,8 @@ import {
   startOrDiscoverLocalHub,
   writeHubState,
   type HubState,
-} from "../../src/onclave/local-hub";
-import { getOnclavePaths } from "../../src/onclave/state";
+} from "../../packages/core/src/onclave/local-hub";
+import { getOnclavePaths } from "../../packages/core/src/onclave/state";
 
 const tempDirs: string[] = [];
 

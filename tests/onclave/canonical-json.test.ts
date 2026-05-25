@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { canonicalJson } from "../../src/onclave/canonical-json";
+import { canonicalJson } from "../../packages/core/src/onclave/canonical-json";
 
 describe("canonicalJson", () => {
   it("sorts object keys deterministically", () => {

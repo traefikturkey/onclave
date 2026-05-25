@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   LocalAgentRegistry,
   type LocalAgentRegistration,
-} from "../../src/onclave/local-registry";
+} from "../../packages/core/src/onclave/local-registry";
 
 const NOW = "2026-05-21T00:00:00.000Z";
 

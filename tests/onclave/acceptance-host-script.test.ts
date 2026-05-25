@@ -8,7 +8,7 @@ import {
   upsertStaticPeer,
   type AcceptanceHostOptions,
 } from "../../scripts/onclave-acceptance-host";
-import type { OnclaveConfig } from "../../src/onclave/config";
+import type { OnclaveConfig } from "../../packages/core/src/onclave/config";
 
 const tempDirs: string[] = [];
 
@@ -24,7 +24,7 @@ describe("Onclave acceptance host script", () => {
         identity: {
           version: 1,
           nodeId: "node_abc",
-          publicKey: "cd4d664f23e87b106fc06fd3215508d2d4e254b1b75cf45e44cf30508199b8b1",
+          publicKey: "cd4d664f23e87b106fc06fd3215508d2d4e254b1b75cf45e44cf30508199b8b1", // pragma: allowlist secret
           privateKeyPath: "/tmp/onclave/identity.key",
           createdAt: "2026-05-21T00:00:00.000Z",
         },

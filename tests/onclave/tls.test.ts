@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { platform, tmpdir } from "node:os";
-import { loadOrCreateTlsMaterial } from "../../src/onclave/tls";
-import { getOnclavePaths } from "../../src/onclave/state";
+import { loadOrCreateTlsMaterial } from "../../packages/core/src/onclave/tls";
+import { getOnclavePaths } from "../../packages/core/src/onclave/state";
 
 const tempDirs: string[] = [];
 
@@ -28,7 +28,7 @@ describe("loadOrCreateTlsMaterial", () => {
 
     expect(generations).toBe(1);
     expect(material.cert).toContain("BEGIN CERTIFICATE");
-    expect(material.key).toContain("BEGIN PRIVATE KEY");
+    expect(material.key).toContain("BEGIN PRIVATE KEY"); // pragma: allowlist secret
     expect(await readFile(join(root, "tls.cert.pem"), "utf8")).toBe(material.cert);
     expect(await readFile(join(root, "tls.key.pem"), "utf8")).toBe(material.key);
     expect(join(root, "tls.key.pem")).not.toContain(".ssh");

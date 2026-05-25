@@ -1,12 +1,12 @@
 import { describe, expect, it } from "bun:test";
-import type { StaticPeerConfig } from "../../src/onclave/config";
-import type { DiscoveredPeer } from "../../src/onclave/discovery";
-import type { LocalAgent } from "../../src/onclave/local-registry";
+import type { StaticPeerConfig } from "../../packages/core/src/onclave/config";
+import type { DiscoveredPeer } from "../../packages/core/src/onclave/discovery";
+import type { LocalAgent } from "../../packages/core/src/onclave/local-registry";
 import {
   buildOnclaveAgentList,
   buildOnclavePeers,
   buildOnclaveStatus,
-} from "../../src/onclave/status";
+} from "../../packages/core/src/onclave/status";
 
 describe("buildOnclaveStatus", () => {
   it("includes live node and hub IDs plus filtered LAN-reachable endpoints", () => {

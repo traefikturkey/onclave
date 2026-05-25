@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import type { AuditEventName, AuditMetadata } from "../../src/onclave/audit";
+import type { AuditEventName, AuditMetadata } from "../../packages/core/src/onclave/audit";
 import {
   DiscoveryService,
   type DiscoveryUdpSocket,
   type UdpRemoteInfo,
-} from "../../src/onclave/discovery";
+} from "../../packages/core/src/onclave/discovery";
 
 describe("DiscoveryService", () => {
   it("binds the UDP socket and broadcasts presence immediately on start", async () => {

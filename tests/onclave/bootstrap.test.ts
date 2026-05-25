@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { bootstrapLocalHub } from "../../src/onclave/bootstrap";
-import { getOnclavePaths } from "../../src/onclave/state";
+import { bootstrapLocalHub } from "../../packages/core/src/onclave/bootstrap";
+import { getOnclavePaths } from "../../packages/core/src/onclave/state";
 
 const tempDirs: string[] = [];
 const NOW = "2026-05-21T00:00:00.000Z";

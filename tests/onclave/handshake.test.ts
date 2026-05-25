@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { keygenAsync } from "@noble/ed25519";
-import { parseAuthorizedKeys } from "../../src/onclave/authorized-keys";
+import { parseAuthorizedKeys } from "../../packages/core/src/onclave/authorized-keys";
 import {
   ReplayCache,
   signHandshakePayload,
@@ -8,7 +8,7 @@ import {
   verifyServerHandshake,
   type HandshakePayload,
   type ServerHelloPayload,
-} from "../../src/onclave/handshake";
+} from "../../packages/core/src/onclave/handshake";
 
 const NOW = "2026-05-21T00:00:00.000Z";
 

@@ -51,7 +51,7 @@ Result:
 
 Extension:
 
-- `extensions/onclave.ts`
+- `extensions/pi-onclave`
 
 Runtime modules:
 
