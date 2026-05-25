@@ -228,11 +228,11 @@ Use these as references for Pi extension shape, tool UX, local agent registratio
 
 - Recommended next command:
   ```bash
-  /plan-it .specs/secure-lan-pi-coms/PRD.md
+  /plan-it docs/extensions/onclave-comms/onclave-comms-PRD.md
   ```
 - Review command:
   ```bash
-  /review-it .specs/secure-lan-pi-coms/PRD.md
+  /review-it docs/extensions/onclave-comms/onclave-comms-PRD.md
   ```
 - Notes for planner:
   - Read the Joyride Docker cluster files before designing UDP discovery.

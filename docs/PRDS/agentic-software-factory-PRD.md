@@ -2,7 +2,7 @@
 created: 2026-05-25
 status: draft
 parents:
-  - PRD.md
+  - ../extensions/onclave-comms/onclave-comms-PRD.md
   - observer-subscriptions-PRD.md
   - tailscale-aperture-guardrails-PRD.md
   - openclaw-hermes-integration-PRD.md

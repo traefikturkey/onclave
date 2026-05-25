@@ -1,7 +1,7 @@
 ---
 created: 2026-05-21
 status: active
-source_prd: ../../PRDS/PRD.md
+source_prd: ./onclave-comms-PRD.md
 ---
 
 # Onclave Operator Guide

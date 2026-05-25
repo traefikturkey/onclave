@@ -107,7 +107,7 @@ bun run onclave:acceptance-host -- --host-name host-a
   host-to-host validation flow
 - [Status](./docs/extensions/onclave-comms/status.md) - implementation progress and delivered scope
 - [Design Decisions](./docs/extensions/onclave-comms/decisions.md) - key v1 design choices
-- [Product Requirements](./docs/PRDS/PRD.md) - original requirements and success
+- [onclave-comms Requirements](./docs/extensions/onclave-comms/onclave-comms-PRD.md) - original communication extension requirements and success
   criteria
 
 ## Current Usage Model

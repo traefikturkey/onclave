@@ -1,7 +1,7 @@
 ---
 created: 2026-05-22
 status: draft
-parent: PRD.md
+parent: ../extensions/onclave-comms/onclave-comms-PRD.md
 ---
 
 # PRD: Tailscale Aperture Guardrails for Pi Agents
