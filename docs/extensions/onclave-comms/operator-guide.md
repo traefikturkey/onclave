@@ -1,7 +1,7 @@
 ---
 created: 2026-05-21
 status: active
-source_prd: ./PRD.md
+source_prd: ../../PRDS/PRD.md
 ---
 
 # Onclave Operator Guide
@@ -10,7 +10,7 @@ source_prd: ./PRD.md
 trust remote hubs with Ed25519 public keys, and exchange prompt/response
 messages over authenticated WSS.
 
-Start with [USAGE.md](./USAGE.md) for quick starts, extension loading,
+Start with [README.md](./README.md) for quick starts, extension loading,
 status-dot meanings, and tool examples. Use this operator guide for deeper
 runtime and troubleshooting details.
 
@@ -79,26 +79,27 @@ Optional audit check:
 bun run onclave:acceptance-host -- --audit-scan
 ```
 
-## Project Prompt Templates
+## Acceptance Helper Script
 
-This repository includes two project prompt templates under `.pi/prompts/` to
-reduce manual copy/paste during LAN acceptance runs:
+This repository includes a host-side acceptance helper script at:
 
-- `/onclave-acceptance-host-b` prepares Host B as the responder and surfaces
-  its local `sessionId` from tool details.
-- `/onclave-acceptance-host-a` discovers Host B from `onclave_peers`, picks a
-  remote `sessionId` from `onclave_remote_agents`, sends the acceptance prompt,
-  and polls for the response.
+```text
+extensions/onclave-comms/scripts/onclave-acceptance-host.ts
+```
+
+Use it to reduce manual copy/paste during LAN acceptance runs. The helper can:
+
+- initialize the local Onclave identity when needed;
+- print the local public trust line and hub metadata;
+- write optional static peer configuration; and
+- scan the audit log for obvious secret markers.
 
 Recommended order:
 
-1. Open Pi with `extensions/onclave-comms` on Host B and run
-   `/onclave-acceptance-host-b`.
-2. Open Pi with `extensions/onclave-comms` on Host A and run
-   `/onclave-acceptance-host-a`.
-
-The templates are intentionally asymmetric so Host B stays available to answer
-Host A's inbound test prompt instead of both hosts blocking on outbound waits.
+1. Run `bun run onclave:acceptance-host -- --host-name host-b` on Host B and
+   keep one Pi session available to receive inbound prompts.
+2. Run `bun run onclave:acceptance-host -- --host-name host-a` on Host A.
+3. Follow the printed trust and remote-send instructions in the two Pi sessions.
 
 ## First Run
 
@@ -275,7 +276,7 @@ work is:
 
 - trust removal or revocation helpers beyond manual `authorized_keys` edits;
 - a future trust request / approval workflow reference in
-  `docs/ONCLAVE_TRUST_UX_FUTURE.md`;
+  `./trust-ux-future.md`;
 - reverse-direction acceptance helpers so either host can run the initiator
   workflow with the same low-friction prompt-template flow;
 - richer static-peer convenience or aggregation when UDP discovery is blocked.

@@ -99,15 +99,15 @@ bun run onclave:acceptance-host -- --host-name host-a
 
 ## Documentation
 
-- [Usage Guide](./docs/USAGE.md) - quick starts, extension loading, flags,
+- [Usage Guide](./docs/extensions/onclave-comms/README.md) - quick starts, extension loading, flags,
   status dots, and tool examples
-- [Operator Guide](./docs/ONCLAVE_OPERATOR_GUIDE.md) - runtime state,
+- [Operator Guide](./docs/extensions/onclave-comms/operator-guide.md) - runtime state,
   trust exchange, discovery, messaging, and troubleshooting
-- [Manual Acceptance](./docs/ONCLAVE_MANUAL_ACCEPTANCE.md) - step-by-step
+- [Manual Acceptance](./docs/extensions/onclave-comms/manual-acceptance.md) - step-by-step
   host-to-host validation flow
-- [Status](./docs/STATUS.md) - implementation progress and delivered scope
-- [Design Decisions](./docs/ONCLAVE_DECISIONS.md) - key v1 design choices
-- [Product Requirements](./docs/PRD.md) - original requirements and success
+- [Status](./docs/extensions/onclave-comms/status.md) - implementation progress and delivered scope
+- [Design Decisions](./docs/extensions/onclave-comms/decisions.md) - key v1 design choices
+- [Product Requirements](./docs/PRDS/PRD.md) - original requirements and success
   criteria
 
 ## Current Usage Model
@@ -120,4 +120,4 @@ bun run onclave:acceptance-host -- --host-name host-a
 5. Use `onclave_send` or `onclave_remote_send` to route prompts.
 
 For the full tool reference and examples, start with
-[docs/USAGE.md](./docs/USAGE.md).
+[docs/extensions/onclave-comms/README.md](./docs/extensions/onclave-comms/README.md).

@@ -3,6 +3,9 @@
 This package contains the Pi extension entrypoint for the Onclave communication
 subsystem.
 
+Full extension documentation lives under
+[`docs/extensions/onclave-comms/`](../../docs/extensions/onclave-comms/README.md).
+
 ## Local loading
 
 From the repository root:

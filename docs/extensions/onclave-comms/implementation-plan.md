@@ -1,7 +1,7 @@
 ---
 created: 2026-05-21
 status: active
-source_prd: ./PRD.md
+source_prd: ../../PRDS/PRD.md
 ---
 
 # Implementation Plan: Secure LAN Pi Agent Communication
@@ -510,7 +510,7 @@ Exit criteria:
    that wins the local hub lock. A spawned child process remains a post-v1
    hardening option.
 
-Detailed rationale is recorded in `docs/ONCLAVE_DECISIONS.md`.
+Detailed rationale is recorded in `./decisions.md`.
 
 ## Implementation Status Update
 
@@ -578,7 +578,7 @@ protocol or security implementation.
     - consider richer trust inspection/status output if operators need a more
       guided trust-management loop;
     - evaluate a future trust request / approval flow as described in
-      `docs/ONCLAVE_TRUST_UX_FUTURE.md`.
+      `./trust-ux-future.md`.
 2. Reverse-direction and orchestration UX
     - add a reverse-direction acceptance helper so Host B can initiate the same
       validation flow back to Host A with the same low-friction workflow;

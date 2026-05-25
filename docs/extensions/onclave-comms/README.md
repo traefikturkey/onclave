@@ -10,8 +10,8 @@ prompt routing between Pi sessions.
 
 This guide is the quickest way to get productive with the current v1 tool
 surface. For deeper operational details, acceptance steps, and audit guidance,
-see [ONCLAVE_OPERATOR_GUIDE.md](./ONCLAVE_OPERATOR_GUIDE.md) and
-[ONCLAVE_MANUAL_ACCEPTANCE.md](./ONCLAVE_MANUAL_ACCEPTANCE.md).
+see [operator-guide.md](./operator-guide.md) and
+[manual-acceptance.md](./manual-acceptance.md).
 
 ## What Onclave Does
 
@@ -512,7 +512,7 @@ onclave_remote_get peer_name="bench" msg_id="msg_..."
 ## Related Documents
 
 - [README.md](../README.md)
-- [ONCLAVE_OPERATOR_GUIDE.md](./ONCLAVE_OPERATOR_GUIDE.md)
-- [ONCLAVE_MANUAL_ACCEPTANCE.md](./ONCLAVE_MANUAL_ACCEPTANCE.md)
-- [ONCLAVE_DECISIONS.md](./ONCLAVE_DECISIONS.md)
-- [STATUS.md](./STATUS.md)
+- [operator-guide.md](./operator-guide.md)
+- [manual-acceptance.md](./manual-acceptance.md)
+- [decisions.md](./decisions.md)
+- [status.md](./status.md)

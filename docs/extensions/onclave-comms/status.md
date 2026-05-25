@@ -1,8 +1,8 @@
 ---
 created: 2026-05-21
 status: active
-source_prd: ./PRD.md
-implementation_plan: ./IMPLEMENTATION_PLAN.md
+source_prd: ../../PRDS/PRD.md
+implementation_plan: ./implementation-plan.md
 ---
 
 # Status: Secure LAN Pi Agent Communication
@@ -111,16 +111,16 @@ Tests:
 
 Documentation:
 
-- `docs/COMS_LAN_DECISIONS.md`
-- `docs/COMS_LAN_MANUAL_ACCEPTANCE.md`
-- `docs/COMS_LAN_OPERATOR_GUIDE.md`
-- `docs/IMPLEMENTATION_PLAN.md`
+- `./decisions.md`
+- `./manual-acceptance.md`
+- `./operator-guide.md`
+- `./implementation-plan.md`
 - `docs/PRD.md`
-- `docs/STATUS.md`
+- `./status.md`
 
 Scripts:
 
-- `scripts/coms-lan-acceptance-host.ts`
+- `extensions/onclave-comms/scripts/onclave-acceptance-host.ts`
 
 Project/config files:
 
@@ -128,23 +128,23 @@ Project/config files:
 - `bun.lock`
 - `bunfig.toml`
 - `tsconfig.json`
-- `docs/COMS_LAN_DECISIONS.md`
-- `docs/COMS_LAN_MANUAL_ACCEPTANCE.md`
-- `docs/IMPLEMENTATION_PLAN.md`
+- `./decisions.md`
+- `./manual-acceptance.md`
+- `./implementation-plan.md`
 
 ## Completed Capabilities
 
 - Narrow `ssh-ed25519` `authorized_keys` parser.
 - Deterministic canonical JSON for signed payloads.
 - JSONL audit writer with sensitive field-name rejection.
-- State path helpers rooted under `~/.pi/coms-lan/`.
+- State path helpers rooted under `~/.pi/onclave/`.
 - Atomic JSON writes.
 - App-specific Ed25519 identity and signing key generation.
-- Persistent self-signed TLS material loading/generation under `~/.pi/coms-lan/` without requiring an external OpenSSL binary.
-- Authorized key trust loading from `~/.pi/coms-lan/authorized_keys`.
+- Persistent self-signed TLS material loading/generation under `~/.pi/onclave/` without requiring an external OpenSSL binary.
+- Authorized key trust loading from `~/.pi/onclave/authorized_keys`.
 - Public key export formatting for operator trust setup.
 - Trust append helper validates and dedupes public `ssh-ed25519` key lines.
-- Static peer config loading and validation from `~/.pi/coms-lan/config.json`.
+- Static peer config loading and validation from `~/.pi/onclave/config.json`.
 - Local hub bootstrap loads identity, trust, TLS material, and starts or reuses
   hub state.
 - Local hub state read/write and validation.
@@ -203,10 +203,10 @@ Project/config files:
   reuse, local WSS registration/send/response lookup, metadata-only discovery
   packets, and trusted remote WSS listing/send after public key exchange.
 - Manual multi-host LAN acceptance runbook is documented in
-  `docs/COMS_LAN_MANUAL_ACCEPTANCE.md`.
-- Project prompt templates under `.pi/prompts/` reduce manual operator
-  copy/paste during two-host acceptance runs.
-- Host-side acceptance helper script initializes local identity when needed,
+  `./manual-acceptance.md`.
+- Host-side acceptance helper script at
+  `extensions/onclave-comms/scripts/onclave-acceptance-host.ts` initializes
+  local identity when needed,
   prints local public key/endpoint metadata, writes optional static peers, and
   scans audit logs for obvious secret markers.
 - Physical two-host LAN acceptance completed successfully with:
@@ -218,7 +218,7 @@ Project/config files:
 
 ## Security Notes
 
-- Private signing keys and TLS keys are generated under `~/.pi/coms-lan/`, not
+- Private signing keys and TLS keys are generated under `~/.pi/onclave/`, not
   under `~/.ssh/`.
 - `authorized_keys` parsing supports only `ssh-ed25519` in v1.
 - `authorized_keys` options are rejected in v1.
@@ -239,12 +239,12 @@ Project/config files:
    option.
 2. Static/manual peers: v1 supports manual fallback through explicit remote tool
    parameters (`endpoint`, `node_id`, `hub_instance_id`) and persistent static
-   peers in `~/.pi/coms-lan/config.json`.
+   peers in `~/.pi/onclave/config.json`.
 3. Trust import UX: v1 supports file-based trust through
-   `~/.pi/coms-lan/authorized_keys`, with `/onclave-trust`,
+   `~/.pi/onclave/authorized_keys`, with `/onclave-trust`,
    `onclave_trust_info`, and `onclave_trust_add` for public-key setup.
 
-See `docs/COMS_LAN_DECISIONS.md` for rationale and consequences.
+See `./decisions.md` for rationale and consequences.
 
 ## Next Actions
 
@@ -254,7 +254,7 @@ The remaining work is post-v1 operator polish:
     - add a trust removal or revocation helper so operators do not need to edit
       `authorized_keys` manually for common removal cases;
     - consider richer trust inspection/status output if operators need it;
-    - use `docs/COMS_LAN_TRUST_UX_FUTURE.md` as the future design reference for
+    - use `./trust-ux-future.md` as the future design reference for
       a trust request / approval workflow.
 2. Reverse-direction and orchestration UX
     - add a reverse-direction acceptance helper so either host can run the

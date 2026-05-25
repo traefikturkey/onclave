@@ -1,7 +1,7 @@
 ---
 created: 2026-05-21
 status: active
-source_prd: ./PRD.md
+source_prd: ../../PRDS/PRD.md
 ---
 
 # Onclave Manual LAN Acceptance

@@ -1,7 +1,7 @@
 ---
 created: 2026-05-21
 status: active
-source_prd: ./PRD.md
+source_prd: ../../PRDS/PRD.md
 ---
 
 # Onclave v1 Decisions
@@ -152,7 +152,7 @@ Current support:
 A trust removal tool can be added later if operators need managed key revocation
 without editing `authorized_keys`. Richer trust inspection UX also remains a
 post-v1 operator improvement. A future trust request / approval workflow should
-be planned against `docs/ONCLAVE_TRUST_UX_FUTURE.md`.
+be planned against `./trust-ux-future.md`.
 
 ## Decision 5: WSS Transport Stack
 

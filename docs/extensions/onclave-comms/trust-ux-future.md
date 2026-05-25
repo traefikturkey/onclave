@@ -1,7 +1,7 @@
 ---
 created: 2026-05-22
 status: draft
-source_plan: ./IMPLEMENTATION_PLAN.md
+source_plan: ./implementation-plan.md
 ---
 
 # Future Task: Ergonomic Trust Management for Onclave
@@ -167,8 +167,8 @@ These are explicitly not recommended as the default path:
 
 This document supports the post-v1 trust management UX item listed in:
 
-- `docs/IMPLEMENTATION_PLAN.md`
-- `docs/STATUS.md`
+- `./implementation-plan.md`
+- `./status.md`
 
 It should be treated as a design reference for future planning, not as a
 required v1 completion item.
