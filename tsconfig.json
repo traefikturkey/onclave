@@ -4,7 +4,7 @@
     "module": "ESNext",
     "moduleResolution": "bundler",
     "lib": ["ES2022"],
-    "types": ["bun"],
+    "types": ["node"],
     "strict": true,
     "noImplicitAny": true,
     "strictNullChecks": true,
@@ -17,6 +17,6 @@
     "allowJs": false,
     "noEmit": true
   },
-  "include": ["packages/**/*.ts", "tests/**/*.ts", "extensions/**/*.ts", "scripts/**/*.ts"],
+  "include": ["extensions/**/*.ts"],
   "exclude": ["node_modules", "dist", "coverage"]
 }

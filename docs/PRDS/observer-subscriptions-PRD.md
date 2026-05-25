@@ -1,7 +1,7 @@
 ---
 created: 2026-05-22
 status: draft
-parent: PRD.md
+parent: ../extensions/onclave-comms/onclave-comms-PRD.md
 ---
 
 # PRD: Secure LAN Pi Observer Subscriptions
@@ -192,9 +192,10 @@ Event names must use lowercase dotted namespaces.
 
 ### Parent Secure LAN Pi Communication PRD
 
-- `PRD.md` in this directory defines hub discovery, authentication, trust, and
-  direct prompt send/await behavior. This feature must build on that security
-  model instead of creating separate agent network endpoints.
+- `../extensions/onclave-comms/onclave-comms-PRD.md` defines hub discovery,
+  authentication, trust, and direct prompt send/await behavior. This feature
+  must build on that security model instead of creating separate agent network
+  endpoints.
 
 ### Academic / Conceptual Prior Art
 
@@ -349,7 +350,8 @@ Review command:
 
 Notes for planner:
 
-- Start from the parent `PRD.md` security and hub lifecycle model.
+- Start from the parent `onclave-comms-PRD.md` security and hub lifecycle
+  model.
 - Keep this feature hub-mediated; do not add direct agent network endpoints.
 - Model v1 as a simplified SIENA/Gryphon-style broker overlay, not a full DHT or
   RabbitMQ clone.

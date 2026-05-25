@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "bun test",
+    "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "onclave:acceptance-host": "bun scripts/onclave-acceptance-host.ts",
+    "onclave:acceptance-host": "tsx extensions/onclave-comms/scripts/onclave-acceptance-host.ts",
     "setup": "pnpm install",
     "check": "pnpm typecheck && pnpm test"
   },
@@ -18,15 +18,17 @@
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "^0.75.4",
-    "@types/bun": "^1.3.3",
+    "@types/node": "^24.10.1",
     "@types/ws": "^8.18.1",
+    "tsx": "^4.20.6",
     "typebox": "^1.1.38",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
   },
   "packageManager": "pnpm@10.0.0",
   "pi": {
     "extensions": [
-      "./extensions/pi-onclave/src/onclave.ts"
+      "./extensions/onclave-comms/src/onclave-comms.ts"
     ]
   }
 }
