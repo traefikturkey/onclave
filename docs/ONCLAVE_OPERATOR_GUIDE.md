@@ -92,9 +92,9 @@ reduce manual copy/paste during LAN acceptance runs:
 
 Recommended order:
 
-1. Open Pi with `extensions/pi-onclave` on Host B and run
+1. Open Pi with `extensions/onclave-comms` on Host B and run
    `/onclave-acceptance-host-b`.
-2. Open Pi with `extensions/pi-onclave` on Host A and run
+2. Open Pi with `extensions/onclave-comms` on Host A and run
    `/onclave-acceptance-host-a`.
 
 The templates are intentionally asymmetric so Host B stays available to answer
@@ -102,7 +102,7 @@ Host A's inbound test prompt instead of both hosts blocking on outbound waits.
 
 ## First Run
 
-Start Pi with the `extensions/pi-onclave` extension enabled.
+Start Pi with the `extensions/onclave-comms` extension enabled.
 
 The first local Pi session starts the machine hub. Later local Pi sessions reuse
 that live hub and register as local agents.

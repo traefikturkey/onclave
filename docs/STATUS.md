@@ -51,63 +51,63 @@ Result:
 
 Extension:
 
-- `extensions/pi-onclave`
+- `extensions/onclave-comms`
 
 Runtime modules:
 
-- `src/coms-lan/audit.ts`
-- `src/coms-lan/audited-runtime.ts`
-- `src/coms-lan/authorized-keys.ts`
-- `src/coms-lan/bootstrap.ts`
-- `src/coms-lan/config.ts`
-- `src/coms-lan/canonical-json.ts`
-- `src/coms-lan/discovery.ts`
-- `src/coms-lan/extension-helpers.ts`
-- `src/coms-lan/handshake.ts`
-- `src/coms-lan/hub-runtime.ts`
-- `src/coms-lan/identity.ts`
-- `src/coms-lan/local-hub.ts`
-- `src/coms-lan/local-registry.ts`
-- `src/coms-lan/local-service.ts`
-- `src/coms-lan/messages.ts`
-- `src/coms-lan/project-label.ts`
-- `src/coms-lan/remote-client.ts`
-- `src/coms-lan/state.ts`
-- `src/coms-lan/tls.ts`
-- `src/coms-lan/transport.ts`
-- `src/coms-lan/trust.ts`
-- `src/coms-lan/wss-transport.ts`
+- `extensions/onclave-comms/src/lib/audit.ts`
+- `extensions/onclave-comms/src/lib/audited-runtime.ts`
+- `extensions/onclave-comms/src/lib/authorized-keys.ts`
+- `extensions/onclave-comms/src/lib/bootstrap.ts`
+- `extensions/onclave-comms/src/lib/config.ts`
+- `extensions/onclave-comms/src/lib/canonical-json.ts`
+- `extensions/onclave-comms/src/lib/discovery.ts`
+- `extensions/onclave-comms/src/lib/extension-helpers.ts`
+- `extensions/onclave-comms/src/lib/handshake.ts`
+- `extensions/onclave-comms/src/lib/hub-runtime.ts`
+- `extensions/onclave-comms/src/lib/identity.ts`
+- `extensions/onclave-comms/src/lib/local-hub.ts`
+- `extensions/onclave-comms/src/lib/local-registry.ts`
+- `extensions/onclave-comms/src/lib/local-service.ts`
+- `extensions/onclave-comms/src/lib/messages.ts`
+- `extensions/onclave-comms/src/lib/project-label.ts`
+- `extensions/onclave-comms/src/lib/remote-client.ts`
+- `extensions/onclave-comms/src/lib/state.ts`
+- `extensions/onclave-comms/src/lib/tls.ts`
+- `extensions/onclave-comms/src/lib/transport.ts`
+- `extensions/onclave-comms/src/lib/trust.ts`
+- `extensions/onclave-comms/src/lib/wss-transport.ts`
 
 Tests:
 
-- `tests/coms-lan/acceptance-host-script.test.ts`
-- `tests/coms-lan/acceptance.test.ts`
-- `tests/coms-lan/audit.test.ts`
-- `tests/coms-lan/audited-runtime.test.ts`
-- `tests/coms-lan/authorized-keys.test.ts`
-- `tests/coms-lan/bootstrap.test.ts`
-- `tests/coms-lan/canonical-json.test.ts`
-- `tests/coms-lan/config.test.ts`
-- `tests/coms-lan/discovery-service.test.ts`
-- `tests/coms-lan/discovery.test.ts`
-- `tests/coms-lan/extension-helpers.test.ts`
-- `tests/coms-lan/extension.test.ts`
-- `tests/coms-lan/handshake.test.ts
-- `tests/coms-lan/hub-runtime.test.ts`
-- `tests/coms-lan/identity-key.test.ts`
-- `tests/coms-lan/identity.test.ts`
-- `tests/coms-lan/local-hub.test.ts`
-- `tests/coms-lan/local-registry.test.ts`
-- `tests/coms-lan/local-service.test.ts`
-- `tests/coms-lan/messages.test.ts`
-- `tests/coms-lan/project-label.test.ts`
-- `tests/coms-lan/remote-client.test.ts`
-- `tests/coms-lan/state.test.ts`
-- `tests/coms-lan/tls.test.ts`
-- `tests/coms-lan/transport-frame.test.ts`
-- `tests/coms-lan/trust.test.ts`
-- `tests/coms-lan/transport.test.ts`
-- `tests/coms-lan/wss-transport.test.ts`
+- `extensions/onclave-comms/tests/acceptance-host-script.test.ts`
+- `extensions/onclave-comms/tests/acceptance.test.ts`
+- `extensions/onclave-comms/tests/audit.test.ts`
+- `extensions/onclave-comms/tests/audited-runtime.test.ts`
+- `extensions/onclave-comms/tests/authorized-keys.test.ts`
+- `extensions/onclave-comms/tests/bootstrap.test.ts`
+- `extensions/onclave-comms/tests/canonical-json.test.ts`
+- `extensions/onclave-comms/tests/config.test.ts`
+- `extensions/onclave-comms/tests/discovery-service.test.ts`
+- `extensions/onclave-comms/tests/discovery.test.ts`
+- `extensions/onclave-comms/tests/extension-helpers.test.ts`
+- `extensions/onclave-comms/tests/extension.test.ts`
+- `extensions/onclave-comms/tests/handshake.test.ts`
+- `extensions/onclave-comms/tests/hub-runtime.test.ts`
+- `extensions/onclave-comms/tests/identity-key.test.ts`
+- `extensions/onclave-comms/tests/identity.test.ts`
+- `extensions/onclave-comms/tests/local-hub.test.ts`
+- `extensions/onclave-comms/tests/local-registry.test.ts`
+- `extensions/onclave-comms/tests/local-service.test.ts`
+- `extensions/onclave-comms/tests/messages.test.ts`
+- `extensions/onclave-comms/tests/project-label.test.ts`
+- `extensions/onclave-comms/tests/remote-client.test.ts`
+- `extensions/onclave-comms/tests/state.test.ts`
+- `extensions/onclave-comms/tests/tls.test.ts`
+- `extensions/onclave-comms/tests/transport-frame.test.ts`
+- `extensions/onclave-comms/tests/trust.test.ts`
+- `extensions/onclave-comms/tests/transport.test.ts`
+- `extensions/onclave-comms/tests/wss-transport.test.ts`
 
 Documentation:
 

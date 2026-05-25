@@ -31,12 +31,12 @@ just pi-local
 
 - `just setup` installs dependencies with pnpm.
 - `just check` runs typecheck and tests.
-- `just pi-local` starts Pi with `./extensions/pi-onclave` loaded.
+- `just pi-local` starts Pi with `./extensions/onclave-comms` loaded.
 
 For a named local session, run Pi directly:
 
 ```bash
-pi -e ./extensions/pi-onclave --name host-a
+pi -e ./extensions/onclave-comms --name host-a
 ```
 
 ## Install the Pi Extension
@@ -55,7 +55,7 @@ just pi-local
 Equivalent direct Pi command:
 
 ```bash
-pi -e ./extensions/pi-onclave
+pi -e ./extensions/onclave-comms
 ```
 
 ### Local package install
@@ -80,8 +80,8 @@ After installing from a local path or Git URL, start Pi normally and run:
 onclave_status
 ```
 
-Loading `extensions/pi-onclave` directly is supported when the directory remains
-inside this repo checkout; it is not a standalone copied package yet.
+Loading `extensions/onclave-comms` directly is supported when the directory
+remains inside this repo checkout.
 
 Then inside Pi:
 
@@ -112,7 +112,7 @@ bun run onclave:acceptance-host -- --host-name host-a
 
 ## Current Usage Model
 
-1. Start Pi with `extensions/pi-onclave` loaded from inside this repo checkout.
+1. Start Pi with `extensions/onclave-comms` loaded from inside this repo checkout.
 2. Run `onclave_status` to initialize or reuse the local hub.
 3. Exchange `ssh-ed25519` public key lines with trusted peers.
 4. Use `onclave_peers` and `onclave_remote_agents` to find reachable remote

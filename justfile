@@ -13,10 +13,10 @@ check:
     pnpm typecheck && pnpm test
 
 pi-local:
-    pi -e ./extensions/pi-onclave
+    pi -e ./extensions/onclave-comms
 
 pi-local-no-extensions:
     pi --no-extensions
 
 pi-smoke:
-    bun test tests/onclave/extension.test.ts
+    bun test extensions/onclave-comms/tests/extension.test.ts

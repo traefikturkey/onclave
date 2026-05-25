@@ -6,7 +6,7 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "onclave:acceptance-host": "bun scripts/onclave-acceptance-host.ts",
+    "onclave:acceptance-host": "bun extensions/onclave-comms/scripts/onclave-acceptance-host.ts",
     "setup": "pnpm install",
     "check": "pnpm typecheck && pnpm test"
   },
@@ -26,7 +26,7 @@
   "packageManager": "pnpm@10.0.0",
   "pi": {
     "extensions": [
-      "./extensions/pi-onclave/src/onclave.ts"
+      "./extensions/onclave-comms/src/onclave-comms.ts"
     ]
   }
 }

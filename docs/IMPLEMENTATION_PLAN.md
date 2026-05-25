@@ -124,7 +124,7 @@ tests/
     project-label.test.ts
 ```
 
-Planning bias: start with `extensions/pi-onclave` plus small `packages/core/src/onclave/*`
+Planning bias: start with `extensions/onclave-comms` plus small `extensions/onclave-comms/src/lib/*`
 modules. Add `scripts/onclave-hub.ts` only if process lifecycle or Bun server
 startup is cleaner outside the extension.
 
