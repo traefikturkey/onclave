@@ -84,7 +84,49 @@ Automatic background polling/aggregation from static peers can be added later if
 operators need static peers to appear alongside discovered trusted agent lists.
 Richer static-peer convenience flows also remain a post-v1 operator UX item.
 
-## Decision 3: Trust Import UX
+## Decision 3: Naming Policy
+
+**Decision:** Lock naming into three layers for the current stage of the
+project.
+
+The naming policy is:
+
+- `Onclave` is the overall product, factory vision, and repository identity.
+- `onclave-comms` is the internal extension/package/directory name for the
+  current communication subsystem.
+- User-facing tool and command names remain on the existing `onclave_*` and
+  `/onclave-*` surface for now.
+- Runtime state paths remain under `~/.pi/onclave/` for now.
+
+### Rationale
+
+- The product now needs a broader name than the communication plugin alone.
+- The repo and internal implementation need a more specific name for the comms
+  subsystem so future factory components do not get mixed into a generic
+  `onclave` plugin concept.
+- Keeping the current user-facing command names avoids unnecessary operator
+  churn and preserves the existing manual acceptance, usage, and test flows.
+- Keeping `~/.pi/onclave/` avoids a second migration while the factory design is
+  still settling.
+
+### Consequences
+
+- Internal paths, package names, and repo structure should prefer
+  `onclave-comms` where they refer specifically to the communication subsystem.
+- User docs may still say "run the Onclave tools" when referring to commands
+  such as `onclave_status`, `onclave_peers`, and `onclave_remote_send`.
+- A future rename of the tool surface or state root requires an explicit
+  migration decision rather than happening incidentally during refactors.
+
+### Deferred Follow-up
+
+- Decide later whether the user-facing tools should stay on the `onclave_*`
+  surface permanently or move to a factory-oriented surface with compatibility
+  aliases.
+- Decide later whether `~/.pi/onclave/` should remain the long-term state root
+  or migrate to `~/.pi/onclave-comms/` with an explicit compatibility plan.
+
+## Decision 4: Trust Import UX
 
 **Decision:** Support both file-based trust changes and a validating append tool
 for v1.
@@ -112,7 +154,7 @@ without editing `authorized_keys`. Richer trust inspection UX also remains a
 post-v1 operator improvement. A future trust request / approval workflow should
 be planned against `docs/ONCLAVE_TRUST_UX_FUTURE.md`.
 
-## Decision 4: WSS Transport Stack
+## Decision 5: WSS Transport Stack
 
 **Decision:** Keep the v1 WSS implementation on Node `https` plus `ws` rather
 than migrating to Bun-native `Bun.serve({ tls, websocket })` inside the Pi

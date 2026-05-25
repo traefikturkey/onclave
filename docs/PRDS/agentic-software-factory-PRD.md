@@ -79,6 +79,18 @@ runtimes, guardrails, workspace services, and operator clients.
 - Existing references to the early `onclave` Pi plugin should be treated as
   legacy naming and migrated to `onclave-comms` during implementation planning.
 
+The naming policy is locked for the current stage:
+
+- Product, repo, and architecture language should use `Onclave`.
+- Internal extension/package/directory names should use `onclave-comms` when
+  referring specifically to the communication subsystem.
+- User-facing tool names should remain on the current `onclave_*` and
+  `/onclave-*` surface for now.
+- Runtime state should remain under `~/.pi/onclave/` for now.
+
+This keeps the product vision broad while avoiding unnecessary churn in the
+existing operator workflow, tests, and local state handling.
+
 ## Near-Term Monorepo Repository Strategy
 
 The repository should remain a monolithic repo in v1. The immediate goal is not
