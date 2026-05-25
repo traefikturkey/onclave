@@ -71,10 +71,8 @@ pi install .
 Use this to install from a Git remote:
 
 ```bash
-pi install git:<repo-url>
+pi install git:git@github.com:traefikturkey/onclave.git
 ```
-
-Replace `<repo-url>` with this repository's Git URL.
 
 After installing from a local path or Git URL, start Pi normally and run:
 
