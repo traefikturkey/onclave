@@ -19,16 +19,49 @@ prompt routing between Pi sessions on trusted machines.
 - supports static peers when UDP discovery is unavailable;
 - shows peer status directly in Pi with a compact widget.
 
+## Development Prerequisites
+
+Before installing dependencies in a fresh environment, run the bootstrap
+preflight that matches your shell:
+
+### PowerShell
+
+```powershell
+pwsh -File ./scripts/preflight.ps1
+```
+
+### Bash / Git Bash / WSL / Linux / macOS
+
+```bash
+bash ./scripts/preflight.sh
+```
+
+These bootstrap scripts check for the required repo tools (`node`, `pnpm`,
+`just`, `git`) and report whether `pi` is available for local extension
+loading.
+
+Once bootstrap passes, you can also run the repo-aware Node check:
+
+```bash
+just preflight-repo
+```
+
+Repository-wide environment and package standards live in:
+
+- [Development Environment and Monorepo Package Requirements](./docs/guides/development-environment.md)
+
 ## Quick Start
 
 From this repository, the happy developer path is:
 
 ```bash
+bash ./scripts/preflight.sh
 just setup
 just check
 just pi-local
 ```
 
+- `bash ./scripts/preflight.sh` checks bootstrap tool and workspace readiness.
 - `just setup` installs dependencies with pnpm.
 - `just check` runs typecheck and tests.
 - `just pi-local` starts Pi with `./extensions/onclave-comms` loaded.
@@ -48,6 +81,7 @@ Use one of these install/load paths depending on what you are trying to do.
 Use this while working in this repo:
 
 ```bash
+bash ./scripts/preflight.sh
 just setup
 just pi-local
 ```
@@ -99,6 +133,8 @@ pnpm run onclave:acceptance-host -- --host-name host-a
 
 ## Documentation
 
+- [Development Environment](./docs/guides/development-environment.md) - repository-wide tool,
+  package, dependency, and preflight standards for the monorepo
 - [Usage Guide](./docs/extensions/onclave-comms/README.md) - quick starts, extension loading, flags,
   status dots, and tool examples
 - [Operator Guide](./docs/extensions/onclave-comms/operator-guide.md) - runtime state,

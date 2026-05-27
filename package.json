@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "preflight:repo": "node ./scripts/preflight.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "onclave:acceptance-host": "tsx extensions/onclave-comms/scripts/onclave-acceptance-host.ts",
