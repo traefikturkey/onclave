@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from menos.services.youtube_metadata import (
+    YouTubeChannelVideo,
     YouTubeMetadata,
     YouTubeMetadataService,
     extract_urls,
@@ -345,6 +346,89 @@ class TestFetchMetadata:
 
         # build should be called only once (lazy-loaded)
         mock_build.assert_called_once()
+
+
+class TestFetchChannelVideos:
+    """Tests for YouTubeMetadataService.fetch_channel_videos method."""
+
+    def test_channel_video_to_dict(self):
+        """Test channel video serialization."""
+        video = YouTubeChannelVideo(
+            video_id="abc123def45",
+            title="Title",
+            url="https://www.youtube.com/watch?v=abc123def45",
+            published_at="2024-01-01T00:00:00Z",
+            duration="1:02",
+            duration_seconds=62,
+            view_count=10,
+        )
+
+        assert video.to_dict()["video_id"] == "abc123def45"
+        assert video.to_dict()["duration_seconds"] == 62
+
+    def test_resolve_channel_id_supports_at_handle(self):
+        """Test resolving an @handle to channel ID."""
+        youtube = MagicMock()
+        youtube.search.return_value.list.return_value.execute.return_value = {
+            "items": [{"snippet": {"channelId": "UC123"}}],
+        }
+        service = YouTubeMetadataService(api_key="test_key")
+        service._youtube = youtube
+
+        assert service.resolve_channel_id("@example") == "UC123"
+
+    def test_resolve_channel_id_supports_handle_url(self):
+        """Test resolving a handle URL to channel ID."""
+        youtube = MagicMock()
+        youtube.search.return_value.list.return_value.execute.return_value = {
+            "items": [{"snippet": {"channelId": "UC123"}}],
+        }
+        service = YouTubeMetadataService(api_key="test_key")
+        service._youtube = youtube
+
+        assert service.resolve_channel_id("https://www.youtube.com/@example") == "UC123"
+
+    def test_fetch_channel_videos_returns_uploads(self):
+        """Test fetching upload playlist videos."""
+        youtube = MagicMock()
+        youtube.search.return_value.list.return_value.execute.return_value = {
+            "items": [{"snippet": {"channelId": "UC123"}}],
+        }
+        youtube.channels.return_value.list.return_value.execute.return_value = {
+            "items": [
+                {"contentDetails": {"relatedPlaylists": {"uploads": "UU123"}}},
+            ],
+        }
+        youtube.playlistItems.return_value.list.return_value.execute.return_value = {
+            "items": [
+                {
+                    "contentDetails": {"videoId": "abc123def45"},
+                    "snippet": {
+                        "title": "From playlist",
+                        "publishedAt": "2024-01-01T00:00:00Z",
+                    },
+                },
+            ],
+        }
+        youtube.videos.return_value.list.return_value.execute.return_value = {
+            "items": [
+                {
+                    "id": "abc123def45",
+                    "snippet": {"title": "Video title"},
+                    "contentDetails": {"duration": "PT1M2S"},
+                    "statistics": {"viewCount": "10"},
+                },
+            ],
+        }
+        service = YouTubeMetadataService(api_key="test_key")
+        service._youtube = youtube
+
+        result = service.fetch_channel_videos("@example", limit=1)
+
+        assert result[0].title == "Video title"
+        assert result[0].duration == "1:02"
+        assert result[0].duration_seconds == 62
+        assert result[0].view_count == 10
 
 
 class TestFetchMetadataSafe:

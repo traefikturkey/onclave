@@ -3,8 +3,34 @@
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from menos.config import settings
+
+
+@dataclass
+class YouTubeChannelVideo:
+    """YouTube channel video list item."""
+
+    video_id: str
+    title: str
+    url: str
+    published_at: str
+    duration: str | None = None
+    duration_seconds: int | None = None
+    view_count: int | None = None
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "video_id": self.video_id,
+            "title": self.title,
+            "url": self.url,
+            "published_at": self.published_at,
+            "duration": self.duration,
+            "duration_seconds": self.duration_seconds,
+            "view_count": self.view_count,
+        }
 
 
 @dataclass
@@ -174,6 +200,97 @@ class YouTubeMetadataService:
             thumbnails=snippet.get("thumbnails", {}),
             fetched_at=datetime.now().isoformat(),
         )
+
+    def resolve_channel_id(self, channel: str) -> str:
+        """Resolve a YouTube @handle or channel URL to a channel ID."""
+        youtube = self._get_client()
+        channel = channel.strip().rstrip("/")
+        match = re.search(r"youtube\.com/channel/([^/?#]+)", channel)
+        if match:
+            return match.group(1)
+        handle = channel
+        if "youtube.com/@" in channel:
+            handle = channel.split("youtube.com/@", 1)[1].split("/", 1)[0]
+        elif channel.startswith("@"):
+            handle = channel[1:]
+        else:
+            raise ValueError("channel must be an @handle or https://www.youtube.com/@handle")
+
+        response = youtube.search().list(
+            part="snippet",
+            q=handle,
+            type="channel",
+            maxResults=1,
+        ).execute()
+        if not response.get("items"):
+            raise ValueError(f"No channel found for @{handle}")
+        return response["items"][0]["snippet"]["channelId"]
+
+    def fetch_channel_videos(self, channel: str, limit: int = 50) -> list[YouTubeChannelVideo]:
+        """Fetch recent uploads for a YouTube @handle or channel URL."""
+        youtube = self._get_client()
+        channel_id = self.resolve_channel_id(channel)
+        channels_response = youtube.channels().list(
+            part="contentDetails",
+            id=channel_id,
+        ).execute()
+        if not channels_response.get("items"):
+            raise ValueError(f"No channel found with ID: {channel_id}")
+        playlist_id = channels_response["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+
+        video_ids: list[str] = []
+        published: dict[str, str] = {}
+        titles: dict[str, str] = {}
+        page_token = None
+        while len(video_ids) < limit:
+            response = youtube.playlistItems().list(
+                part="snippet,contentDetails",
+                playlistId=playlist_id,
+                maxResults=min(50, limit - len(video_ids)),
+                pageToken=page_token,
+            ).execute()
+            for item in response.get("items", []):
+                video_id = item["contentDetails"]["videoId"]
+                video_ids.append(video_id)
+                published[video_id] = item["snippet"]["publishedAt"]
+                titles[video_id] = item["snippet"]["title"]
+            page_token = response.get("nextPageToken")
+            if not page_token:
+                break
+
+        videos: list[YouTubeChannelVideo] = []
+        for index in range(0, len(video_ids), 50):
+            batch = video_ids[index:index + 50]
+            details = youtube.videos().list(
+                part="snippet,statistics,contentDetails",
+                id=",".join(batch),
+            ).execute()
+            by_id: dict[str, dict[str, Any]] = {
+                item["id"]: item for item in details.get("items", [])
+            }
+            for video_id in batch:
+                item = by_id.get(video_id)
+                duration = None
+                duration_seconds = None
+                view_count = None
+                title = titles[video_id]
+                if item:
+                    title = item["snippet"]["title"]
+                    duration_iso = item["contentDetails"]["duration"]
+                    duration = format_duration(duration_iso)
+                    duration_seconds = parse_duration_to_seconds(duration_iso)
+                    stats = item.get("statistics", {})
+                    view_count = int(stats["viewCount"]) if "viewCount" in stats else None
+                videos.append(YouTubeChannelVideo(
+                    video_id=video_id,
+                    title=title,
+                    url=f"https://www.youtube.com/watch?v={video_id}",
+                    published_at=published[video_id],
+                    duration=duration,
+                    duration_seconds=duration_seconds,
+                    view_count=view_count,
+                ))
+        return videos
 
     def fetch_metadata_safe(self, video_id: str) -> tuple[YouTubeMetadata | None, str | None]:
         """Fetch metadata with error handling.

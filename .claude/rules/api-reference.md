@@ -84,6 +84,9 @@ All authenticated endpoints require RFC 9421 HTTP signature headers.
 ### Usage
 - `GET /api/v1/usage` — Aggregated LLM usage and cost totals (`start_date`, `end_date`, `provider`, `model` filters)
 
+### YouTube
+- `GET /api/v1/youtube/channel` — List recent uploads for a channel (`channel=@handle`, `limit=1..500`)
+
 ### Health
 - `GET /health` — Returns `{"status": "ok", "git_sha": "...", "build_date": "..."}`
 
