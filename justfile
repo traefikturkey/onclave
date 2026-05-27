@@ -1,5 +1,11 @@
 set shell := ["bash", "-uc"]
 
+preflight:
+    bash ./scripts/preflight.sh
+
+preflight-repo:
+    node ./scripts/preflight.mjs
+
 setup:
     pnpm install
 
