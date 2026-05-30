@@ -23,6 +23,7 @@ import {
   buildOnclavePeers,
   buildOnclaveStatus,
   choosePreferredRemoteEndpoint,
+  resolveOnclavePeerDisplayName,
 } from "./lib/status";
 import { addAuthorizedKeyLine } from "./lib/trust";
 import { sendWssFrames } from "./lib/wss-transport";
@@ -31,7 +32,7 @@ const DEFAULT_DISCOVERY_PORT = 48889;
 const DEFAULT_BROADCAST_ADDRESS = "255.255.255.255";
 
 export default function (pi: ExtensionAPI) {
-  pi.registerFlag("name", {
+  pi.registerFlag("agent-name", {
     description: "Override Onclave local agent name",
     type: "string",
     default: undefined,
@@ -713,7 +714,11 @@ async function refreshOnclaveUi(
     const cachedDisplay = peerDisplayCache.get(peer.nodeId);
     return {
       ...peer,
-      displayName: peer.name ?? cachedDisplay?.peerName ?? shortNodeId(peer.nodeId),
+      displayName: resolveOnclavePeerDisplayName({
+        nodeId: peer.nodeId,
+        name: peer.name,
+        peerName: peer.peerName ?? cachedDisplay?.peerName,
+      }),
       model: cachedDisplay?.model,
     };
   });
@@ -857,7 +862,8 @@ async function createRegistrationForContext(
     instanceId: `pi_${randomId()}`,
     cwd: ctx.cwd || process.cwd(),
     model: ctx.model?.id ?? "unknown",
-    name: readStringFlag(pi, "name"),
+    name: readStringFlag(pi, "agent-name"),
+    sessionName: pi.getSessionName?.(),
     purpose: readStringFlag(pi, "purpose"),
     color: readStringFlag(pi, "color"),
     explicit: pi.getFlag("explicit") === true,

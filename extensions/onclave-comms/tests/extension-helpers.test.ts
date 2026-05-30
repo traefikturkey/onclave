@@ -35,6 +35,22 @@ describe("createLocalAgentRegistration", () => {
     });
   });
 
+  it("uses a provided session name before falling back to the generated agent name", async () => {
+    const registration = await createLocalAgentRegistration({
+      sessionId: "session-123456",
+      instanceId: "instance-1",
+      cwd: "/tmp/scratch",
+      model: "test-model",
+      sessionName: "ops-console",
+      deliveryEndpoint: "local://session-123456",
+      gitRunner: async () => {
+        throw new Error("not git");
+      },
+    });
+
+    expect(registration.name).toBe("ops-console");
+  });
+
   it("applies stable defaults for optional metadata", async () => {
     const registration = await createLocalAgentRegistration({
       sessionId: "session-123456",

@@ -10,7 +10,7 @@ describe("Onclave extension registration", () => {
 
     onclaveExtension(registered.pi as never);
 
-    expect(registered.flags.map((flag) => flag.name).sort()).toEqual(["color", "explicit", "name", "purpose"]);
+    expect(registered.flags.map((flag) => flag.name).sort()).toEqual(["agent-name", "color", "explicit", "purpose"]);
     expect(registered.hooks.map((hook) => hook.event).sort()).toEqual(["agent_end", "session_shutdown", "session_start"]);
     expect(registered.commands.map((command) => command.name)).toContain("onclave-trust");
     expect(registered.tools.map((tool) => tool.name).sort()).toEqual([

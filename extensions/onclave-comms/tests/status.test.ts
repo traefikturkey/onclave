@@ -6,6 +6,7 @@ import {
   buildOnclaveAgentList,
   buildOnclavePeers,
   buildOnclaveStatus,
+  resolveOnclavePeerDisplayName,
 } from "../src/lib/status";
 
 describe("buildOnclaveStatus", () => {
@@ -144,6 +145,32 @@ describe("buildOnclavePeers", () => {
         source: "discovered+static",
       },
     ]);
+  });
+});
+
+describe("resolveOnclavePeerDisplayName", () => {
+  it("prefers learned remote agent names over static peer labels", () => {
+    expect(
+      resolveOnclavePeerDisplayName({
+        nodeId: "node_01PEER00000000000000000000",
+        name: "host-b",
+        peerName: "nxs-dev1",
+      })
+    ).toBe("nxs-dev1");
+  });
+
+  it("falls back to static peer labels and then short node ids", () => {
+    expect(
+      resolveOnclavePeerDisplayName({
+        nodeId: "node_01PEER00000000000000000000",
+        name: "host-b",
+      })
+    ).toBe("host-b");
+    expect(
+      resolveOnclavePeerDisplayName({
+        nodeId: "node_01PEER00000000000000000000",
+      })
+    ).toBe("01PEER00");
   });
 });
 

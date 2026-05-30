@@ -8,6 +8,7 @@ export type CreateLocalAgentRegistrationInput = {
   cwd: string;
   model: string;
   name?: string;
+  sessionName?: string;
   purpose?: string;
   color?: string;
   explicit?: boolean;
@@ -42,7 +43,10 @@ export async function createLocalAgentRegistration(
   return {
     sessionId: input.sessionId,
     instanceId: input.instanceId,
-    name: input.name && input.name.length > 0 ? input.name : defaultAgentName(input.sessionId),
+    name:
+      firstNonEmptyString(input.name) ??
+      firstNonEmptyString(input.sessionName) ??
+      defaultAgentName(input.sessionId),
     projectLabel: await resolveProjectLabel(input.cwd, input.gitRunner),
     model: input.model,
     purpose: input.purpose ?? "",
@@ -50,6 +54,10 @@ export async function createLocalAgentRegistration(
     explicit: input.explicit === true,
     deliveryEndpoint: input.deliveryEndpoint,
   };
+}
+
+function firstNonEmptyString(value: string | undefined): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function defaultAgentName(sessionId: string): string {

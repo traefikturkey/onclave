@@ -105,6 +105,16 @@ export function buildKnownOnclavePeers(input: {
   return knownPeers;
 }
 
+export function resolveOnclavePeerDisplayName(input: {
+  nodeId: string;
+  name?: string;
+  peerName?: string;
+}): string {
+  if (input.peerName) return input.peerName;
+  if (input.name) return input.name;
+  return shortOnclaveNodeId(input.nodeId);
+}
+
 export function buildOnclavePeers(input: {
   discoveredPeers: DiscoveredPeer[];
   staticPeers: StaticPeerConfig[];
@@ -280,4 +290,8 @@ function isRfc1918Ipv4(address: string): boolean {
 
 function isLikelyVirtualInterface(interfaceName: string): boolean {
   return /^(lo|loopback|docker\d*|br-|veth|virbr|cni|podman|vboxnet|vmnet|zt|tailscale|tun|tap)/i.test(interfaceName);
+}
+
+function shortOnclaveNodeId(nodeId: string): string {
+  return nodeId.startsWith("node_") ? nodeId.slice(5, 13) : nodeId.slice(0, 8);
 }
