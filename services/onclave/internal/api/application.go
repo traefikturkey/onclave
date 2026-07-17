@@ -107,16 +107,20 @@ func (s *Server) authenticate(writer http.ResponseWriter, request *http.Request)
 		writeError(writer, http.StatusBadRequest, "signature must be base64 encoded")
 		return
 	}
-	if err := s.admission.Authenticate(request.PathValue("agentID"), signature); err != nil {
+	token, err := s.admission.AuthenticateSession(request.PathValue("agentID"), signature)
+	if err != nil {
 		writeDomainError(writer, err)
 		return
 	}
-	writer.WriteHeader(http.StatusNoContent)
+	writeJSON(writer, http.StatusOK, map[string]string{"sessionToken": token})
 }
 
 func (s *Server) requestCapabilities(writer http.ResponseWriter, request *http.Request) {
 	if s.admission == nil {
 		writeError(writer, http.StatusServiceUnavailable, "admission service unavailable")
+		return
+	}
+	if !s.requireSession(writer, request, request.PathValue("agentID")) {
 		return
 	}
 	requestID, nonce, err := s.admission.RequestCapabilities(request.PathValue("agentID"))
@@ -130,6 +134,9 @@ func (s *Server) requestCapabilities(writer http.ResponseWriter, request *http.R
 func (s *Server) acceptCapabilities(writer http.ResponseWriter, request *http.Request) {
 	if s.admission == nil {
 		writeError(writer, http.StatusServiceUnavailable, "admission service unavailable")
+		return
+	}
+	if !s.requireSession(writer, request, request.PathValue("agentID")) {
 		return
 	}
 	var body struct {
@@ -165,6 +172,9 @@ func (s *Server) submitCommand(writer http.ResponseWriter, request *http.Request
 	}
 	var body submitCommandRequest
 	if !decodeJSON(writer, request, &body) {
+		return
+	}
+	if !s.requireSession(writer, request, body.SourceAgentID) {
 		return
 	}
 	task, err := s.messaging.Submit(messaging.Command{
@@ -273,6 +283,24 @@ func decodeJSON(writer http.ResponseWriter, request *http.Request, target any) b
 	return true
 }
 
+func (s *Server) requireSession(writer http.ResponseWriter, request *http.Request, agentID string) bool {
+	if s.admission == nil {
+		writeError(writer, http.StatusServiceUnavailable, "admission service unavailable")
+		return false
+	}
+	const prefix = "Bearer "
+	authorization := request.Header.Get("Authorization")
+	if len(authorization) <= len(prefix) || authorization[:len(prefix)] != prefix {
+		writeError(writer, http.StatusUnauthorized, "Bearer session token required")
+		return false
+	}
+	if err := s.admission.AuthorizeSession(agentID, authorization[len(prefix):]); err != nil {
+		writeDomainError(writer, err)
+		return false
+	}
+	return true
+}
+
 func writeJSON(writer http.ResponseWriter, status int, value any) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
@@ -286,6 +314,8 @@ func writeError(writer http.ResponseWriter, status int, message string) {
 func writeDomainError(writer http.ResponseWriter, err error) {
 	status := http.StatusBadRequest
 	switch {
+	case errors.Is(err, admission.ErrInvalidSession):
+		status = http.StatusUnauthorized
 	case errors.Is(err, admission.ErrUnknownAgent), errors.Is(err, messaging.ErrTaskNotFound):
 		status = http.StatusNotFound
 	case errors.Is(err, admission.ErrNotApproved), errors.Is(err, admission.ErrRevoked), errors.Is(err, admission.ErrNotAuthenticated):

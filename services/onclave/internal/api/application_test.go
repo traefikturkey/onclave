@@ -41,23 +41,30 @@ func TestAgentAdmissionAndTaskSubmissionFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	postJSON(t, server.Handler(), "/v1/agents/agent-api/authenticate", map[string]any{
+	authResponse := postJSON(t, server.Handler(), "/v1/agents/agent-api/authenticate", map[string]any{
 		"signature": base64.StdEncoding.EncodeToString(ed25519.Sign(privateKey, nonce)),
-	}, http.StatusNoContent)
+	}, http.StatusOK)
+	var auth struct {
+		SessionToken string `json:"sessionToken"`
+	}
+	decodeBody(t, authResponse, &auth)
+	if auth.SessionToken == "" {
+		t.Fatal("expected session token")
+	}
 
-	capabilityResponse := postJSON(t, server.Handler(), "/v1/agents/agent-api/capabilities/request", map[string]any{}, http.StatusOK)
+	capabilityResponse := postJSONWithAuth(t, server.Handler(), "/v1/agents/agent-api/capabilities/request", map[string]any{}, auth.SessionToken, http.StatusOK)
 	var capabilityRequest struct {
 		RequestID string `json:"requestId"`
 		Nonce     string `json:"nonce"`
 	}
 	decodeBody(t, capabilityResponse, &capabilityRequest)
-	postJSON(t, server.Handler(), "/v1/agents/agent-api/capabilities", map[string]any{
+	postJSONWithAuth(t, server.Handler(), "/v1/agents/agent-api/capabilities", map[string]any{
 		"requestId":    capabilityRequest.RequestID,
 		"nonce":        capabilityRequest.Nonce,
 		"capabilities": []string{"message.receive"},
-	}, http.StatusNoContent)
+	}, auth.SessionToken, http.StatusNoContent)
 
-	taskResponse := postJSON(t, server.Handler(), "/v1/commands", map[string]any{
+	taskResponse := postJSONWithAuth(t, server.Handler(), "/v1/commands", map[string]any{
 		"messageId":     "message-api-1",
 		"taskId":        "task-api-1",
 		"correlationId": "correlation-api-1",
@@ -66,7 +73,7 @@ func TestAgentAdmissionAndTaskSubmissionFlow(t *testing.T) {
 		"type":          "task.assign",
 		"expiresAt":     time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
 		"payload":       map[string]any{"instruction": "run tests"},
-	}, http.StatusAccepted)
+	}, auth.SessionToken, http.StatusAccepted)
 	var task messaging.Task
 	decodeBody(t, taskResponse, &task)
 	if task.State != messaging.StateAccepted {
@@ -82,6 +89,10 @@ func TestAgentAdmissionAndTaskSubmissionFlow(t *testing.T) {
 }
 
 func postJSON(t *testing.T, handler http.Handler, path string, body any, expectedStatus int) *httptest.ResponseRecorder {
+	return postJSONWithAuth(t, handler, path, body, "", expectedStatus)
+}
+
+func postJSONWithAuth(t *testing.T, handler http.Handler, path string, body any, token string, expectedStatus int) *httptest.ResponseRecorder {
 	t.Helper()
 	encoded, err := json.Marshal(body)
 	if err != nil {
@@ -89,6 +100,9 @@ func postJSON(t *testing.T, handler http.Handler, path string, body any, expecte
 	}
 	request := httptest.NewRequest(http.MethodPost, path, bytes.NewReader(encoded))
 	request.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != expectedStatus {

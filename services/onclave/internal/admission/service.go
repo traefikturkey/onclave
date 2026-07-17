@@ -3,6 +3,7 @@ package admission
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"sort"
@@ -19,6 +20,7 @@ var (
 	ErrNotAuthenticated         = errors.New("agent is not authenticated")
 	ErrCapabilityRequestMissing = errors.New("capability request is missing or already consumed")
 	ErrCapabilityNonceMismatch  = errors.New("capability nonce does not match request")
+	ErrInvalidSession           = errors.New("invalid agent session")
 )
 
 type Status string
@@ -32,9 +34,9 @@ const (
 )
 
 type EnrollmentRequest struct {
-	AgentID    string
+	AgentID     string
 	RuntimeType string
-	PublicKey  ed25519.PublicKey
+	PublicKey   ed25519.PublicKey
 }
 
 type Policy struct {
@@ -49,6 +51,7 @@ type record struct {
 	challenge           []byte
 	capabilityRequestID string
 	capabilityNonce     string
+	sessionToken        string
 	declared            []string
 	effective           []string
 }
@@ -107,6 +110,7 @@ func (s *Service) Revoke(agentID string) error {
 	agent.challenge = nil
 	agent.capabilityRequestID = ""
 	agent.capabilityNonce = ""
+	agent.sessionToken = ""
 	return nil
 }
 
@@ -132,6 +136,38 @@ func (s *Service) IssueChallenge(agentID string) ([]byte, error) {
 }
 
 func (s *Service) Authenticate(agentID string, signature []byte) error {
+	_, err := s.AuthenticateSession(agentID, signature)
+	return err
+}
+
+func (s *Service) AuthenticateSession(agentID string, signature []byte) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	agent, err := s.agent(agentID)
+	if err != nil {
+		return "", err
+	}
+	if agent.status == StatusRevoked {
+		return "", ErrRevoked
+	}
+	if len(agent.challenge) == 0 {
+		return "", ErrChallengeConsumed
+	}
+	challenge := agent.challenge
+	if len(signature) != ed25519.SignatureSize || !ed25519.Verify(agent.publicKey, challenge, signature) {
+		return "", ErrInvalidSignature
+	}
+	agent.challenge = nil
+	agent.status = StatusAuthenticated
+	tokenBytes := make([]byte, 32)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return "", fmt.Errorf("generate session token: %w", err)
+	}
+	agent.sessionToken = base64.RawURLEncoding.EncodeToString(tokenBytes)
+	return agent.sessionToken, nil
+}
+
+func (s *Service) AuthorizeSession(agentID, token string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	agent, err := s.agent(agentID)
@@ -141,16 +177,30 @@ func (s *Service) Authenticate(agentID string, signature []byte) error {
 	if agent.status == StatusRevoked {
 		return ErrRevoked
 	}
-	if len(agent.challenge) == 0 {
-		return ErrChallengeConsumed
+	if agent.status != StatusAuthenticated && agent.status != StatusRegistered {
+		return ErrNotAuthenticated
 	}
-	challenge := agent.challenge
-	if len(signature) != ed25519.SignatureSize || !ed25519.Verify(agent.publicKey, challenge, signature) {
-		return ErrInvalidSignature
+	if token == "" || token != agent.sessionToken {
+		return ErrInvalidSession
 	}
-	agent.challenge = nil
-	agent.status = StatusAuthenticated
 	return nil
+}
+
+func (s *Service) AgentForSession(token string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if token == "" {
+		return "", ErrInvalidSession
+	}
+	for agentID, agent := range s.agents {
+		if agent.sessionToken == token {
+			if agent.status == StatusRevoked {
+				return "", ErrRevoked
+			}
+			return agentID, nil
+		}
+	}
+	return "", ErrInvalidSession
 }
 
 func (s *Service) RequestCapabilities(agentID string) (requestID, nonce string, err error) {
