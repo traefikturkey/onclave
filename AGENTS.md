@@ -13,7 +13,7 @@ subtree instead of being split across multiple top-level packages.
   registered by package `pi` metadata.
 - `extensions/onclave-comms/src/lib/` contains Onclave communication source for
   identity, transport, discovery, hub runtime, trust, and status behavior.
-- `extensions/onclave-comms/tests/` validates the current behavior through Bun
+- `extensions/onclave-comms/tests/` validates the current behavior through Vitest
   tests.
 - `extensions/onclave-comms/scripts/` contains repo-local acceptance helpers for
   the communication subsystem.
@@ -32,7 +32,7 @@ just pi-local
 
 - Use `pnpm` for development dependency management.
 - Run `just setup` to install dependencies.
-- Run `just check` before handing off changes; it runs typecheck and tests.
+- Run `just check` before handing off changes; it runs typecheck and Vitest tests.
 - Run `just typecheck` or `just test` when you need a narrower check.
 - Run `just pi-local` to start Pi with `./extensions/onclave-comms` loaded.
 - Package scripts (`pnpm typecheck`, `pnpm test`) must remain runnable without

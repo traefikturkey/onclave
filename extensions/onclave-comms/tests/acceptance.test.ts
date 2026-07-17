@@ -86,9 +86,10 @@ describe("onclave acceptance coverage", () => {
       const responses = await sendWssFrames(
         hubStateToWssUrl(first.state.endpoint),
         [
-          { type: "local_register", registration: createRegistration("session-local") },
+          { type: "local_register", registration: createRegistration("session-local"), localAuthToken: first.localAuthToken },
           {
             type: "local_send_prompt",
+            localAuthToken: first.localAuthToken,
             msgId: "msg-local-1",
             targetSessionId: "session-local",
             prompt: "local prompt body",
@@ -96,13 +97,14 @@ describe("onclave acceptance coverage", () => {
           },
           {
             type: "local_submit_response",
+            localAuthToken: first.localAuthToken,
             msgId: "msg-local-1",
             responderSessionId: "session-local",
             response: "local response body",
             error: null,
             completedAt: NOW,
           },
-          { type: "local_get_response", msgId: "msg-local-1" },
+          { type: "local_get_response", msgId: "msg-local-1", localAuthToken: first.localAuthToken },
         ],
         { rejectUnauthorized: false }
       );

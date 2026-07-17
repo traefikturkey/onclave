@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto";
-import { homedir, networkInterfaces } from "node:os";
-import { basename } from "node:path";
+import { networkInterfaces } from "node:os";
+import { basename, join } from "node:path";
 import { Type } from "typebox";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { StringEnum } from "@earendil-works/pi-ai";
 import { appendAuditEvent, type AuditEventName, type AuditMetadata } from "./lib/audit";
 import { bootstrapLocalHub, type BootstrapLocalHubResult } from "./lib/bootstrap";
 import { findStaticPeer, loadOnclaveConfig } from "./lib/config";
@@ -30,6 +31,8 @@ import { sendWssFrames } from "./lib/wss-transport";
 
 const DEFAULT_DISCOVERY_PORT = 48889;
 const DEFAULT_BROADCAST_ADDRESS = "255.255.255.255";
+const MAX_MESSAGE_LENGTH = 100_000;
+const MAX_WAIT_TIMEOUT_MS = 300_000;
 
 export default function (pi: ExtensionAPI) {
   pi.registerFlag("agent-name", {
@@ -53,7 +56,7 @@ export default function (pi: ExtensionAPI) {
     default: false,
   });
 
-  const paths = getOnclavePaths(`${homedir()}/.pi/onclave`);
+  const paths = getOnclavePaths(join(getAgentDir(), "onclave"));
   const audit = (event: AuditEventName, metadata: AuditMetadata) => appendAuditEvent(paths.auditLog, event, metadata);
   let bootstrap: BootstrapLocalHubResult | null = null;
   let localSessionId: string | null = null;
@@ -65,29 +68,40 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     sessionUi = ctx.ui;
-    bootstrap = await bootstrapLocalHub(paths, {
-      host: "0.0.0.0",
-      discoveryPort: DEFAULT_DISCOVERY_PORT,
-      broadcastAddress: DEFAULT_BROADCAST_ADDRESS,
-      now: () => new Date().toISOString(),
-      healthCheck: checkHubHealth,
-      deliverPrompt: async (prompt) => deliverInboundPrompt(pi, prompt, inboundPrompts),
-      audit,
-    });
+    try {
+      bootstrap = await bootstrapLocalHub(paths, {
+        host: "0.0.0.0",
+        discoveryPort: DEFAULT_DISCOVERY_PORT,
+        broadcastAddress: DEFAULT_BROADCAST_ADDRESS,
+        now: () => new Date().toISOString(),
+        healthCheck: checkHubHealth,
+        deliverPrompt: async (prompt) => deliverInboundPrompt(pi, prompt, inboundPrompts),
+        audit,
+      });
 
-    localSessionId = sessionIdFromContext(ctx);
-    localRegistration = await createRegistrationForContext(pi, ctx, localSessionId);
-    if (bootstrap.runtime?.registerLocalAgent) {
-      bootstrap.runtime.registerLocalAgent(localRegistration);
-    } else {
-      await registerWithLocalHub(bootstrap.state.endpoint, localRegistration);
+      localSessionId = sessionIdFromContext(ctx);
+      localRegistration = await createRegistrationForContext(pi, ctx, localSessionId);
+      if (bootstrap.runtime?.registerLocalAgent) {
+        bootstrap.runtime.registerLocalAgent(localRegistration);
+      } else {
+        await registerWithLocalHub(bootstrap.state.endpoint, localRegistration, bootstrap.localAuthToken);
+      }
+
+      await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
+      peerWidgetTimer = setInterval(() => {
+        void refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache).catch(() => undefined);
+      }, 5_000);
+      peerWidgetTimer.unref?.();
+    } catch (error) {
+      const failedBootstrap = bootstrap;
+      if (failedBootstrap?.runtime && failedBootstrap.started) {
+        await failedBootstrap.runtime.stop().catch(() => undefined);
+      }
+      bootstrap = null;
+      localSessionId = null;
+      localRegistration = null;
+      ctx.ui.notify(`Onclave initialization failed: ${error instanceof Error ? error.message : String(error)}`, "error");
     }
-
-    await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
-    peerWidgetTimer = setInterval(() => {
-      void refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
-    }, 5_000);
-    peerWidgetTimer.unref?.();
   });
 
   pi.on("session_shutdown", async () => {
@@ -99,7 +113,7 @@ export default function (pi: ExtensionAPI) {
       if (bootstrap.runtime?.unregisterLocalAgent) {
         bootstrap.runtime.unregisterLocalAgent(localSessionId);
       } else {
-        await unregisterWithLocalHub(bootstrap.state.endpoint, localSessionId);
+        await unregisterWithLocalHub(bootstrap.state.endpoint, localSessionId, bootstrap.localAuthToken);
       }
     }
     if (bootstrap?.runtime && bootstrap.started) {
@@ -115,9 +129,9 @@ export default function (pi: ExtensionAPI) {
     inboundPrompts.clear();
   });
 
-  pi.on("agent_end", async (_event, ctx) => {
+  pi.on("agent_end", async (event, ctx) => {
     if (!bootstrap || !localSessionId) return;
-    const inbound = latestInboundPrompt(inboundPrompts);
+    const inbound = inboundPromptForAgentRun(event.messages, inboundPrompts);
     if (!inbound || inbound.replyMode === "async_message") return;
     const response = extractLastAssistantText(ctx);
     const responses = await sendWssFrames(
@@ -125,6 +139,7 @@ export default function (pi: ExtensionAPI) {
       [
         {
           type: "local_submit_response",
+          localAuthToken: bootstrap.localAuthToken,
           msgId: inbound.msgId,
           responderSessionId: localSessionId,
           response,
@@ -292,8 +307,8 @@ export default function (pi: ExtensionAPI) {
     label: "Onclave Send",
     description: "Send a prompt to a local Onclave agent by session ID through the local hub.",
     parameters: Type.Object({
-      target_session_id: Type.String({ description: "Target local agent session ID." }),
-      prompt: Type.String({ description: "Prompt to deliver." }),
+      target_session_id: Type.String({ description: "Target local agent session ID.", maxLength: 256 }),
+      prompt: Type.String({ description: "Prompt to deliver.", maxLength: MAX_MESSAGE_LENGTH }),
     }),
     async execute(_callId, params) {
       if (!bootstrap) throw new Error("onclave is not initialized");
@@ -303,6 +318,7 @@ export default function (pi: ExtensionAPI) {
         [
           {
             type: "local_send_prompt",
+            localAuthToken: bootstrap.localAuthToken,
             msgId,
             targetSessionId: params.target_session_id,
             prompt: params.prompt,
@@ -331,7 +347,7 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_callId, params) {
       if (!bootstrap) throw new Error("onclave is not initialized");
-      const result = await getLocalResponse(bootstrap.state.endpoint, params.msg_id);
+      const result = await getLocalResponse(bootstrap.state.endpoint, params.msg_id, bootstrap.localAuthToken);
       return {
         content: [{ type: "text" as const, text: formatResponseResult(result) }],
         details: { msg_id: params.msg_id, result },
@@ -345,16 +361,18 @@ export default function (pi: ExtensionAPI) {
     description: "Wait for an Onclave message response by msg_id until timeout.",
     parameters: Type.Object({
       msg_id: Type.String({ description: "Message ID returned by onclave_send." }),
-      timeout_ms: Type.Optional(Type.Number({ description: "Maximum wait time in milliseconds. Default 30000." })),
+      timeout_ms: Type.Optional(Type.Integer({ description: "Maximum wait time in milliseconds. Default 30000.", minimum: 1, maximum: MAX_WAIT_TIMEOUT_MS })),
     }),
     async execute(_callId, params) {
-      const timeoutMs = typeof params.timeout_ms === "number" && params.timeout_ms > 0 ? params.timeout_ms : 30_000;
+      const timeoutMs = typeof params.timeout_ms === "number" && params.timeout_ms > 0
+        ? Math.min(params.timeout_ms, MAX_WAIT_TIMEOUT_MS)
+        : 30_000;
       const deadline = Date.now() + timeoutMs;
       if (!bootstrap) throw new Error("onclave is not initialized");
-      let result = await getLocalResponse(bootstrap.state.endpoint, params.msg_id);
+      let result = await getLocalResponse(bootstrap.state.endpoint, params.msg_id, bootstrap.localAuthToken);
       while (result.status === "pending" && Date.now() < deadline) {
         await sleep(250);
-        result = await getLocalResponse(bootstrap.state.endpoint, params.msg_id);
+        result = await getLocalResponse(bootstrap.state.endpoint, params.msg_id, bootstrap.localAuthToken);
       }
       return {
         content: [{ type: "text" as const, text: formatResponseResult(result) }],
@@ -407,13 +425,10 @@ export default function (pi: ExtensionAPI) {
       endpoint: Type.Optional(Type.String({ description: "Remote WSS endpoint, for example wss://host:1234/v1/hub." })),
       node_id: Type.Optional(Type.String({ description: "Remote persistent node ID." })),
       hub_instance_id: Type.Optional(Type.String({ description: "Remote runtime hub instance ID." })),
-      target_session_id: Type.String({ description: "Remote target agent session ID." }),
-      prompt: Type.String({ description: "Prompt to deliver." }),
+      target_session_id: Type.String({ description: "Remote target agent session ID.", maxLength: 256 }),
+      prompt: Type.String({ description: "Prompt to deliver.", maxLength: MAX_MESSAGE_LENGTH }),
       reply_mode: Type.Optional(
-        Type.Union([
-          Type.Literal("async_message", { description: "Remote host replies later via onclave_reply. Default." }),
-          Type.Literal("pollable", { description: "Remote host completes through onclave_remote_get polling." }),
-        ])
+        StringEnum(["async_message", "pollable"] as const)
       ),
     }),
     async execute(_callId, params) {
@@ -513,9 +528,9 @@ export default function (pi: ExtensionAPI) {
     description: "Send an asynchronous reply back to the origin host for a received Onclave message.",
     parameters: Type.Object({
       msg_id: Type.Optional(Type.String({ description: "Inbound Onclave msg_id to reply to. Defaults to the latest inbound message with origin metadata." })),
-      response: Type.String({ description: "Reply body to send back to the originating host." }),
+      response: Type.String({ description: "Reply body to send back to the originating host.", maxLength: MAX_MESSAGE_LENGTH }),
       status: Type.Optional(
-        Type.Union([Type.Literal("completed"), Type.Literal("failed"), Type.Literal("needs_input")])
+        StringEnum(["completed", "failed", "needs_input"] as const)
       ),
     }),
     async execute(_callId, params) {
@@ -647,7 +662,17 @@ function formatInboundPromptMessage(prompt: DeliveredPrompt): string {
   return lines.join("\n");
 }
 
-function latestInboundPrompt(inboundPrompts: Map<string, DeliveredPrompt>): DeliveredPrompt | null {
+function inboundPromptForAgentRun(
+  messages: unknown[],
+  inboundPrompts: Map<string, DeliveredPrompt>
+): DeliveredPrompt | null {
+  for (const message of [...messages].reverse()) {
+    if (!message || typeof message !== "object") continue;
+    const record = message as { customType?: unknown; details?: { msgId?: unknown } };
+    if (record.customType !== "onclave-inbound" || typeof record.details?.msgId !== "string") continue;
+    const prompt = inboundPrompts.get(record.details.msgId);
+    if (prompt) return prompt;
+  }
   return [...inboundPrompts.values()].at(-1) ?? null;
 }
 
@@ -871,15 +896,15 @@ async function createRegistrationForContext(
   });
 }
 
-async function registerWithLocalHub(endpoint: string, registration: LocalAgentRegistration): Promise<void> {
-  await sendWssFrames(localHubWssUrl(endpoint), [{ type: "local_register", registration }], {
+async function registerWithLocalHub(endpoint: string, registration: LocalAgentRegistration, localAuthToken: string): Promise<void> {
+  await sendWssFrames(localHubWssUrl(endpoint), [{ type: "local_register", registration, localAuthToken }], {
     rejectUnauthorized: false,
     timeoutMs: 2_000,
   });
 }
 
-async function unregisterWithLocalHub(endpoint: string, sessionId: string): Promise<void> {
-  await sendWssFrames(localHubWssUrl(endpoint), [{ type: "local_unregister", sessionId }], {
+async function unregisterWithLocalHub(endpoint: string, sessionId: string, localAuthToken: string): Promise<void> {
+  await sendWssFrames(localHubWssUrl(endpoint), [{ type: "local_unregister", sessionId, localAuthToken }], {
     rejectUnauthorized: false,
     timeoutMs: 2_000,
   });
@@ -902,10 +927,10 @@ function localHubWssUrl(endpoint: string): string {
   return endpoint.replace(/^https:/, "wss:").replace(/\/$/, "") + "/v1/hub";
 }
 
-async function getLocalResponse(endpoint: string, msgId: string) {
+async function getLocalResponse(endpoint: string, msgId: string, localAuthToken: string) {
   const responses = await sendWssFrames(
     localHubWssUrl(endpoint),
-    [{ type: "local_get_response", msgId }],
+    [{ type: "local_get_response", msgId, localAuthToken }],
     { rejectUnauthorized: false, timeoutMs: 5_000 }
   );
   const response = responses[0];

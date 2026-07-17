@@ -39,7 +39,7 @@ Result:
 
 | Phase | Status | Notes |
 |---|---|---|
-| Phase 0: Project Scaffold | Complete | Bun test/typecheck scaffold added. |
+| Phase 0: Project Scaffold | Complete | Vitest/typecheck scaffold added. |
 | Phase 1: State, Identity, Audit, Authorized Keys | Complete | Core security/state helpers implemented and tested. |
 | Phase 2: Local Hub Lifecycle and Registration | Complete | Hub state, health-check reuse, stale replacement, lock-protected start flow, dynamic local service binding, local registry, local WSS registration frames, and bootstrap reuse acceptance are covered. |
 | Phase 3: UDP Discovery | Complete | Packet validation, untrusted peer cache, broadcast/listen lifecycle, Node UDP adapter, runtime broadcast integration, and metadata-only acceptance coverage are in place. |
@@ -227,6 +227,8 @@ Project/config files:
   token, credential, private, and key material.
 - WSS transport uses self-signed TLS for encrypted transport; app-level Ed25519
   auth is the trust gate.
+- Local hub operations require a host-local capability token derived from the
+  local identity key; remote hub operations still require mutual Ed25519 auth.
 - WSS transport uses Node `https` plus `ws` with self-signed TLS and certificate
   verification disabled at the WebSocket layer. App-level Ed25519 mutual auth
   remains the trust gate.

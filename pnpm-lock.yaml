@@ -21,6 +21,9 @@ importers:
         specifier: ^8.20.1
         version: 8.21.0
     devDependencies:
+      '@earendil-works/pi-ai':
+        specifier: ^0.75.4
+        version: 0.75.5(ws@8.21.0)(zod@4.4.3)
       '@earendil-works/pi-coding-agent':
         specifier: ^0.75.4
         version: 0.75.5(ws@8.21.0)(zod@4.4.3)
@@ -43,7 +46,26 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@24.12.4)(jiti@2.7.0)(tsx@4.22.3)(yaml@2.9.0)
 
-  extensions/onclave-comms: {}
+  extensions/onclave-comms:
+    dependencies:
+      '@earendil-works/pi-ai':
+        specifier: '*'
+        version: 0.75.5(ws@8.21.0)(zod@4.4.3)
+      '@earendil-works/pi-coding-agent':
+        specifier: '*'
+        version: 0.75.5(ws@8.21.0)(zod@4.4.3)
+      '@noble/ed25519':
+        specifier: ^3.0.0
+        version: 3.1.0
+      selfsigned:
+        specifier: ^5.5.0
+        version: 5.5.0
+      typebox:
+        specifier: '*'
+        version: 1.1.38
+      ws:
+        specifier: ^8.20.1
+        version: 8.21.0
 
 packages:
 
