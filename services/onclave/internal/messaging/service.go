@@ -76,12 +76,13 @@ type Event struct {
 }
 
 type Service struct {
-	mu        sync.Mutex
-	now       func() time.Time
-	tasks     map[string]*Task
-	events    map[string][]Event
-	publisher Publisher
-	store     TaskStore
+	mu             sync.Mutex
+	now            func() time.Time
+	tasks          map[string]*Task
+	events         map[string][]Event
+	publisher      Publisher
+	eventPublisher EventPublisher
+	store          TaskStore
 }
 
 type TaskStore interface {
@@ -101,7 +102,11 @@ func NewServiceWithPublisherAndStore(now func() time.Time, publisher Publisher, 
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{now: now, tasks: make(map[string]*Task), events: make(map[string][]Event), publisher: publisher, store: store}
+	var eventPublisher EventPublisher
+	if candidate, ok := publisher.(EventPublisher); ok {
+		eventPublisher = candidate
+	}
+	return &Service{now: now, tasks: make(map[string]*Task), events: make(map[string][]Event), publisher: publisher, eventPublisher: eventPublisher, store: store}
 }
 
 func (s *Service) Submit(command Command) (Task, error) {
@@ -295,6 +300,24 @@ func (s *Service) persist(task *Task) error {
 func (s *Service) record(task *Task, event Event) {
 	event.At = s.now()
 	s.events[task.TaskID] = append(s.events[task.TaskID], event)
+	if s.eventPublisher == nil {
+		return
+	}
+	payload, err := json.Marshal(map[string]any{
+		"eventType": string(event.Type), "state": string(task.State), "progress": event.Progress,
+		"note": event.Note, "payload": event.Payload,
+	})
+	if err != nil {
+		return
+	}
+	_ = s.eventPublisher.PublishEvent(context.Background(), Envelope{
+		RoutingKey: string(event.Type) + "." + task.TargetAgentID,
+		MessageID:  task.MessageID + ":" + string(event.Type) + ":" + event.At.UTC().Format(time.RFC3339Nano),
+		TaskID:     task.TaskID, CorrelationID: task.CorrelationID,
+		SourceAgentID: task.SourceAgentID, TargetAgentID: task.TargetAgentID,
+		MessageType: string(event.Type), IssuedAt: event.At.UTC().Format(time.RFC3339Nano),
+		ExpiresAt: task.ExpiresAt.UTC().Format(time.RFC3339Nano), Payload: payload, Persistent: true,
+	})
 }
 
 func cloneTask(task *Task) Task {

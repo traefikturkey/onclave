@@ -7,8 +7,9 @@ import (
 )
 
 type recordingPublisher struct {
-	envelopes []Envelope
-	err       error
+	envelopes      []Envelope
+	eventEnvelopes []Envelope
+	err            error
 }
 
 func (publisher *recordingPublisher) Publish(_ context.Context, envelope Envelope) error {
@@ -16,6 +17,11 @@ func (publisher *recordingPublisher) Publish(_ context.Context, envelope Envelop
 		return publisher.err
 	}
 	publisher.envelopes = append(publisher.envelopes, envelope)
+	return nil
+}
+
+func (publisher *recordingPublisher) PublishEvent(_ context.Context, envelope Envelope) error {
+	publisher.eventEnvelopes = append(publisher.eventEnvelopes, envelope)
 	return nil
 }
 
@@ -38,5 +44,11 @@ func TestSubmitPublishesDurableCommandEnvelope(t *testing.T) {
 	envelope := publisher.envelopes[0]
 	if envelope.RoutingKey != "task.assign.target" || !envelope.Persistent || envelope.TaskID != "task-1" {
 		t.Fatalf("unexpected envelope: %+v", envelope)
+	}
+	if len(publisher.eventEnvelopes) != 1 {
+		t.Fatalf("expected accepted lifecycle event, got %d", len(publisher.eventEnvelopes))
+	}
+	if event := publisher.eventEnvelopes[0]; event.RoutingKey != "task.accepted.target" || event.MessageType != string(EventAccepted) {
+		t.Fatalf("unexpected lifecycle event: %+v", event)
 	}
 }

@@ -29,6 +29,10 @@ type Publisher interface {
 	Publish(context.Context, Envelope) error
 }
 
+type EventPublisher interface {
+	PublishEvent(context.Context, Envelope) error
+}
+
 type DeliveryHandler func(Envelope) error
 
 type Subscription struct {
@@ -51,9 +55,10 @@ func (subscription *Subscription) Close() error {
 }
 
 type RabbitMQPublisher struct {
-	connection *amqp.Connection
-	channel    *amqp.Channel
-	exchange   string
+	connection    *amqp.Connection
+	channel       *amqp.Channel
+	exchange      string
+	eventExchange string
 }
 
 func NewRabbitMQPublisher(url, exchange string) (*RabbitMQPublisher, error) {
@@ -71,7 +76,13 @@ func NewRabbitMQPublisher(url, exchange string) (*RabbitMQPublisher, error) {
 		_ = connection.Close()
 		return nil, fmt.Errorf("declare RabbitMQ exchange: %w", err)
 	}
-	return &RabbitMQPublisher{connection: connection, channel: channel, exchange: exchange}, nil
+	eventExchange := exchange + ".events"
+	if err := channel.ExchangeDeclare(eventExchange, "topic", true, false, false, false, nil); err != nil {
+		_ = channel.Close()
+		_ = connection.Close()
+		return nil, fmt.Errorf("declare RabbitMQ event exchange: %w", err)
+	}
+	return &RabbitMQPublisher{connection: connection, channel: channel, exchange: exchange, eventExchange: eventExchange}, nil
 }
 
 func (publisher *RabbitMQPublisher) Publish(ctx context.Context, envelope Envelope) error {
@@ -85,6 +96,17 @@ func (publisher *RabbitMQPublisher) Publish(ctx context.Context, envelope Envelo
 		MessageId:     envelope.MessageID,
 		CorrelationId: envelope.CorrelationID,
 		Body:          body,
+	})
+}
+
+func (publisher *RabbitMQPublisher) PublishEvent(ctx context.Context, envelope Envelope) error {
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		return fmt.Errorf("encode event envelope: %w", err)
+	}
+	return publisher.channel.PublishWithContext(ctx, publisher.eventExchange, envelope.RoutingKey, false, false, amqp.Publishing{
+		ContentType: "application/json", DeliveryMode: amqp.Persistent,
+		MessageId: envelope.MessageID, CorrelationId: envelope.CorrelationID, Body: body,
 	})
 }
 
@@ -110,31 +132,59 @@ func (publisher *RabbitMQPublisher) SubscribeAgent(ctx context.Context, agentID 
 		return nil, fmt.Errorf("consume agent queue: %w", err)
 	}
 	subscription := &Subscription{channel: channel, consumerTag: consumerTag}
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				_ = subscription.Close()
-				return
-			case delivery, ok := <-deliveries:
-				if !ok {
-					return
-				}
-				var envelope Envelope
-				if err := json.Unmarshal(delivery.Body, &envelope); err != nil {
-					_ = delivery.Nack(false, false)
-					continue
-				}
-				envelope.RoutingKey = delivery.RoutingKey
-				if err := handler(envelope); err != nil {
-					_ = delivery.Nack(false, true)
-					continue
-				}
-				_ = delivery.Ack(false)
-			}
-		}
-	}()
+	go consumeDeliveries(ctx, subscription, deliveries, handler)
 	return subscription, nil
+}
+
+func (publisher *RabbitMQPublisher) SubscribeEvents(ctx context.Context, subscriberID, pattern string, handler DeliveryHandler) (*Subscription, error) {
+	channel, err := publisher.connection.Channel()
+	if err != nil {
+		return nil, fmt.Errorf("open RabbitMQ event channel: %w", err)
+	}
+	queueName := "agent.event." + queueSegment(subscriberID) + "." + queueSegment(pattern)
+	queue, err := channel.QueueDeclare(queueName, true, false, false, false, nil)
+	if err != nil {
+		_ = channel.Close()
+		return nil, fmt.Errorf("declare event queue: %w", err)
+	}
+	if err := channel.QueueBind(queue.Name, pattern, publisher.eventExchange, false, nil); err != nil {
+		_ = channel.Close()
+		return nil, fmt.Errorf("bind event queue: %w", err)
+	}
+	consumerTag := fmt.Sprintf("onclave-event-%s-%d", queueSegment(subscriberID), time.Now().UnixNano())
+	deliveries, err := channel.Consume(queue.Name, consumerTag, false, false, false, false, nil)
+	if err != nil {
+		_ = channel.Close()
+		return nil, fmt.Errorf("consume event queue: %w", err)
+	}
+	subscription := &Subscription{channel: channel, consumerTag: consumerTag}
+	go consumeDeliveries(ctx, subscription, deliveries, handler)
+	return subscription, nil
+}
+
+func consumeDeliveries(ctx context.Context, subscription *Subscription, deliveries <-chan amqp.Delivery, handler DeliveryHandler) {
+	for {
+		select {
+		case <-ctx.Done():
+			_ = subscription.Close()
+			return
+		case delivery, ok := <-deliveries:
+			if !ok {
+				return
+			}
+			var envelope Envelope
+			if err := json.Unmarshal(delivery.Body, &envelope); err != nil {
+				_ = delivery.Nack(false, false)
+				continue
+			}
+			envelope.RoutingKey = delivery.RoutingKey
+			if err := handler(envelope); err != nil {
+				_ = delivery.Nack(false, true)
+				continue
+			}
+			_ = delivery.Ack(false)
+		}
+	}
 }
 
 func queueSegment(agentID string) string {
