@@ -1,0 +1,5 @@
+**/.git
+**/.hermes
+**/node_modules
+**/coverage
+**/*.test.ts

@@ -1,0 +1,49 @@
+services:
+  onclave:
+    build:
+      context: ../..
+      dockerfile: services/onclave/Dockerfile
+    environment:
+      ONCLAVE_API_ADDRESS: ":8080"
+      ONCLAVE_STATE_DIR: /data/onclave
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - onclave-state:/data/onclave
+    networks:
+      - onclave-internal
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+
+  rabbitmq:
+    image: rabbitmq:4.1-management-alpine
+    hostname: onclave-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: onclave
+      RABBITMQ_DEFAULT_PASS: ${ONCLAVE_RABBITMQ_PASSWORD:?Set ONCLAVE_RABBITMQ_PASSWORD for the local stack}
+      RABBITMQ_DEFAULT_VHOST: /onclave
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks:
+      - onclave-internal
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+volumes:
+  onclave-state:
+  rabbitmq-data:
+
+networks:
+  onclave-internal:
+    # RabbitMQ remains private because it has no published host ports.
