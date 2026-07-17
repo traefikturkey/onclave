@@ -35,3 +35,5 @@ tmp/
 
 .specs/
 .hermes/
+# Go build artifacts
+services/onclave/onclave.exe
