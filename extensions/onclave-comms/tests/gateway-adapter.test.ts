@@ -34,4 +34,14 @@ describe("OnclaveGatewayClient", () => {
 
     await expect(client.getTask("bad-token", "task-1")).rejects.toEqual(new OnclaveGatewayError(403, "forbidden"));
   });
+
+  it("signs a gateway challenge with the configured private key", async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ nonce: Buffer.from("nonce").toString("base64") }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ sessionToken: "session-token" }), { status: 200 }));
+    const client = new OnclaveGatewayClient({ baseUrl: "https://gateway.example", fetchImpl });
+
+    await expect(client.authenticateWithPrivateKey("agent-1", "11".repeat(32))).resolves.toBe("session-token");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
 });

@@ -1,4 +1,5 @@
 import { WebSocket } from "ws";
+import { signAsync } from "@noble/ed25519";
 
 export type GatewayCommand = {
   messageId: string;
@@ -65,6 +66,23 @@ export class OnclaveGatewayClient {
     return value.sessionToken;
   }
 
+  async issueChallenge(agentId: string): Promise<string> {
+    const response = await this.request(`/v1/agents/${encodeURIComponent(agentId)}/challenge`, {
+      method: "POST",
+    });
+    const value = (await response.json()) as { nonce?: unknown };
+    if (typeof value.nonce !== "string" || value.nonce.length === 0) {
+      throw new OnclaveGatewayError(response.status, "gateway response did not contain a challenge nonce");
+    }
+    return value.nonce;
+  }
+
+  async authenticateWithPrivateKey(agentId: string, privateKeyHex: string): Promise<string> {
+    const nonce = await this.issueChallenge(agentId);
+    const signature = await signAsync(Buffer.from(nonce, "base64"), hexToBytes(privateKeyHex));
+    return this.authenticate(agentId, Buffer.from(signature).toString("base64"));
+  }
+
   async submitCommand(token: string, command: GatewayCommand): Promise<GatewayTask> {
     const response = await this.request("/v1/commands", {
       method: "POST",
@@ -108,4 +126,9 @@ export class OnclaveGatewayClient {
     }
     return response;
   }
+}
+
+function hexToBytes(value: string): Uint8Array {
+  if (!/^[a-f0-9]{64}$/i.test(value)) throw new Error("gateway private key must be 32 bytes of hex");
+  return Uint8Array.from(Buffer.from(value, "hex"));
 }

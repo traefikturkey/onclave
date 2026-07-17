@@ -10,6 +10,8 @@ import { findStaticPeer, loadOnclaveConfig } from "./lib/config";
 import { createLocalAgentRegistration } from "./lib/extension-helpers";
 import { loadIdentityPrivateKeyHex } from "./lib/identity";
 import { createRemoteHubClient, RemoteHubAuthError } from "./lib/remote-client";
+import { OnclaveGatewayClient } from "./lib/gateway-adapter";
+import { PiGatewaySession, type PiGatewayCommand } from "./lib/pi-gateway-session";
 import type { DeliveredPrompt } from "./lib/messages";
 import { renderOnclavePeerWidget } from "./lib/peer-widget";
 import type { LocalAgentRegistration } from "./lib/local-registry";
@@ -63,12 +65,35 @@ export default function (pi: ExtensionAPI) {
   let localRegistration: LocalAgentRegistration | null = null;
   let sessionUi: ExtensionContext["ui"] | null = null;
   let peerWidgetTimer: ReturnType<typeof setInterval> | null = null;
+  let gatewaySession: PiGatewaySession | null = null;
   const peerDisplayCache = new Map<string, { peerName?: string; model?: string }>();
   const inboundPrompts = new Map<string, DeliveredPrompt>();
+  const gatewayCommands = new Map<string, PiGatewayCommand>();
 
   pi.on("session_start", async (_event, ctx) => {
     sessionUi = ctx.ui;
     try {
+      localSessionId = sessionIdFromContext(ctx);
+      localRegistration = await createRegistrationForContext(pi, ctx, localSessionId);
+      const gatewayUrl = process.env.ONCLAVE_GATEWAY_URL;
+      if (gatewayUrl) {
+        const agentId = process.env.ONCLAVE_AGENT_ID || localRegistration.sessionId;
+        const client = new OnclaveGatewayClient({ baseUrl: gatewayUrl });
+        const token = await client.authenticateWithPrivateKey(agentId, await loadIdentityPrivateKeyHex(paths));
+        gatewaySession = new PiGatewaySession(client, agentId, token, async (command) => {
+          gatewayCommands.set(command.messageId, command);
+          await deliverInboundPrompt(pi, {
+            msgId: command.messageId,
+            targetSessionId: agentId,
+            deliveryEndpoint: gatewayUrl,
+            prompt: gatewayPromptText(command),
+            hops: 0,
+            receivedAt: new Date().toISOString(),
+          }, inboundPrompts);
+        });
+        gatewaySession.connect();
+        return;
+      }
       bootstrap = await bootstrapLocalHub(paths, {
         host: "0.0.0.0",
         discoveryPort: DEFAULT_DISCOVERY_PORT,
@@ -79,8 +104,6 @@ export default function (pi: ExtensionAPI) {
         audit,
       });
 
-      localSessionId = sessionIdFromContext(ctx);
-      localRegistration = await createRegistrationForContext(pi, ctx, localSessionId);
       if (bootstrap.runtime?.registerLocalAgent) {
         bootstrap.runtime.registerLocalAgent(localRegistration);
       } else {
@@ -109,6 +132,8 @@ export default function (pi: ExtensionAPI) {
       clearInterval(peerWidgetTimer);
       peerWidgetTimer = null;
     }
+    gatewaySession?.close();
+    gatewaySession = null;
     if (bootstrap && localSessionId) {
       if (bootstrap.runtime?.unregisterLocalAgent) {
         bootstrap.runtime.unregisterLocalAgent(localSessionId);
@@ -130,10 +155,19 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("agent_end", async (event, ctx) => {
-    if (!bootstrap || !localSessionId) return;
+    if (!localSessionId) return;
     const inbound = inboundPromptForAgentRun(event.messages, inboundPrompts);
     if (!inbound || inbound.replyMode === "async_message") return;
     const response = extractLastAssistantText(ctx);
+    if (gatewaySession) {
+      const command = gatewayCommands.get(inbound.msgId);
+      if (!command) return;
+      gatewaySession.complete(command, { response, status: "completed" });
+      gatewayCommands.delete(inbound.msgId);
+      inboundPrompts.delete(inbound.msgId);
+      return;
+    }
+    if (!bootstrap) return;
     const responses = await sendWssFrames(
       localHubWssUrl(bootstrap.state.endpoint),
       [
@@ -617,6 +651,12 @@ export default function (pi: ExtensionAPI) {
       };
     },
   });
+}
+
+function gatewayPromptText(command: PiGatewayCommand): string {
+  const instruction = command.payload?.instruction;
+  if (typeof instruction === "string") return instruction;
+  return JSON.stringify(command.payload ?? {}, null, 2);
 }
 
 async function deliverInboundPrompt(
