@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"sync"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
@@ -24,6 +27,27 @@ type Envelope struct {
 
 type Publisher interface {
 	Publish(context.Context, Envelope) error
+}
+
+type DeliveryHandler func(Envelope) error
+
+type Subscription struct {
+	channel     *amqp.Channel
+	consumerTag string
+	once        sync.Once
+}
+
+func (subscription *Subscription) Close() error {
+	var err error
+	subscription.once.Do(func() {
+		if subscription.channel != nil {
+			if cancelErr := subscription.channel.Cancel(subscription.consumerTag, false); cancelErr != nil {
+				err = cancelErr
+			}
+			err = subscription.channel.Close()
+		}
+	})
+	return err
 }
 
 type RabbitMQPublisher struct {
@@ -60,9 +84,61 @@ func (publisher *RabbitMQPublisher) Publish(ctx context.Context, envelope Envelo
 		DeliveryMode:  amqp.Persistent,
 		MessageId:     envelope.MessageID,
 		CorrelationId: envelope.CorrelationID,
-		Expiration:    "",
 		Body:          body,
 	})
+}
+
+func (publisher *RabbitMQPublisher) SubscribeAgent(ctx context.Context, agentID string, handler DeliveryHandler) (*Subscription, error) {
+	channel, err := publisher.connection.Channel()
+	if err != nil {
+		return nil, fmt.Errorf("open RabbitMQ consumer channel: %w", err)
+	}
+	queueName := "agent.command." + queueSegment(agentID)
+	queue, err := channel.QueueDeclare(queueName, true, false, false, false, nil)
+	if err != nil {
+		_ = channel.Close()
+		return nil, fmt.Errorf("declare agent queue: %w", err)
+	}
+	if err := channel.QueueBind(queue.Name, "task.#."+agentID, publisher.exchange, false, nil); err != nil {
+		_ = channel.Close()
+		return nil, fmt.Errorf("bind agent queue: %w", err)
+	}
+	consumerTag := fmt.Sprintf("onclave-%s-%d", queueSegment(agentID), time.Now().UnixNano())
+	deliveries, err := channel.Consume(queue.Name, consumerTag, false, false, false, false, nil)
+	if err != nil {
+		_ = channel.Close()
+		return nil, fmt.Errorf("consume agent queue: %w", err)
+	}
+	subscription := &Subscription{channel: channel, consumerTag: consumerTag}
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				_ = subscription.Close()
+				return
+			case delivery, ok := <-deliveries:
+				if !ok {
+					return
+				}
+				var envelope Envelope
+				if err := json.Unmarshal(delivery.Body, &envelope); err != nil {
+					_ = delivery.Nack(false, false)
+					continue
+				}
+				envelope.RoutingKey = delivery.RoutingKey
+				if err := handler(envelope); err != nil {
+					_ = delivery.Nack(false, true)
+					continue
+				}
+				_ = delivery.Ack(false)
+			}
+		}
+	}()
+	return subscription, nil
+}
+
+func queueSegment(agentID string) string {
+	return strings.NewReplacer("/", "_", "\\", "_", " ", "_").Replace(agentID)
 }
 
 func (publisher *RabbitMQPublisher) Close() error {
