@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onclave.dev/schemas/agent-registration.schema.json",
+  "title": "AgentRegistration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolVersion", "agentId", "runtimeInstanceId", "sessionId", "runtime", "capabilities", "declaredAt"],
+  "properties": {
+    "protocolVersion": { "const": "1.0" },
+    "agentId": { "type": "string", "minLength": 1 },
+    "runtimeInstanceId": { "type": "string", "minLength": 1 },
+    "sessionId": { "type": "string", "minLength": 1 },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "version"],
+      "properties": {
+        "type": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "capabilities": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "declaredAt": { "type": "string", "format": "date-time" }
+  }
+}

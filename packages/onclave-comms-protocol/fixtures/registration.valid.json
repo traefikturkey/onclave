@@ -1,0 +1,16 @@
+{
+  "protocolVersion": "1.0",
+  "agentId": "agent-reference",
+  "runtimeInstanceId": "runtime-reference-1",
+  "sessionId": "session-reference-1",
+  "runtime": {
+    "type": "reference",
+    "version": "0.1.0"
+  },
+  "capabilities": [
+    "message.receive",
+    "message.reply",
+    "status.heartbeat"
+  ],
+  "declaredAt": "2026-07-17T12:00:00.000Z"
+}

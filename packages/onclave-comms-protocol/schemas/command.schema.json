@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onclave.dev/schemas/command.schema.json",
+  "title": "CommandEnvelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolVersion", "messageId", "correlationId", "commandType", "sourceAgentId", "targetAgentId", "issuedAt", "expiresAt", "payload"],
+  "properties": {
+    "protocolVersion": { "const": "1.0" },
+    "messageId": { "type": "string", "minLength": 1 },
+    "correlationId": { "type": "string", "minLength": 1 },
+    "commandType": { "type": "string", "minLength": 1 },
+    "sourceAgentId": { "type": "string", "minLength": 1 },
+    "targetAgentId": { "type": "string", "minLength": 1 },
+    "issuedAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "payload": { "type": "object" }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onclave.dev/schemas/capability-declaration.schema.json",
+  "title": "CapabilityDeclaration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolVersion", "requestId", "nonce", "agentId", "capabilities", "declaredAt"],
+  "properties": {
+    "protocolVersion": { "const": "1.0" },
+    "requestId": { "type": "string", "minLength": 1 },
+    "nonce": { "type": "string", "minLength": 1 },
+    "agentId": { "type": "string", "minLength": 1 },
+    "capabilities": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "declaredAt": { "type": "string", "format": "date-time" }
+  }
+}

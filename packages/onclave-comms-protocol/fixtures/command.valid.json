@@ -1,0 +1,14 @@
+{
+  "protocolVersion": "1.0",
+  "messageId": "message-reference-1",
+  "correlationId": "correlation-reference-1",
+  "commandType": "task.assign",
+  "sourceAgentId": "agent-source",
+  "targetAgentId": "agent-reference",
+  "issuedAt": "2026-07-17T12:00:00.000Z",
+  "expiresAt": "2026-07-17T12:05:00.000Z",
+  "payload": {
+    "taskId": "task-reference-1",
+    "instruction": "Run the reference adapter contract test"
+  }
+}
