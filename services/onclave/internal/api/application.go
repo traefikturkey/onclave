@@ -13,9 +13,14 @@ import (
 )
 
 func NewApplicationServer(config Config, admissionService *admission.Service, messagingService *messaging.Service, readiness ReadinessCheck) *Server {
+	return NewApplicationServerWithBroker(config, admissionService, messagingService, nil, readiness)
+}
+
+func NewApplicationServerWithBroker(config Config, admissionService *admission.Service, messagingService *messaging.Service, subscriber agentSubscriber, readiness ReadinessCheck) *Server {
 	server := NewServer(config, readiness)
 	server.admission = admissionService
 	server.messaging = messagingService
+	server.subscriber = subscriber
 	return server
 }
 
@@ -29,6 +34,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/agents/{agentID}/authenticate", s.authenticate)
 	mux.HandleFunc("POST /v1/agents/{agentID}/capabilities/request", s.requestCapabilities)
 	mux.HandleFunc("POST /v1/agents/{agentID}/capabilities", s.acceptCapabilities)
+	mux.HandleFunc("GET /v1/agents/{agentID}/session", s.agentSession)
 	mux.HandleFunc("POST /v1/commands", s.submitCommand)
 	mux.HandleFunc("GET /v1/tasks/{taskID}", s.taskStatus)
 	mux.HandleFunc("POST /v1/tasks/{taskID}/ack", s.acknowledgeTask)

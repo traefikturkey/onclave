@@ -17,6 +17,7 @@ func main() {
 	serviceConfig := config.FromEnvironment()
 	admissionService := admission.NewService(admission.Policy{})
 	var publisher messaging.Publisher
+	var subscriber *messaging.RabbitMQPublisher
 	if serviceConfig.RabbitMQURL != "" {
 		rabbitPublisher, err := messaging.NewRabbitMQPublisher(serviceConfig.RabbitMQURL, serviceConfig.RabbitMQExchange)
 		if err != nil {
@@ -24,6 +25,7 @@ func main() {
 		}
 		defer rabbitPublisher.Close()
 		publisher = rabbitPublisher
+		subscriber = rabbitPublisher
 	}
 	store, err := persistence.Open(filepath.Join(serviceConfig.StateDir, "onclave.db"))
 	if err != nil {
@@ -31,7 +33,7 @@ func main() {
 	}
 	defer store.Close()
 	messagingService := messaging.NewServiceWithPublisherAndStore(time.Now, publisher, store)
-	server := api.NewApplicationServer(api.Config{Address: serviceConfig.Address}, admissionService, messagingService, func() error {
+	server := api.NewApplicationServerWithBroker(api.Config{Address: serviceConfig.Address}, admissionService, messagingService, subscriber, func() error {
 		return nil
 	})
 

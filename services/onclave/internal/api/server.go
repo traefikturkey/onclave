@@ -18,10 +18,11 @@ type Config struct {
 type ReadinessCheck func() error
 
 type Server struct {
-	config    Config
-	readiness ReadinessCheck
-	admission *admission.Service
-	messaging *messaging.Service
+	config     Config
+	readiness  ReadinessCheck
+	admission  *admission.Service
+	messaging  *messaging.Service
+	subscriber agentSubscriber
 }
 
 func NewServer(config Config, readiness ReadinessCheck) *Server {
