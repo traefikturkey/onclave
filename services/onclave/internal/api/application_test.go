@@ -86,6 +86,13 @@ func TestAgentAdmissionAndTaskSubmissionFlow(t *testing.T) {
 	if status.TaskID != "task-api-1" || status.State != messaging.StateAccepted {
 		t.Fatalf("unexpected task status: %+v", status)
 	}
+
+	eventsResponse := getWithAuth(t, server.Handler(), "/v1/tasks/task-api-1/events", auth.SessionToken, http.StatusOK)
+	var events []messaging.Event
+	decodeBody(t, eventsResponse, &events)
+	if len(events) != 1 || events[0].Type != messaging.EventAccepted {
+		t.Fatalf("unexpected task events: %+v", events)
+	}
 }
 
 func postJSON(t *testing.T, handler http.Handler, path string, body any, expectedStatus int) *httptest.ResponseRecorder {

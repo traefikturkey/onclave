@@ -37,6 +37,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/agents/{agentID}/session", s.agentSession)
 	mux.HandleFunc("POST /v1/commands", s.submitCommand)
 	mux.HandleFunc("GET /v1/tasks/{taskID}", s.taskStatus)
+	mux.HandleFunc("GET /v1/tasks/{taskID}/events", s.taskEvents)
 	mux.HandleFunc("POST /v1/tasks/{taskID}/ack", s.acknowledgeTask)
 	mux.HandleFunc("POST /v1/tasks/{taskID}/start", s.startTask)
 	mux.HandleFunc("POST /v1/tasks/{taskID}/progress", s.progressTask)
@@ -209,6 +210,17 @@ func (s *Server) taskStatus(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	writeJSON(writer, http.StatusOK, task)
+}
+
+func (s *Server) taskEvents(writer http.ResponseWriter, request *http.Request) {
+	if s.messaging == nil {
+		writeError(writer, http.StatusServiceUnavailable, "messaging service unavailable")
+		return
+	}
+	if _, ok := s.requireTaskSession(writer, request, request.PathValue("taskID"), true); !ok {
+		return
+	}
+	writeJSON(writer, http.StatusOK, s.messaging.Events(request.PathValue("taskID")))
 }
 
 func (s *Server) acknowledgeTask(writer http.ResponseWriter, request *http.Request) {

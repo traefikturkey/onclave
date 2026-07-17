@@ -67,12 +67,12 @@ type Task struct {
 }
 
 type Event struct {
-	Type     EventType
-	TaskID   string
-	At       time.Time
-	Progress int
-	Note     string
-	Payload  map[string]any
+	Type     EventType      `json:"type"`
+	TaskID   string         `json:"taskId"`
+	At       time.Time      `json:"at"`
+	Progress int            `json:"progress,omitempty"`
+	Note     string         `json:"note,omitempty"`
+	Payload  map[string]any `json:"payload,omitempty"`
 }
 
 type Service struct {
