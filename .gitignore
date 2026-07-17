@@ -34,3 +34,4 @@ temp/
 tmp/
 
 .specs/
+.hermes/
