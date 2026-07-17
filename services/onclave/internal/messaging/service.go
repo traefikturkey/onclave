@@ -81,6 +81,12 @@ type Service struct {
 	tasks     map[string]*Task
 	events    map[string][]Event
 	publisher Publisher
+	store     TaskStore
+}
+
+type TaskStore interface {
+	SaveTask(Task) error
+	GetTask(string) (Task, error)
 }
 
 func NewService(now func() time.Time) *Service {
@@ -88,10 +94,14 @@ func NewService(now func() time.Time) *Service {
 }
 
 func NewServiceWithPublisher(now func() time.Time, publisher Publisher) *Service {
+	return NewServiceWithPublisherAndStore(now, publisher, nil)
+}
+
+func NewServiceWithPublisherAndStore(now func() time.Time, publisher Publisher, store TaskStore) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{now: now, tasks: make(map[string]*Task), events: make(map[string][]Event), publisher: publisher}
+	return &Service{now: now, tasks: make(map[string]*Task), events: make(map[string][]Event), publisher: publisher, store: store}
 }
 
 func (s *Service) Submit(command Command) (Task, error) {
@@ -125,6 +135,12 @@ func (s *Service) Submit(command Command) (Task, error) {
 		ExpiresAt: command.ExpiresAt, State: StateAccepted, Payload: cloneMap(command.Payload),
 	}
 	s.tasks[task.TaskID] = task
+	if s.store != nil {
+		if err := s.store.SaveTask(*task); err != nil {
+			delete(s.tasks, task.TaskID)
+			return Task{}, fmt.Errorf("persist task: %w", err)
+		}
+	}
 	s.record(task, Event{Type: EventAccepted, TaskID: task.TaskID})
 	return cloneTask(task), nil
 }
@@ -143,6 +159,9 @@ func (s *Service) Acknowledge(taskID string) error {
 		return ErrInvalidTransition
 	}
 	task.State = StateAcknowledged
+	if err := s.persist(task); err != nil {
+		return err
+	}
 	s.record(task, Event{Type: EventAcknowledged, TaskID: taskID})
 	return nil
 }
@@ -161,6 +180,9 @@ func (s *Service) Start(taskID string) error {
 		return ErrInvalidTransition
 	}
 	task.State = StateRunning
+	if err := s.persist(task); err != nil {
+		return err
+	}
 	s.record(task, Event{Type: EventStarted, TaskID: taskID})
 	return nil
 }
@@ -180,6 +202,9 @@ func (s *Service) Progress(taskID string, progress int, note string) error {
 	}
 	task.Progress = progress
 	task.ProgressNote = note
+	if err := s.persist(task); err != nil {
+		return err
+	}
 	s.record(task, Event{Type: EventProgress, TaskID: taskID, Progress: progress, Note: note})
 	return nil
 }
@@ -200,6 +225,9 @@ func (s *Service) Complete(taskID string, result map[string]any) error {
 	task.State = StateCompleted
 	task.Progress = 100
 	task.Result = cloneMap(result)
+	if err := s.persist(task); err != nil {
+		return err
+	}
 	s.record(task, Event{Type: EventCompleted, TaskID: taskID, Progress: 100, Payload: cloneMap(result)})
 	return nil
 }
@@ -218,6 +246,9 @@ func (s *Service) Cancel(taskID string) error {
 		return ErrInvalidTransition
 	}
 	task.State = StateCancelled
+	if err := s.persist(task); err != nil {
+		return err
+	}
 	s.record(task, Event{Type: EventCancelled, TaskID: taskID})
 	return nil
 }
@@ -242,9 +273,23 @@ func (s *Service) Events(taskID string) []Event {
 func (s *Service) task(taskID string) (*Task, error) {
 	task, ok := s.tasks[taskID]
 	if !ok {
+		if s.store != nil {
+			loaded, err := s.store.GetTask(taskID)
+			if err == nil {
+				s.tasks[taskID] = &loaded
+				return &loaded, nil
+			}
+		}
 		return nil, ErrTaskNotFound
 	}
 	return task, nil
+}
+
+func (s *Service) persist(task *Task) error {
+	if s.store == nil {
+		return nil
+	}
+	return s.store.SaveTask(*task)
 }
 
 func (s *Service) record(task *Task, event Event) {
