@@ -1,0 +1,256 @@
+package messaging
+
+import (
+	"errors"
+	"sort"
+	"sync"
+	"time"
+)
+
+var (
+	ErrExpired           = errors.New("command has expired")
+	ErrTaskNotFound      = errors.New("task not found")
+	ErrInvalidTransition = errors.New("invalid task state transition")
+	ErrInvalidProgress   = errors.New("progress must be between 0 and 100")
+)
+
+type State string
+
+const (
+	StateAccepted     State = "accepted"
+	StateAcknowledged State = "acknowledged"
+	StateRunning      State = "running"
+	StateCompleted    State = "completed"
+	StateFailed       State = "failed"
+	StateCancelled    State = "cancelled"
+	StateExpired      State = "expired"
+)
+
+type EventType string
+
+const (
+	EventAccepted     EventType = "task.accepted"
+	EventAcknowledged EventType = "task.acknowledged"
+	EventStarted      EventType = "task.started"
+	EventProgress     EventType = "task.progress"
+	EventCompleted    EventType = "task.completed"
+	EventCancelled    EventType = "task.cancelled"
+)
+
+type Command struct {
+	MessageID     string
+	TaskID        string
+	CorrelationID string
+	SourceAgentID string
+	TargetAgentID string
+	Type          string
+	ExpiresAt     time.Time
+	Payload       map[string]any
+}
+
+type Task struct {
+	MessageID     string
+	TaskID        string
+	CorrelationID string
+	SourceAgentID string
+	TargetAgentID string
+	Type          string
+	ExpiresAt     time.Time
+	State         State
+	Progress      int
+	ProgressNote  string
+	Payload       map[string]any
+	Result        map[string]any
+}
+
+type Event struct {
+	Type     EventType
+	TaskID   string
+	At       time.Time
+	Progress int
+	Note     string
+	Payload  map[string]any
+}
+
+type Service struct {
+	mu     sync.Mutex
+	now    func() time.Time
+	tasks  map[string]*Task
+	events map[string][]Event
+}
+
+func NewService(now func() time.Time) *Service {
+	if now == nil {
+		now = time.Now
+	}
+	return &Service{now: now, tasks: make(map[string]*Task), events: make(map[string][]Event)}
+}
+
+func (s *Service) Submit(command Command) (Task, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if existing, ok := s.tasks[command.TaskID]; ok {
+		return cloneTask(existing), nil
+	}
+	if command.ExpiresAt.IsZero() || !command.ExpiresAt.After(s.now()) {
+		return Task{}, ErrExpired
+	}
+	task := &Task{
+		MessageID: command.MessageID, TaskID: command.TaskID, CorrelationID: command.CorrelationID,
+		SourceAgentID: command.SourceAgentID, TargetAgentID: command.TargetAgentID, Type: command.Type,
+		ExpiresAt: command.ExpiresAt, State: StateAccepted, Payload: cloneMap(command.Payload),
+	}
+	s.tasks[task.TaskID] = task
+	s.record(task, Event{Type: EventAccepted, TaskID: task.TaskID})
+	return cloneTask(task), nil
+}
+
+func (s *Service) Acknowledge(taskID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task, err := s.task(taskID)
+	if err != nil {
+		return err
+	}
+	if task.State == StateAcknowledged || task.State == StateRunning {
+		return nil
+	}
+	if task.State != StateAccepted {
+		return ErrInvalidTransition
+	}
+	task.State = StateAcknowledged
+	s.record(task, Event{Type: EventAcknowledged, TaskID: taskID})
+	return nil
+}
+
+func (s *Service) Start(taskID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task, err := s.task(taskID)
+	if err != nil {
+		return err
+	}
+	if task.State == StateRunning {
+		return nil
+	}
+	if task.State != StateAcknowledged {
+		return ErrInvalidTransition
+	}
+	task.State = StateRunning
+	s.record(task, Event{Type: EventStarted, TaskID: taskID})
+	return nil
+}
+
+func (s *Service) Progress(taskID string, progress int, note string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if progress < 0 || progress > 100 {
+		return ErrInvalidProgress
+	}
+	task, err := s.task(taskID)
+	if err != nil {
+		return err
+	}
+	if task.State != StateRunning {
+		return ErrInvalidTransition
+	}
+	task.Progress = progress
+	task.ProgressNote = note
+	s.record(task, Event{Type: EventProgress, TaskID: taskID, Progress: progress, Note: note})
+	return nil
+}
+
+func (s *Service) Complete(taskID string, result map[string]any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task, err := s.task(taskID)
+	if err != nil {
+		return err
+	}
+	if task.State == StateCompleted {
+		return nil
+	}
+	if task.State != StateRunning {
+		return ErrInvalidTransition
+	}
+	task.State = StateCompleted
+	task.Progress = 100
+	task.Result = cloneMap(result)
+	s.record(task, Event{Type: EventCompleted, TaskID: taskID, Progress: 100, Payload: cloneMap(result)})
+	return nil
+}
+
+func (s *Service) Cancel(taskID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task, err := s.task(taskID)
+	if err != nil {
+		return err
+	}
+	if task.State == StateCancelled {
+		return nil
+	}
+	if task.State == StateCompleted || task.State == StateFailed || task.State == StateExpired {
+		return ErrInvalidTransition
+	}
+	task.State = StateCancelled
+	s.record(task, Event{Type: EventCancelled, TaskID: taskID})
+	return nil
+}
+
+func (s *Service) Status(taskID string) (Task, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task, err := s.task(taskID)
+	if err != nil {
+		return Task{}, err
+	}
+	return cloneTask(task), nil
+}
+
+func (s *Service) Events(taskID string) []Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	events := append([]Event(nil), s.events[taskID]...)
+	return events
+}
+
+func (s *Service) task(taskID string) (*Task, error) {
+	task, ok := s.tasks[taskID]
+	if !ok {
+		return nil, ErrTaskNotFound
+	}
+	return task, nil
+}
+
+func (s *Service) record(task *Task, event Event) {
+	event.At = s.now()
+	s.events[task.TaskID] = append(s.events[task.TaskID], event)
+}
+
+func cloneTask(task *Task) Task {
+	copy := *task
+	copy.Payload = cloneMap(task.Payload)
+	copy.Result = cloneMap(task.Result)
+	return copy
+}
+
+func cloneMap(value map[string]any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	copy := make(map[string]any, len(value))
+	for key, item := range value {
+		copy[key] = item
+	}
+	return copy
+}
+
+func sortedKeys(value map[string]any) []string {
+	keys := make([]string, 0, len(value))
+	for key := range value {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}

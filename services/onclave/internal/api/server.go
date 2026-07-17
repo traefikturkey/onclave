@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+
+	"github.com/traefikturkey/onclave/services/onclave/internal/admission"
+	"github.com/traefikturkey/onclave/services/onclave/internal/messaging"
 )
 
 var errDependencyUnavailable = errors.New("dependency unavailable")
@@ -17,6 +20,8 @@ type ReadinessCheck func() error
 type Server struct {
 	config    Config
 	readiness ReadinessCheck
+	admission *admission.Service
+	messaging *messaging.Service
 }
 
 func NewServer(config Config, readiness ReadinessCheck) *Server {
@@ -27,13 +32,6 @@ func NewServer(config Config, readiness ReadinessCheck) *Server {
 		readiness = func() error { return nil }
 	}
 	return &Server{config: config, readiness: readiness}
-}
-
-func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", s.health)
-	mux.HandleFunc("GET /readyz", s.ready)
-	return mux
 }
 
 func (s *Server) health(writer http.ResponseWriter, _ *http.Request) {
