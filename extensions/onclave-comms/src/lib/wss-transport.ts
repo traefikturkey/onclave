@@ -37,7 +37,7 @@ export async function startWssHubServer(options: WssHubServerOptions): Promise<W
     response.writeHead(404);
     response.end("not found");
   });
-  const webSocketServer = new WebSocketServer({ noServer: true });
+  const webSocketServer = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 });
 
   httpsServer.on("upgrade", (request, socket, head) => {
     if (!request.url || new URL(request.url, "https://localhost").pathname !== "/v1/hub") {

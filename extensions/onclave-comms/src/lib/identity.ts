@@ -1,9 +1,13 @@
 import { copyFile, readFile, writeFile } from "node:fs/promises";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { basename, dirname, join } from "node:path";
 import { keygenAsync } from "@noble/ed25519";
 import type { OnclavePaths } from "./state";
 import { atomicWriteJson, ensureOnclaveRoot, getOnclavePaths } from "./state";
+
+export function deriveLocalAuthToken(nodeId: string, privateKeyHex: string): string {
+  return createHash("sha256").update("onclave-local-v1\0").update(nodeId).update("\0").update(privateKeyHex).digest("hex");
+}
 
 export type OnclaveIdentity = {
   version: 1;

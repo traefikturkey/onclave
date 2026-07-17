@@ -37,7 +37,7 @@ export async function appendAuditEvent(
     event,
     ...metadata,
   };
-  await appendFile(path, `${JSON.stringify(entry)}\n`, "utf8");
+  await appendFile(path, `${JSON.stringify(entry)}\n`, { encoding: "utf8", mode: 0o600 });
 }
 
 function assertNoSensitiveFields(value: unknown, path = "$."): void {

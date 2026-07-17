@@ -57,6 +57,18 @@ describe("HubFrameProcessor", () => {
     expect(unregistered).toEqual(["session-1"]);
   });
 
+  it("requires the local capability token for local operations", async () => {
+    const processor = await createProcessor([], { localAuthToken: "local-secret" });
+
+    await expect(processor.handleRaw(JSON.stringify({ type: "local_unregister", sessionId: "session-1" }))).resolves.toEqual({
+      type: "error",
+      code: "auth_required",
+    });
+    await expect(
+      processor.handleRaw(JSON.stringify({ type: "local_unregister", sessionId: "session-1", localAuthToken: "local-secret" }))
+    ).resolves.toMatchObject({ type: "local_unregister_ok" });
+  });
+
   it("requires authentication before listing agents", async () => {
     const processor = await createProcessor([]);
 
@@ -279,6 +291,7 @@ async function createProcessor(
     unregisterLocalAgent?: (sessionId: string) => boolean;
     onSendPrompt?: (frame: SendPromptFrame) => Promise<{ ok: true; msgId: string; status: "delivered" } | { ok: false; error: string } | void>;
     getResponse?: (msgId: string) => { status: string; response?: unknown; error?: string | null };
+    localAuthToken?: string;
     submitResponse?: (response: {
       msgId: string;
       responderSessionId: string;
@@ -290,6 +303,7 @@ async function createProcessor(
 ): Promise<HubFrameProcessor> {
   const serverKeys = await keygenAsync();
   return new HubFrameProcessor({
+    localAuthToken: options.localAuthToken,
     gate: new HubTransportAuthGate({
       authorizedKeys,
       now: () => new Date(NOW),

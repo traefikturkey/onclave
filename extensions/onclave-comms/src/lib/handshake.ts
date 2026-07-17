@@ -69,14 +69,23 @@ export type VerifyServerHandshakeInput = {
 };
 
 export class ReplayCache {
-  private readonly seen = new Set<string>();
+  private readonly seen = new Map<string, number>();
 
   has(payload: HandshakePayload): boolean {
+    this.prune();
     return this.seen.has(replayKey(payload));
   }
 
   remember(payload: HandshakePayload): void {
-    this.seen.add(replayKey(payload));
+    this.prune();
+    this.seen.set(replayKey(payload), Date.now() + 60_000);
+  }
+
+  private prune(): void {
+    const now = Date.now();
+    for (const [key, expiresAt] of this.seen) {
+      if (expiresAt <= now) this.seen.delete(key);
+    }
   }
 }
 
@@ -102,6 +111,9 @@ export async function verifyClientHandshake(
 
   const authorizedKey = findAuthorizedKey(input.publicKeyHex, input.authorizedKeys);
   if (!authorizedKey) return { ok: false, reason: "unknown_public_key" };
+  if (!keyMatchesClaimedNode(authorizedKey.comment, input.payload.client_node_id)) {
+    return { ok: false, reason: "invalid_payload" };
+  }
 
   if (isStale(input.payload.client_timestamp, input.now, input.maxSkewMs)) {
     return { ok: false, reason: "stale_handshake" };
@@ -143,6 +155,9 @@ export async function verifyServerHandshake(
 
   const authorizedKey = findAuthorizedKey(input.publicKeyHex, input.authorizedKeys);
   if (!authorizedKey) return { ok: false, reason: "unknown_public_key" };
+  if (!keyMatchesClaimedNode(authorizedKey.comment, input.payload.server_node_id)) {
+    return { ok: false, reason: "invalid_payload" };
+  }
 
   if (isStale(input.payload.client_timestamp, input.now, input.maxSkewMs)) {
     return { ok: false, reason: "stale_handshake" };
@@ -160,6 +175,11 @@ export async function verifyServerHandshake(
   if (!verified) return { ok: false, reason: "invalid_signature" };
 
   return { ok: true, fingerprint: authorizedKey.fingerprint };
+}
+
+function keyMatchesClaimedNode(comment: string, nodeId: string): boolean {
+  const identityComment = comment.trim().split(/\s+/)[0] ?? "";
+  return !identityComment.startsWith("node_") || identityComment === nodeId;
 }
 
 function findAuthorizedKey(

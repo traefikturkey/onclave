@@ -29,6 +29,7 @@ export type OnclaveHubRuntimeOptions = {
   authorizedKeys: AuthorizedSshEd25519Key[];
   localPublicKeyHex: string;
   localPrivateKeyHex: string;
+  localAuthToken?: string;
   discoverySocket: DiscoveryUdpSocket;
   discoveryPort: number;
   broadcastAddress: string;
@@ -55,6 +56,7 @@ export class OnclaveHubRuntime {
   private readonly audit?: AuditedHubRuntime;
   private wssServer: WssHubServer | null = null;
   private discovery: DiscoveryService | null = null;
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private state: HubState | null = null;
 
   constructor(private readonly options: OnclaveHubRuntimeOptions) {
@@ -115,10 +117,19 @@ export class OnclaveHubRuntime {
       audit: this.options.audit,
     });
     await this.discovery.start();
+    const cleanupIntervalMs = Math.max(1_000, Math.min(this.options.messageTtlMs ?? 1_800_000, 60_000));
+    this.cleanupTimer = setInterval(() => {
+      this.messages.cleanupExpired(this.options.now());
+    }, cleanupIntervalMs);
+    this.cleanupTimer.unref?.();
   }
 
   async stop(): Promise<void> {
     const state = this.state;
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
     if (this.discovery) {
       await this.discovery.stop();
       this.discovery = null;
@@ -193,6 +204,7 @@ export class OnclaveHubRuntime {
 
   private createFrameProcessor(): HubFrameProcessor {
     return new HubFrameProcessor({
+      localAuthToken: this.options.localAuthToken,
       gate: new HubTransportAuthGate({
         authorizedKeys: this.options.authorizedKeys,
         now: () => new Date(this.options.now()),

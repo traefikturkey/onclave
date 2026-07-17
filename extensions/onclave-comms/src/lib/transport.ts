@@ -19,6 +19,8 @@ import {
   type PromptReplyMode,
 } from "./prompt-metadata";
 
+const MAX_FRAME_PROMPT_LENGTH = 100_000;
+
 export type ClientAuthFrame = {
   type: "client_auth";
   payload: HandshakePayload;
@@ -60,23 +62,28 @@ export type GetResponseFrame = {
 export type LocalRegisterFrame = {
   type: "local_register";
   registration: LocalAgentRegistration;
+  localAuthToken?: string;
 };
 
 export type LocalUnregisterFrame = {
   type: "local_unregister";
   sessionId: string;
+  localAuthToken?: string;
 };
 
 export type LocalSendPromptFrame = Omit<SendPromptFrame, "type"> & {
   type: "local_send_prompt";
+  localAuthToken?: string;
 };
 
 export type LocalGetResponseFrame = Omit<GetResponseFrame, "type"> & {
   type: "local_get_response";
+  localAuthToken?: string;
 };
 
 export type LocalSubmitResponseFrame = MessageResponse & {
   type: "local_submit_response";
+  localAuthToken?: string;
 };
 
 export type HubFrame =
@@ -131,6 +138,7 @@ export type HubTransportAuthGateOptions = {
 
 export type HubFrameProcessorOptions = {
   gate: HubTransportAuthGate;
+  localAuthToken?: string;
   listAgents: () => LocalAgent[];
   registerLocalAgent: (registration: LocalAgentRegistration) => LocalAgent;
   unregisterLocalAgent: (sessionId: string) => boolean;
@@ -158,16 +166,20 @@ export class HubFrameProcessor {
       case "client_auth":
         return this.handleClientAuth(frame);
       case "local_register":
+        if (!this.isLocalAuthorized(frame.localAuthToken)) return { type: "error", code: "auth_required" };
         return { type: "local_register_ok", agent: this.options.registerLocalAgent(frame.registration) };
       case "local_unregister":
+        if (!this.isLocalAuthorized(frame.localAuthToken)) return { type: "error", code: "auth_required" };
         return {
           type: "local_unregister_ok",
           sessionId: frame.sessionId,
           removed: this.options.unregisterLocalAgent(frame.sessionId),
         };
       case "local_get_response":
+        if (!this.isLocalAuthorized(frame.localAuthToken)) return { type: "error", code: "auth_required" };
         return { type: "response", msgId: frame.msgId, result: this.options.getResponse(frame.msgId) };
       case "local_submit_response": {
+        if (!this.isLocalAuthorized(frame.localAuthToken)) return { type: "error", code: "auth_required" };
         const result = this.options.submitResponse({
           msgId: frame.msgId,
           responderSessionId: frame.responderSessionId,
@@ -179,6 +191,7 @@ export class HubFrameProcessor {
         return { type: "response_submitted", msgId: frame.msgId, status: result.status };
       }
       case "local_send_prompt": {
+        if (!this.isLocalAuthorized(frame.localAuthToken)) return { type: "error", code: "auth_required" };
         const result = await this.options.onSendPrompt({ ...frame, type: "send_prompt" });
         if (result && !result.ok) {
           return { type: "send_rejected", msgId: frame.msgId, error: result.error };
@@ -218,6 +231,10 @@ export class HubFrameProcessor {
 
   private isAuthenticated(): boolean {
     return this.authenticatedNodeId !== null && this.options.gate.canListAgents(this.authenticatedNodeId);
+  }
+
+  private isLocalAuthorized(token: string | undefined): boolean {
+    return this.options.localAuthToken === undefined || token === this.options.localAuthToken;
   }
 }
 
@@ -370,11 +387,15 @@ function isHandshakePayload(value: unknown): value is HandshakePayload {
 }
 
 function isLocalRegisterFrame(value: Record<string, unknown>): value is LocalRegisterFrame {
-  return value.type === "local_register" && isLocalAgentRegistration(value.registration);
+  return value.type === "local_register" && isOptionalLocalAuthToken(value) && isLocalAgentRegistration(value.registration);
 }
 
 function isLocalUnregisterFrame(value: Record<string, unknown>): value is LocalUnregisterFrame {
-  return value.type === "local_unregister" && typeof value.sessionId === "string" && value.sessionId.length > 0;
+  return value.type === "local_unregister" && isOptionalLocalAuthToken(value) && typeof value.sessionId === "string" && value.sessionId.length > 0;
+}
+
+function isOptionalLocalAuthToken(value: Record<string, unknown>): boolean {
+  return value.localAuthToken === undefined || (typeof value.localAuthToken === "string" && value.localAuthToken.length > 0);
 }
 
 function isLocalAgentRegistration(value: unknown): value is LocalAgentRegistration {
@@ -405,12 +426,13 @@ function isGetResponseFrame(value: Record<string, unknown>): value is GetRespons
 }
 
 function isLocalGetResponseFrame(value: Record<string, unknown>): value is LocalGetResponseFrame {
-  return value.type === "local_get_response" && typeof value.msgId === "string" && value.msgId.length > 0;
+  return value.type === "local_get_response" && isOptionalLocalAuthToken(value) && typeof value.msgId === "string" && value.msgId.length > 0;
 }
 
 function isLocalSubmitResponseFrame(value: Record<string, unknown>): value is LocalSubmitResponseFrame {
   return (
     value.type === "local_submit_response" &&
+    isOptionalLocalAuthToken(value) &&
     typeof value.msgId === "string" &&
     value.msgId.length > 0 &&
     typeof value.responderSessionId === "string" &&
@@ -425,12 +447,16 @@ function isLocalSubmitResponseFrame(value: Record<string, unknown>): value is Lo
 function isLocalSendPromptFrame(value: Record<string, unknown>): value is LocalSendPromptFrame {
   return (
     value.type === "local_send_prompt" &&
+    isOptionalLocalAuthToken(value) &&
     typeof value.msgId === "string" &&
     value.msgId.length > 0 &&
     typeof value.targetSessionId === "string" &&
     value.targetSessionId.length > 0 &&
     typeof value.prompt === "string" &&
+    value.prompt.length <= MAX_FRAME_PROMPT_LENGTH &&
     typeof value.hops === "number" &&
+    Number.isInteger(value.hops) &&
+    value.hops >= 0 &&
     (value.replyMode === undefined || isPromptReplyMode(value.replyMode)) &&
     (value.origin === undefined || isPromptOriginMetadata(value.origin))
   );
@@ -444,7 +470,10 @@ function isSendPromptFrame(value: Record<string, unknown>): value is SendPromptF
     typeof value.targetSessionId === "string" &&
     value.targetSessionId.length > 0 &&
     typeof value.prompt === "string" &&
+    value.prompt.length <= MAX_FRAME_PROMPT_LENGTH &&
     typeof value.hops === "number" &&
+    Number.isInteger(value.hops) &&
+    value.hops >= 0 &&
     (value.replyMode === undefined || isPromptReplyMode(value.replyMode)) &&
     (value.origin === undefined || isPromptOriginMetadata(value.origin))
   );

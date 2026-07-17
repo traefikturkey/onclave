@@ -4,7 +4,7 @@ import { OnclaveHubRuntime, type OnclaveHubRuntimeOptions } from "./hub-runtime"
 import type { HubState } from "./local-hub";
 import { startOrDiscoverLocalHub } from "./local-hub";
 import type { OnclaveIdentity } from "./identity";
-import { loadIdentityPrivateKeyHex, loadOrCreateIdentity } from "./identity";
+import { deriveLocalAuthToken, loadIdentityPrivateKeyHex, loadOrCreateIdentity } from "./identity";
 import type { OnclavePaths } from "./state";
 import { loadOrCreateTlsMaterial, type TlsMaterialGenerator } from "./tls";
 import { formatAuthorizedKeyLine, loadAuthorizedKeys } from "./trust";
@@ -28,6 +28,7 @@ export type HubRuntimeHandle = {
 export type BootstrapRuntimeInput = {
   identity: OnclaveIdentity;
   privateKeyHex: string;
+  localAuthToken?: string;
   hubInstanceId: string;
   tls: TlsMaterial;
   authorizedKeys: AuthorizedSshEd25519Key[];
@@ -51,6 +52,7 @@ export type BootstrapLocalHubResult = {
   publicAuthorizedKeyLine: string;
   authorizedKeys: AuthorizedSshEd25519Key[];
   state: HubState;
+  localAuthToken: string;
   started: boolean;
   runtime: HubRuntimeHandle | null;
 };
@@ -62,6 +64,8 @@ export async function bootstrapLocalHub(
   const identity = await loadOrCreateIdentity(paths);
   const publicAuthorizedKeyLine = formatAuthorizedKeyLine(identity);
   const authorizedKeys = await loadAuthorizedKeys(paths);
+  const privateKeyHex = await loadIdentityPrivateKeyHex(paths);
+  const localAuthToken = deriveLocalAuthToken(identity.nodeId, privateKeyHex);
   void options.audit?.("trust_loaded", { count: authorizedKeys.length });
   let runtime: HubRuntimeHandle | null = null;
 
@@ -72,7 +76,8 @@ export async function bootstrapLocalHub(
       const hubInstanceId = `hub_${identity.nodeId.slice(-26)}`;
       runtime = await createRuntime(paths, options, {
         identity,
-        privateKeyHex: await loadIdentityPrivateKeyHex(paths),
+        privateKeyHex,
+        localAuthToken,
         hubInstanceId,
         tls,
         authorizedKeys,
@@ -86,6 +91,7 @@ export async function bootstrapLocalHub(
     publicAuthorizedKeyLine,
     authorizedKeys,
     state: result.state,
+    localAuthToken,
     started: result.started,
     runtime: result.started ? runtime : null,
   };
@@ -106,6 +112,7 @@ async function createRuntime(
     authorizedKeys: input.authorizedKeys,
     localPublicKeyHex: input.identity.publicKey,
     localPrivateKeyHex: input.privateKeyHex,
+    localAuthToken: input.localAuthToken,
     discoverySocket: options.discoverySocketFactory?.() ?? createNodeDiscoveryUdpSocket(),
     discoveryPort: options.discoveryPort,
     broadcastAddress: options.broadcastAddress,
