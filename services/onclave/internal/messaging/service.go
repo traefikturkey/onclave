@@ -1,7 +1,10 @@
 package messaging
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -73,17 +76,22 @@ type Event struct {
 }
 
 type Service struct {
-	mu     sync.Mutex
-	now    func() time.Time
-	tasks  map[string]*Task
-	events map[string][]Event
+	mu        sync.Mutex
+	now       func() time.Time
+	tasks     map[string]*Task
+	events    map[string][]Event
+	publisher Publisher
 }
 
 func NewService(now func() time.Time) *Service {
+	return NewServiceWithPublisher(now, nil)
+}
+
+func NewServiceWithPublisher(now func() time.Time, publisher Publisher) *Service {
 	if now == nil {
 		now = time.Now
 	}
-	return &Service{now: now, tasks: make(map[string]*Task), events: make(map[string][]Event)}
+	return &Service{now: now, tasks: make(map[string]*Task), events: make(map[string][]Event), publisher: publisher}
 }
 
 func (s *Service) Submit(command Command) (Task, error) {
@@ -94,6 +102,22 @@ func (s *Service) Submit(command Command) (Task, error) {
 	}
 	if command.ExpiresAt.IsZero() || !command.ExpiresAt.After(s.now()) {
 		return Task{}, ErrExpired
+	}
+	if s.publisher != nil {
+		payload, err := json.Marshal(command.Payload)
+		if err != nil {
+			return Task{}, fmt.Errorf("encode command payload: %w", err)
+		}
+		envelope := Envelope{
+			RoutingKey: command.Type + "." + command.TargetAgentID,
+			MessageID:  command.MessageID, TaskID: command.TaskID, CorrelationID: command.CorrelationID,
+			SourceAgentID: command.SourceAgentID, TargetAgentID: command.TargetAgentID, MessageType: command.Type,
+			IssuedAt: s.now().UTC().Format(time.RFC3339Nano), ExpiresAt: command.ExpiresAt.UTC().Format(time.RFC3339Nano),
+			Payload: payload, Persistent: true,
+		}
+		if err := s.publisher.Publish(context.Background(), envelope); err != nil {
+			return Task{}, fmt.Errorf("publish command: %w", err)
+		}
 	}
 	task := &Task{
 		MessageID: command.MessageID, TaskID: command.TaskID, CorrelationID: command.CorrelationID,

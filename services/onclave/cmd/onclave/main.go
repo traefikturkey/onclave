@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/traefikturkey/onclave/services/onclave/internal/admission"
 	"github.com/traefikturkey/onclave/services/onclave/internal/api"
@@ -13,7 +14,16 @@ import (
 func main() {
 	serviceConfig := config.FromEnvironment()
 	admissionService := admission.NewService(admission.Policy{})
-	messagingService := messaging.NewService(nil)
+	var publisher messaging.Publisher
+	if serviceConfig.RabbitMQURL != "" {
+		rabbitPublisher, err := messaging.NewRabbitMQPublisher(serviceConfig.RabbitMQURL, serviceConfig.RabbitMQExchange)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer rabbitPublisher.Close()
+		publisher = rabbitPublisher
+	}
+	messagingService := messaging.NewServiceWithPublisher(time.Now, publisher)
 	server := api.NewApplicationServer(api.Config{Address: serviceConfig.Address}, admissionService, messagingService, func() error {
 		return nil
 	})

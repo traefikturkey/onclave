@@ -6,6 +6,8 @@ services:
     environment:
       ONCLAVE_API_ADDRESS: ":8080"
       ONCLAVE_STATE_DIR: /data/onclave
+      ONCLAVE_RABBITMQ_URL: amqp://onclave:${ONCLAVE_RABBITMQ_PASSWORD}@rabbitmq:5672/%2Fonclave
+      ONCLAVE_RABBITMQ_EXCHANGE: onclave.commands
     ports:
       - "127.0.0.1:8080:8080"
     volumes:

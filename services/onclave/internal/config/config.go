@@ -3,8 +3,10 @@ package config
 import "os"
 
 type Config struct {
-	Address  string
-	StateDir string
+	Address          string
+	StateDir         string
+	RabbitMQURL      string
+	RabbitMQExchange string
 }
 
 func FromEnvironment() Config {
@@ -16,5 +18,12 @@ func FromEnvironment() Config {
 	if stateDir == "" {
 		stateDir = "/data/onclave"
 	}
-	return Config{Address: address, StateDir: stateDir}
+	exchange := os.Getenv("ONCLAVE_RABBITMQ_EXCHANGE")
+	if exchange == "" {
+		exchange = "onclave.commands"
+	}
+	return Config{
+		Address: address, StateDir: stateDir,
+		RabbitMQURL: os.Getenv("ONCLAVE_RABBITMQ_URL"), RabbitMQExchange: exchange,
+	}
 }
