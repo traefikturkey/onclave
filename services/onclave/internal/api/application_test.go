@@ -80,7 +80,7 @@ func TestAgentAdmissionAndTaskSubmissionFlow(t *testing.T) {
 		t.Fatalf("expected accepted task, got %+v", task)
 	}
 
-	statusResponse := get(t, server.Handler(), "/v1/tasks/task-api-1", http.StatusOK)
+	statusResponse := getWithAuth(t, server.Handler(), "/v1/tasks/task-api-1", auth.SessionToken, http.StatusOK)
 	var status messaging.Task
 	decodeBody(t, statusResponse, &status)
 	if status.TaskID != "task-api-1" || status.State != messaging.StateAccepted {
@@ -107,6 +107,18 @@ func postJSONWithAuth(t *testing.T, handler http.Handler, path string, body any,
 	handler.ServeHTTP(response, request)
 	if response.Code != expectedStatus {
 		t.Fatalf("POST %s: expected %d, got %d: %s", path, expectedStatus, response.Code, response.Body.String())
+	}
+	return response
+}
+
+func getWithAuth(t *testing.T, handler http.Handler, path, token string, expectedStatus int) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != expectedStatus {
+		t.Fatalf("GET %s: expected %d, got %d: %s", path, expectedStatus, response.Code, response.Body.String())
 	}
 	return response
 }

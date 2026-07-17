@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sync"
 
@@ -73,9 +74,17 @@ func (s *Server) agentSession(writer http.ResponseWriter, request *http.Request)
 			Note     string         `json:"note,omitempty"`
 			Result   map[string]any `json:"result,omitempty"`
 		}
-		if err := json.Unmarshal(payload, &message); err != nil {
+		if messageErr := json.Unmarshal(payload, &message); messageErr != nil {
 			_ = write(map[string]string{"type": "error", "error": "invalid JSON message"})
 			continue
+		}
+		if message.TaskID != "" && message.Type != "heartbeat" {
+			if taskErr := s.authorizeTaskAgent(agentID, message.TaskID, message.Type == "task.cancelled"); taskErr != nil {
+				if write(errMessage(taskErr, "task.authorization.failed")) != nil {
+					return
+				}
+				continue
+			}
 		}
 		switch message.Type {
 		case "heartbeat":
@@ -126,6 +135,22 @@ func (s *Server) agentSession(writer http.ResponseWriter, request *http.Request)
 			}
 		}
 	}
+}
+
+var errTaskNotAuthorized = errors.New("agent is not authorized for this task")
+
+func (s *Server) authorizeTaskAgent(agentID, taskID string, allowSource bool) error {
+	if s.messaging == nil {
+		return errors.New("messaging service unavailable")
+	}
+	task, err := s.messaging.Status(taskID)
+	if err != nil {
+		return err
+	}
+	if agentID != task.TargetAgentID && (!allowSource || agentID != task.SourceAgentID) {
+		return errTaskNotAuthorized
+	}
+	return nil
 }
 
 func errMessage(err error, messageType string) map[string]string {

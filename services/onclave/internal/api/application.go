@@ -200,6 +200,9 @@ func (s *Server) taskStatus(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusServiceUnavailable, "messaging service unavailable")
 		return
 	}
+	if _, ok := s.requireTaskSession(writer, request, request.PathValue("taskID"), true); !ok {
+		return
+	}
 	task, err := s.messaging.Status(request.PathValue("taskID"))
 	if err != nil {
 		writeDomainError(writer, err)
@@ -213,7 +216,7 @@ func (s *Server) acknowledgeTask(writer http.ResponseWriter, request *http.Reque
 		writeError(writer, http.StatusServiceUnavailable, "messaging service unavailable")
 		return
 	}
-	s.taskMutation(writer, request, s.messaging.Acknowledge)
+	s.taskMutation(writer, request, s.messaging.Acknowledge, false)
 }
 
 func (s *Server) startTask(writer http.ResponseWriter, request *http.Request) {
@@ -221,7 +224,7 @@ func (s *Server) startTask(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusServiceUnavailable, "messaging service unavailable")
 		return
 	}
-	s.taskMutation(writer, request, s.messaging.Start)
+	s.taskMutation(writer, request, s.messaging.Start, false)
 }
 
 func (s *Server) cancelTask(writer http.ResponseWriter, request *http.Request) {
@@ -229,12 +232,15 @@ func (s *Server) cancelTask(writer http.ResponseWriter, request *http.Request) {
 		writeError(writer, http.StatusServiceUnavailable, "messaging service unavailable")
 		return
 	}
-	s.taskMutation(writer, request, s.messaging.Cancel)
+	s.taskMutation(writer, request, s.messaging.Cancel, true)
 }
 
 func (s *Server) progressTask(writer http.ResponseWriter, request *http.Request) {
 	if s.messaging == nil {
 		writeError(writer, http.StatusServiceUnavailable, "messaging service unavailable")
+		return
+	}
+	if _, ok := s.requireTaskSession(writer, request, request.PathValue("taskID"), false); !ok {
 		return
 	}
 	var body struct {
@@ -256,6 +262,9 @@ func (s *Server) completeTask(writer http.ResponseWriter, request *http.Request)
 		writeError(writer, http.StatusServiceUnavailable, "messaging service unavailable")
 		return
 	}
+	if _, ok := s.requireTaskSession(writer, request, request.PathValue("taskID"), false); !ok {
+		return
+	}
 	var body struct {
 		Result map[string]any `json:"result"`
 	}
@@ -269,9 +278,12 @@ func (s *Server) completeTask(writer http.ResponseWriter, request *http.Request)
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) taskMutation(writer http.ResponseWriter, request *http.Request, mutate func(string) error) {
+func (s *Server) taskMutation(writer http.ResponseWriter, request *http.Request, mutate func(string) error, allowSource bool) {
 	if s.messaging == nil {
 		writeError(writer, http.StatusServiceUnavailable, "messaging service unavailable")
+		return
+	}
+	if _, ok := s.requireTaskSession(writer, request, request.PathValue("taskID"), allowSource); !ok {
 		return
 	}
 	if err := mutate(request.PathValue("taskID")); err != nil {
@@ -305,6 +317,34 @@ func (s *Server) requireSession(writer http.ResponseWriter, request *http.Reques
 		return false
 	}
 	return true
+}
+
+func (s *Server) requireTaskSession(writer http.ResponseWriter, request *http.Request, taskID string, allowSource bool) (messaging.Task, bool) {
+	if s.admission == nil || s.messaging == nil {
+		writeError(writer, http.StatusServiceUnavailable, "task services unavailable")
+		return messaging.Task{}, false
+	}
+	const prefix = "Bearer "
+	authorization := request.Header.Get("Authorization")
+	if len(authorization) <= len(prefix) || authorization[:len(prefix)] != prefix {
+		writeError(writer, http.StatusUnauthorized, "Bearer session token required")
+		return messaging.Task{}, false
+	}
+	agentID, err := s.admission.AgentForSession(authorization[len(prefix):])
+	if err != nil {
+		writeDomainError(writer, err)
+		return messaging.Task{}, false
+	}
+	task, err := s.messaging.Status(taskID)
+	if err != nil {
+		writeDomainError(writer, err)
+		return messaging.Task{}, false
+	}
+	if agentID != task.TargetAgentID && (!allowSource || agentID != task.SourceAgentID) {
+		writeError(writer, http.StatusForbidden, "agent is not authorized for this task")
+		return messaging.Task{}, false
+	}
+	return task, true
 }
 
 func writeJSON(writer http.ResponseWriter, status int, value any) {
