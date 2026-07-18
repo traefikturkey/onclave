@@ -28,7 +28,7 @@ Gateway deployment settings:
 4. Request a challenge with `POST /v1/agents/{agentID}/challenge`.
 5. Sign the returned nonce with the enrolled private key.
 6. Authenticate with `POST /v1/agents/{agentID}/authenticate`.
-7. Use the returned token as `Authorization: Bearer <token>`.
+7. Use the returned token as `Authorization: Bearer <session-token>`.
 
 Tokens are bound to the authenticated agent and are required for capability, command, task, and WebSocket operations.
 

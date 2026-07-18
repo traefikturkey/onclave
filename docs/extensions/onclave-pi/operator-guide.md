@@ -1,327 +1,147 @@
 ---
-created: 2026-05-21
 status: active
-source_prd: ./onclave-pi-PRD.md
 ---
 
-# Onclave Operator Guide
+# Onclave Pi Operator Guide
 
-`Onclave` lets Pi sessions on a LAN discover local machine hubs, explicitly
-trust remote hubs with Ed25519 public keys, and exchange prompt/response
-messages over authenticated WSS.
+`onclave-pi` is a Pi runtime extension for the public Onclave HTTPS/WebSocket
+gateway. RabbitMQ, SQLite, enrollment approval, and gateway persistence belong
+to the gateway deployment, not to the Pi host.
 
-Start with [README.md](./README.md) for quick starts, extension loading,
-status-dot meanings, and tool examples. Use this operator guide for deeper
-runtime and troubleshooting details.
+Use [the Pi extension guide](./README.md) for the tool contract. Use
+[the gateway contract](../../agent-gateway.md) for the authoritative API,
+authentication, capabilities, subscriptions, lifecycle, replay, TLS, and
+operational endpoint documentation.
 
-## State Location
+## Prerequisites
 
-All runtime state lives under:
+The Pi host needs:
+
+- Pi installed and available as `pi`;
+- network access to the configured HTTPS gateway;
+- an enrolled and approved Onclave agent ID;
+- the matching Ed25519 private key in the Pi Onclave state directory.
+
+The product-level state root is:
 
 ```text
 ~/.pi/onclave/
 ```
 
-The state directory name is `onclave` in v1 and should be treated as the
-canonical runtime location for this project.
+Do not place private keys in source control or print them in diagnostics.
 
-Important files:
+## Configuration
+
+Set:
 
 ```text
-authorized_keys      # trusted peer public ssh-ed25519 lines
-config.json          # optional non-secret static peer config
-audit.log.jsonl      # metadata-only audit log
-hub.json             # current local hub endpoint/state
-identity.json        # local node identity and public key metadata
-identity.key         # app-specific private signing key; do not copy
-tls.cert.pem         # local self-signed TLS certificate
-tls.key.pem          # local TLS private key; do not copy
+ONCLAVE_GATEWAY_URL=https://onclave.example
+ONCLAVE_AGENT_ID=agent-pi
 ```
 
-Do not copy private key files between machines. Do not use or modify private
-keys under `~/.ssh/` for this system.
+The gateway URL must use HTTPS. The extension derives the authenticated WSS
+session endpoint from that gateway URL.
 
-## Acceptance Helper Script
+## Enrollment and approval
 
-From this repository on each host, run:
+Enrollment and approval are operator/deployment operations:
+
+1. Enroll the agent with `POST /v1/enroll`.
+2. Approve the enrolled agent with `POST /v1/agents/{agentID}/approve`.
+3. Store the matching private key only in the Pi host's protected Onclave state.
+4. Start Pi with `extensions/onclave-pi` loaded.
+
+The extension performs challenge-response authentication during `session_start`
+and negotiates its required capabilities.
+
+## Start Pi
+
+From the repository root:
 
 ```bash
-pnpm run onclave:acceptance-host -- --host-name host-a
+just setup
+pi -e ./extensions/onclave-pi
 ```
 
-The helper creates the local Onclave identity if needed, then prints:
-
-- local identity and hub state when available
-- the public key line to copy to the peer
-- `onclave_trust_add` command for the peer
-- endpoint, node ID, and hub instance ID values for remote tools
-- suggested Pi tool commands for the acceptance flow
-
-If the hub line says `not started yet`, that is expected before the first Pi
-session starts `Onclave`. Start Pi, run `onclave_status`, then rerun the
-helper to print endpoint metadata.
-
-After you know the peer's endpoint and IDs, you can also write a static peer:
+Or use the repository command:
 
 ```bash
-pnpm run onclave:acceptance-host -- \
-  --host-name host-a \
-  --peer-name host-b \
-  --peer-node-id node_... \
-  --peer-hub-instance-id hub_... \
-  --peer-endpoint wss://HOST_B_IP:PORT/v1/hub \
-  --write-static-peer
+just pi-local
 ```
 
-Optional audit check:
-
-```bash
-pnpm run onclave:acceptance-host -- --audit-scan
-```
-
-## Acceptance Helper Script
-
-This repository includes a host-side acceptance helper script at:
+A successful session exposes the `onclave` status indicator and registers:
 
 ```text
-extensions/onclave-pi/scripts/onclave-acceptance-host.ts
+onclave_send
+onclave_get
+onclave_await
 ```
 
-Use it to reduce manual copy/paste during LAN acceptance runs. The helper can:
-
-- initialize the local Onclave identity when needed;
-- print the local public trust line and hub metadata;
-- write optional static peer configuration; and
-- scan the audit log for obvious secret markers.
-
-Recommended order:
-
-1. Run `pnpm run onclave:acceptance-host -- --host-name host-b` on Host B and
-   keep one Pi session available to receive inbound prompts.
-2. Run `pnpm run onclave:acceptance-host -- --host-name host-a` on Host A.
-3. Follow the printed trust and remote-send instructions in the two Pi sessions.
-
-## First Run
-
-Start Pi with the `extensions/onclave-pi` extension enabled.
-
-The first local Pi session starts the machine hub. Later local Pi sessions reuse
-that live hub and register as local agents.
-
-Use:
-
-```text
-onclave_status
-```
-
-Expected fields:
-
-- hub endpoint
-- whether this session started the hub
-- local public key line for peer trust setup
-- optional `remote_endpoints` hints derived from non-loopback local interfaces
-
-## Trust Exchange
-
-On each host, run either:
-
-```text
-/onclave-trust
-```
-
-or:
-
-```text
-onclave_trust_info
-```
-
-Copy only the printed public line that begins with `ssh-ed25519`.
-
-On the peer host, add it with either:
-
-```text
-onclave_trust_add public_key_line="ssh-ed25519 ..."
-```
-
-or by manually appending it to:
-
-```text
-~/.pi/onclave/authorized_keys
-```
-
-Restart affected Pi sessions after changing trust so the runtime reloads the
-trust file.
-
-## Discovery
-
-Use:
-
-```text
-onclave_peers
-```
-
-This reports:
-
-- discovered UDP peers from the LAN
-- static peers from `config.json`
-
-Discovery packets contain only metadata:
-
-- protocol marker
-- version
-- node ID
-- hub instance ID
-- WSS port
-- start timestamp
-
-They do not include prompts, responses, cwd, tokens, private keys, or local
-paths.
-
-## Static Peers
-
-Static peers are optional and useful when UDP broadcast is blocked. Create or
-edit:
-
-```text
-~/.pi/onclave/config.json
-```
-
-Example:
-
-```json
-{
-  "version": 1,
-  "staticPeers": [
-    {
-      "name": "bench",
-      "nodeId": "node_...",
-      "hubInstanceId": "hub_...",
-      "endpoint": "wss://192.168.1.20:4444/v1/hub"
-    }
-  ]
-}
-```
-
-List configured static peers:
-
-```text
-onclave_static_peers
-```
-
-Remote tools accept either a `peer_name` from static config or explicit
-`endpoint`, `node_id`, and `hub_instance_id` parameters.
-
-## Local Agent Messaging
-
-List local agents:
-
-```text
-onclave_agents
-```
-
-Send to a local agent:
-
-```text
-onclave_send target_session_id="session-id" prompt="..."
-```
-
-Poll a response:
-
-```text
-onclave_get msg_id="msg_..."
-```
-
-Wait for a response:
-
-```text
-onclave_await msg_id="msg_..." timeout_ms=30000
-```
-
-## Trusted Remote Messaging
-
-List remote agents with explicit peer metadata:
-
-```text
-onclave_remote_agents endpoint="wss://host:port/v1/hub" node_id="node_..." hub_instance_id="hub_..."
-```
-
-Or with a configured static peer:
-
-```text
-onclave_remote_agents peer_name="bench"
-```
-
-Send to a remote agent:
-
-```text
-onclave_remote_send peer_name="bench" target_session_id="session-id" prompt="..."
-```
-
-By default, the remote host replies asynchronously with a new inbound Onclave
-message. Only poll the remote response when you explicitly opted into the
-pollable path:
-
-```text
-onclave_remote_send peer_name="bench" target_session_id="session-id" prompt="..." reply_mode="pollable"
-onclave_remote_get peer_name="bench" msg_id="msg_..."
-```
-
-Remote list/send/get requires successful Ed25519 authentication against the
-remote host's `authorized_keys`. Endpoint knowledge alone does not grant access.
-
-## Post-v1 Operator Improvements
-
-The current v1 workflow is complete, but the remaining planned operator-facing
-work is:
-
-- trust removal or revocation helpers beyond manual `authorized_keys` edits;
-- a future trust request / approval workflow reference in
-  `./trust-ux-future.md`;
-- reverse-direction acceptance helpers so either host can run the initiator
-  workflow with the same low-friction prompt-template flow;
-- richer static-peer convenience or aggregation when UDP discovery is blocked.
-
-## Audit Logs
-
-Audit log path:
-
-```text
-~/.pi/onclave/audit.log.jsonl
-```
-
-Audit entries are JSONL metadata. They intentionally omit prompt and response
-bodies.
-
-Expected event families include:
-
-- hub start/stop
-- trust loaded/changed
-- local register/unregister
-- discovery seen/ignored
-- auth attempt/success/failure
-- message inbound/outbound
-- response inbound/outbound where applicable
-
-Do not paste sensitive prompt or response content into manual audit notes.
+## Task workflow
+
+1. Use `onclave_send` with an enrolled target agent ID and prompt.
+2. Record the returned task ID.
+3. Use `onclave_get` for an immediate task-state read.
+4. Use `onclave_await` when waiting for a terminal state.
+5. The target runtime reports lifecycle events through the gateway.
+
+The gateway task record remains durable across Pi disconnects. Reconnecting Pi
+does not require direct broker access or local gateway database access.
 
 ## Troubleshooting
 
-### Peers do not appear in discovery
+### Authentication fails
 
-- Confirm both hosts are on the same LAN/broadcast domain.
-- Confirm UDP port `48889` is allowed by host firewalls.
-- Use static peers in `config.json` if UDP broadcast is blocked.
+- Confirm `ONCLAVE_GATEWAY_URL` is the correct HTTPS endpoint.
+- Confirm the agent ID is enrolled and approved.
+- Confirm the private key matches the enrolled public key.
+- Confirm the gateway is ready at `/readyz`.
+- Check gateway logs without printing the private key or session token.
 
-### Remote list/send fails
+### Capability negotiation fails
 
-- Confirm both hosts exchanged public `ssh-ed25519` lines.
-- Confirm keys were added to `~/.pi/onclave/authorized_keys` on the receiving
-  host.
-- Restart sessions after trust changes.
-- Confirm endpoint uses `wss://.../v1/hub`.
-- Confirm node ID and hub instance ID match current `onclave_status` output.
+The Pi extension requests:
 
-### Local hub appears stale
+```text
+message.send
+message.receive
+```
 
-Start a new Pi session. The bootstrap flow health-checks `hub.json` and replaces
-stale state when the old owner process is gone.
+Confirm both capabilities are allowed by the gateway's
+`ONCLAVE_ALLOWED_CAPABILITIES` policy and that the authenticated agent is
+permitted to request them.
+
+### Task submission fails
+
+- Confirm the target agent ID is enrolled and approved.
+- Confirm the source agent has `message.send`.
+- Confirm the target agent has the capabilities required by the task.
+- Inspect the gateway HTTP status and error code.
+- Use `onclave_get` only with the returned task ID.
+
+### Inbound tasks are not delivered
+
+- Confirm the Pi WSS session reached `session.ready`.
+- Confirm the source task targets the configured Pi agent ID.
+- Confirm the Pi process remains running.
+- Check gateway readiness and session logs.
+- Restart Pi to establish a fresh authenticated session.
+
+### Pi shuts down or reconnects
+
+The extension closes its WSS session during shutdown. Gateway task state is
+durable, so reconnect Pi and retry task lookup with the existing task ID.
+
+## Acceptance validation
+
+The gateway boundary can be validated without exposing RabbitMQ:
+
+```bash
+just gateway-acceptance
+just gateway-restart-acceptance
+just gateway-broker-restart-acceptance
+```
+
+These flows use only the gateway HTTP/WebSocket API. See
+[the gateway contract](../../agent-gateway.md#live-rabbitmq-verification) for
+the complete acceptance options.

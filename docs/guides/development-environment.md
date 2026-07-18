@@ -140,7 +140,13 @@ Current workspace scope:
 ```yaml
 packages:
   - "extensions/*"
+  - "packages/*"
 ```
+
+The workspace currently contains the TypeScript Pi extension and the shared
+TypeScript protocol package. The Hermes extension is a Python plugin with its
+own `requirements.txt` and pytest command; it is documented and tested
+separately from the pnpm TypeScript workspace.
 
 ### Root package responsibilities
 
@@ -222,19 +228,21 @@ that package README.
 
 ## Onclave-Specific Runtime Requirements
 
-For `extensions/onclave-pi`, additional runtime prerequisites apply when you
-run local Pi sessions or multi-host acceptance:
+For `extensions/onclave-pi`, local runtime work requires:
 
-- `pi` must be installed locally;
-- firewalls must allow `48889/udp` for LAN discovery when discovery is used;
-- firewalls must allow inbound TCP for the selected WSS hub port; and
-- operators must exchange only public `ssh-ed25519` trust lines.
+- `pi` installed locally;
+- `ONCLAVE_GATEWAY_URL` set to the HTTPS gateway endpoint;
+- `ONCLAVE_AGENT_ID` set to an enrolled and approved agent;
+- the matching Ed25519 private key stored in the product-level Pi state root;
+- network access from Pi to the gateway HTTPS/WSS endpoint.
 
-See these documents for the Onclave runtime flow:
+For gateway and broker acceptance, Docker and the required Compose environment
+are also needed. See:
 
 - `docs/extensions/onclave-pi/README.md`
 - `docs/extensions/onclave-pi/operator-guide.md`
 - `docs/extensions/onclave-pi/manual-acceptance.md`
+- `docs/agent-gateway.md`
 
 ## Recommended Fresh-Machine Flow
 

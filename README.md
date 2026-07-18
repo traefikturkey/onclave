@@ -1,20 +1,18 @@
 # Onclave
 
-`Onclave` is a containerized, harness-independent agent gateway. It authenticates
+Onclave is a containerized, harness-independent agent gateway. It authenticates
 and vets agent runtimes, negotiates capabilities, persists task and event state,
-and exposes an HTTPS/WebSocket API for adapters and runtimes. RabbitMQ is an
-internal broker; agents and adapters do not connect to RabbitMQ directly.
+and exposes an HTTPS/WebSocket API for adapters and runtime extensions.
+RabbitMQ is an internal broker; agents and adapters never connect to it directly.
 
-The repository also contains the `onclave-pi` Pi extension for secure LAN
-discovery and trusted local/remote Pi communication. That extension is one
-client/runtime integration, not the boundary of the Onclave product.
+The repository contains two first-party runtime integrations:
 
-> [!NOTE]
-> This project expands on IndyDevDan's Pi coding agent extension work for
-> two-way communication between agents and takes it further into secure LAN
-> discovery, explicit machine trust, and authenticated cross-host messaging.
-> Watch his video here:
-> [Pi coding agent extension with two-way agent communication](https://www.youtube.com/watch?v=PIdETjcXNIk)
+- `extensions/onclave-pi` — Pi extension for the public Onclave gateway;
+- `extensions/onclave-hermes` — Hermes Agent plugin for the public Onclave gateway.
+
+The gateway is the product boundary. Runtime integrations use its public
+HTTPS/WebSocket contract and must not depend on RabbitMQ topology, broker
+credentials, gateway internals, or gateway SQLite files.
 
 ## Current Core Architecture
 
@@ -26,22 +24,34 @@ client/runtime integration, not the boundary of the Onclave product.
 - RabbitMQ internal command/event transport with publisher confirms, reconnect,
   bounded redelivery, dead-letter handling, and broker restart recovery;
 - `/healthz`, `/readyz`, JSON metrics, and Prometheus metrics endpoints;
-- plain internal AMQP Compose deployment plus an opt-in AMQPS/TLS profile;
-- adapters consume the gateway contract and must not depend on RabbitMQ topology.
+- plain internal AMQP Compose deployment plus an opt-in AMQPS/TLS profile.
 
-## Pi Extension Capabilities
+## Runtime Integrations
 
-- starts or reuses one local machine hub per host;
-- discovers peer hubs on the LAN over UDP broadcast;
-- requires explicit Ed25519 trust exchange before remote access is allowed;
-- routes prompts and responses over authenticated WSS connections;
-- supports static peers when UDP discovery is unavailable;
-- shows peer status directly in Pi with a compact widget.
+### Pi
+
+`extensions/onclave-pi` connects Pi to the public gateway over HTTPS/WSS. It:
+
+- authenticates with an enrolled Ed25519 identity;
+- requests the `message.send` and `message.receive` capabilities;
+- submits task prompts to enrolled target agents;
+- retrieves task state;
+- waits for terminal task state;
+- receives inbound gateway commands and reports task completion through the Pi
+  session lifecycle.
+
+It does not expose a separate LAN hub or direct RabbitMQ interface.
+
+### Hermes
+
+`extensions/onclave-hermes` is the Hermes Agent plugin for the same public
+HTTPS/WebSocket contract. It supports challenge-response authentication,
+durable subscriptions, lifecycle reporting, inbound delivery, and idempotency.
 
 ## Development Prerequisites
 
 Before installing dependencies in a fresh environment, run the bootstrap
-preflight that matches your shell:
+preflight that matches your shell.
 
 ### PowerShell
 
@@ -55,23 +65,21 @@ pwsh -File ./scripts/preflight.ps1
 bash ./scripts/preflight.sh
 ```
 
-These bootstrap scripts check for the required repo tools (`node`, `pnpm`,
-`just`, `git`) and report whether `pi` is available for local extension
-loading.
+These scripts check the required repository tools (`node`, `pnpm`, `just`, and
+`git`) and report whether `pi` is available for local extension loading.
 
-Once bootstrap passes, you can also run the repo-aware Node check:
+After bootstrap passes, run the repository-aware check:
 
 ```bash
 just preflight-repo
 ```
 
-Repository-wide environment and package standards live in:
-
-- [Development Environment and Monorepo Package Requirements](./docs/guides/development-environment.md)
+Repository-wide environment and package standards live in
+[Development Environment](./docs/guides/development-environment.md).
 
 ## Quick Start
 
-From this repository, the happy developer path is:
+From the repository root:
 
 ```bash
 bash ./scripts/preflight.sh
@@ -80,103 +88,81 @@ just check
 just pi-local
 ```
 
-- `bash ./scripts/preflight.sh` checks bootstrap tool and workspace readiness.
 - `just setup` installs dependencies with pnpm.
-- `just check` runs typecheck and tests.
+- `just check` runs TypeScript typecheck and Vitest tests.
 - `just pi-local` starts Pi with `./extensions/onclave-pi` loaded.
 
-For a named local session, run Pi directly:
+## Pi Extension
 
-```bash
-pi -e ./extensions/onclave-pi --name host-a
+Configure the Pi extension with:
+
+```text
+ONCLAVE_GATEWAY_URL=https://onclave.example
+ONCLAVE_AGENT_ID=agent-pi
 ```
 
-## Install the Pi Extension
+The matching Ed25519 private key is stored in Pi's Onclave state directory.
+Enrollment and operator approval happen through the gateway deployment.
 
-Use one of these install/load paths depending on what you are trying to do.
-
-### Local development load
-
-Use this while working in this repo:
-
-```bash
-bash ./scripts/preflight.sh
-just setup
-just pi-local
-```
-
-Equivalent direct Pi command:
+For local development:
 
 ```bash
 pi -e ./extensions/onclave-pi
 ```
 
-### Local package install
-
-Use this to test package metadata from a local checkout:
-
-```bash
-pi install .
-```
-
-### Git package install
-
-Use this to install from a Git remote:
-
-```bash
-pi install git:git@github.com:traefikturkey/onclave.git
-```
-
-After installing from a local path or Git URL, start Pi normally and run:
+The extension registers:
 
 ```text
-onclave_status
+onclave_send
+onclave_get
+onclave_await
 ```
 
-Loading `extensions/onclave-pi` directly is supported when the directory
-remains inside this repo checkout.
+Use [the Pi extension guide](./docs/extensions/onclave-pi/README.md) for the
+configuration and tool contract.
 
-Then inside Pi:
+## Gateway Acceptance
 
-```text
-onclave_status
-onclave_agents
-onclave_peers
-```
-
-If you want help preparing a host for manual acceptance testing:
+With the Compose stack running, the gateway acceptance flow verifies the public
+HTTP/WebSocket boundary:
 
 ```bash
-pnpm run onclave:acceptance-host -- --host-name host-a
+just gateway-acceptance
+just gateway-restart-acceptance
+just gateway-broker-restart-acceptance
 ```
+
+The live RabbitMQ integration suite is:
+
+```bash
+just go-rabbitmq-test
+```
+
+See [the gateway contract](./docs/agent-gateway.md) for authentication,
+commands, subscriptions, lifecycle, replay, TLS, and operational endpoints.
 
 ## Documentation
 
-- [Development Environment](./docs/guides/development-environment.md) - repository-wide tool,
-  package, dependency, and preflight standards for the monorepo
-- [Agent Gateway Contract](./docs/agent-gateway.md) - authenticated HTTP/WebSocket
-  API, durable subscriptions, replay, metrics, RabbitMQ boundary, and TLS deployment
-- [Agent Extension Contract](./docs/agent-extension-contract.md) - extension
+- [Development Environment](./docs/guides/development-environment.md) — tools,
+  workspace, dependency, and preflight standards
+- [Agent Gateway Contract](./docs/agent-gateway.md) — public HTTPS/WebSocket API,
+  authentication, lifecycle, subscriptions, replay, metrics, and TLS
+- [Agent Extension Contract](./docs/agent-extension-contract.md) — extension
   placement, manifest, lifecycle, security, replay, and conformance requirements
-- [Usage Guide](./docs/extensions/onclave-pi/README.md) - quick starts, extension loading, flags,
-  status dots, and tool examples
-- [Operator Guide](./docs/extensions/onclave-pi/operator-guide.md) - runtime state,
-  trust exchange, discovery, messaging, and troubleshooting
-- [Manual Acceptance](./docs/extensions/onclave-pi/manual-acceptance.md) - step-by-step
-  host-to-host validation flow
-- [Status](./docs/extensions/onclave-pi/status.md) - implementation progress and delivered scope
-- [Design Decisions](./docs/extensions/onclave-pi/decisions.md) - key v1 design choices
-- [onclave-pi Requirements](./docs/extensions/onclave-pi/onclave-pi-PRD.md) - original communication extension requirements and success
-  criteria
+- [Pi Extension Guide](./docs/extensions/onclave-pi/README.md) — Pi configuration,
+  loading, tools, and gateway behavior
+- [Pi Operator Guide](./docs/extensions/onclave-pi/operator-guide.md) — gateway
+  setup, enrollment, troubleshooting, and task handling
+- [Pi Gateway Acceptance](./docs/extensions/onclave-pi/manual-acceptance.md) —
+  non-destructive Pi-to-gateway validation
+- [Pi Status](./docs/extensions/onclave-pi/status.md) — implemented Pi scope and
+  verification status
+- [Hermes Plugin Guide](./extensions/onclave-hermes/README.md) — Hermes setup,
+  tools, subscriptions, and tests
 
-## Current Usage Model
+- [Onclave Future Product PRD](./docs/onclave-factory-PRD.md) — future factory
+  workflows, workspaces, runtime adapters, guardrails, and operator capabilities
 
-1. Start Pi with `extensions/onclave-pi` loaded from inside this repo checkout.
-2. Run `onclave_status` to initialize or reuse the local hub.
-3. Exchange `ssh-ed25519` public key lines with trusted peers.
-4. Use `onclave_peers` and `onclave_remote_agents` to find reachable remote
-   sessions.
-5. Use `onclave_send` or `onclave_remote_send` to route prompts.
-
-For the full tool reference and examples, start with
-[docs/extensions/onclave-pi/README.md](./docs/extensions/onclave-pi/README.md).
+The future PRD is intentionally separate from the current contracts above. When
+future scope is implemented, document the resulting behavior in the active
+contract or guide and remove the completed detail from the PRD.
