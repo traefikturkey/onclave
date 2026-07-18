@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onclave.dev/schemas/subscription.schema.json",
+  "title": "EventSubscription",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolVersion", "subscriptionId", "agentId", "pattern", "createdAt", "expiresAt"],
+  "properties": {
+    "protocolVersion": { "const": "1.0" },
+    "subscriptionId": { "type": "string", "minLength": 1 },
+    "agentId": { "type": "string", "minLength": 1 },
+    "pattern": { "type": "string", "pattern": "^task\\.(\\*|[a-z]+)\\.[A-Za-z0-9._~-]+$" },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "expiresAt": { "type": "string", "format": "date-time" },
+    "cursor": { "type": "integer", "minimum": 0 },
+    "filters": { "type": "object", "additionalProperties": { "type": "string" } }
+  }
+}

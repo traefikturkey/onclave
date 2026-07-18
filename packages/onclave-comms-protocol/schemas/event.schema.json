@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://onclave.dev/schemas/event.schema.json",
+  "title": "EventEnvelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocolVersion", "messageId", "eventType", "taskId", "sourceAgentId", "occurredAt", "payload"],
+  "properties": {
+    "protocolVersion": { "const": "1.0" },
+    "messageId": { "type": "string", "minLength": 1 },
+    "correlationId": { "type": "string", "minLength": 1 },
+    "eventType": { "type": "string", "pattern": "^task\\.[a-z]+$" },
+    "taskId": { "type": "string", "minLength": 1 },
+    "sourceAgentId": { "type": "string", "minLength": 1 },
+    "targetAgentId": { "type": "string", "minLength": 1 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "payload": { "type": "object" }
+  }
+}
