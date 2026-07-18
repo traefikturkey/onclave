@@ -35,6 +35,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /readyz", s.ready)
 	mux.HandleFunc("POST /v1/enroll", s.enroll)
 	mux.HandleFunc("POST /v1/agents/{agentID}/approve", s.approve)
+	mux.HandleFunc("POST /v1/agents/{agentID}/revoke", s.revoke)
 	mux.HandleFunc("POST /v1/agents/{agentID}/challenge", s.challenge)
 	mux.HandleFunc("POST /v1/agents/{agentID}/authenticate", s.authenticate)
 	mux.HandleFunc("POST /v1/agents/{agentID}/capabilities/request", s.requestCapabilities)
@@ -85,6 +86,18 @@ func (s *Server) approve(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if err := s.admission.Approve(request.PathValue("agentID")); err != nil {
+		writeDomainError(writer, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) revoke(writer http.ResponseWriter, request *http.Request) {
+	if s.admission == nil {
+		writeError(writer, http.StatusServiceUnavailable, "admission service unavailable")
+		return
+	}
+	if err := s.admission.Revoke(request.PathValue("agentID")); err != nil {
 		writeDomainError(writer, err)
 		return
 	}

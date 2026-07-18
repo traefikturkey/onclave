@@ -108,6 +108,8 @@ func TestAgentAdmissionAndTaskSubmissionFlow(t *testing.T) {
 		t.Fatalf("unexpected second event page: %+v", page)
 	}
 	getWithAuth(t, server.Handler(), "/v1/tasks/task-api-1/events?limit=0", auth.SessionToken, http.StatusBadRequest)
+	postJSON(t, server.Handler(), "/v1/agents/agent-api/revoke", map[string]any{}, http.StatusNoContent)
+	getWithAuth(t, server.Handler(), "/v1/tasks/task-api-1", auth.SessionToken, http.StatusUnauthorized)
 }
 
 func TestDecodeJSONRejectsTrailingAndOversizedBodies(t *testing.T) {
