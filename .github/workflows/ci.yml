@@ -1,0 +1,45 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "feature/**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      rabbitmq:
+        image: rabbitmq:4-management
+        env:
+          RABBITMQ_DEFAULT_USER: onclave
+          RABBITMQ_DEFAULT_PASS: onclave-test
+          RABBITMQ_DEFAULT_VHOST: onclave
+        ports:
+          - 5673:5672
+        options: >-
+          --health-cmd "rabbitmq-diagnostics -q ping"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - name: integration tests
+        env:
+          ONCLAVE_TEST_AMQP_URL: amqp://onclave:onclave-test@localhost:5673/onclave
+        run: pnpm exec vitest run --config vitest.integration.config.ts
+
+  core-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: build onclave-core image
+        run: docker build -f services/core/Dockerfile -t onclave-core:ci .

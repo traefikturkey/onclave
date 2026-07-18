@@ -24,7 +24,7 @@ alongside the untouched v1 extension.
 | Phase 2: Core service | Complete | Registry persisted with the v1 atomic-write pattern, versioned RPC (register/heartbeat/unregister/list_agents/conversation_status/record_exchange), per-agent durable queues with DLX/TTL/length bounds, budget termination with failure to both parties, dead-letter consumer with advisory informs, JSONL audit with body-field rejection, trust scaffold. Integration suite runs against the compose test broker via just test-integration. |
 | Phase 3: Pi adapter | Complete | extensions/onclave-pi: reconnect state machine, versioned register, validate-on-read consume with dedup, structurally inert inform (display-only, triggerTurn false), strict reply correlation by message id with no fallback, cross-host confirm with restart-free auto-accept policy, budget check before every turn delivery, tools (onclave_agents/send/inform/get/await), /onclave command, status widget. |
 | Phase 4: Acceptance | Complete | scripts/onclave-v2-acceptance.ts drives the real adapter code through simulated Pi sessions against the real compose stack. Manual runbook in ./v2-manual-acceptance.md covers live-session, outage, and cross-host checks. |
-| Phase 5: CI and finalization | Pending | Workflow, README, decisions confirmation. |
+| Phase 5: CI and finalization | Complete on-branch | GitHub Actions workflow (typecheck, unit tests, integration tests against a rabbitmq service container, core image build), README v2 overview and quick start, decisions review below. The workflow commands and the image build were validated locally; a CI run on GitHub and the PR against main are left to the operator. |
 
 ## Verification
 
@@ -54,6 +54,17 @@ Not covered by automation (see ./v2-manual-acceptance.md): live Pi turn
 semantics, broker-outage widget behavior, cross-host confirmation and
 restart-free policy reload (needs a second host), TLS/per-adapter broker
 users (deferred hardening).
+
+## Decisions Review
+
+Decisions 6 through 10 in ./decisions.md were reviewed against the
+implementation as built on 2026-07-18 and match: containerized core with
+compose-owned lifecycle and versioned handshake (6), RabbitMQ durable
+queues with DLX, native property mapping, validate-on-read, and persisted
+conversation state (7), required performatives with code-path-inert inform
+and budget termination (8), cross-host confirmation with restart-free
+per-origin auto-accept (9), TypeScript core sharing the envelope package
+with the adapter (10).
 
 ## Notes
 

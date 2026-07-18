@@ -19,6 +19,44 @@ prompt routing between Pi sessions on trusted machines.
 - supports static peers when UDP discovery is unavailable;
 - shows peer status directly in Pi with a compact widget.
 
+## v2 Broker Architecture
+
+Onclave v2 (branch `feature/v2-broker-core`) restructures the system around
+an independent containerized core service with RabbitMQ as the delivery
+substrate, replacing the in-session hub model:
+
+- `packages/envelope` - shared envelope schema: required performatives
+  (`request | inform | query | failure | not_understood`), strict
+  validation, AMQP property mapping, budgets, provenance framing;
+- `services/core` - the onclave-core service: registry and presence,
+  versioned adapter RPC, per-agent durable queues with dead-lettering,
+  conversation budgets with forced termination, JSONL audit;
+- `extensions/onclave-pi` - the thin Pi adapter: durable consume with
+  validate-on-read, structurally inert `inform` delivery, strict reply
+  correlation by message id, cross-host confirmation with restart-free
+  auto-accept policy.
+
+v1 (`extensions/onclave-comms`) stays frozen and passing until the v2
+adapter reaches parity.
+
+### v2 Quick Start
+
+```bash
+just setup
+just up                                        # rabbitmq + onclave-core containers
+just check                                     # typecheck + unit tests
+just test-integration                          # broker-backed integration suite
+pnpm exec tsx scripts/onclave-v2-acceptance.ts # end-to-end acceptance
+just pi-local-v2                               # Pi session with the v2 adapter
+```
+
+Broker credentials for local development default to the values in
+`docker/.env.example`; copy it to `docker/.env` (gitignored) to override.
+See [v2 PRD](./docs/extensions/onclave-comms/v2-PRD.md),
+[v2 implementation plan](./docs/extensions/onclave-comms/v2-implementation-plan.md),
+[v2 status](./docs/extensions/onclave-comms/v2-status.md), and the
+[v2 manual acceptance runbook](./docs/extensions/onclave-comms/v2-manual-acceptance.md).
+
 ## Development Prerequisites
 
 Before installing dependencies in a fresh environment, run the bootstrap
