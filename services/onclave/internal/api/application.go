@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/traefikturkey/onclave/services/onclave/internal/admission"
@@ -224,7 +225,40 @@ func (s *Server) taskEvents(writer http.ResponseWriter, request *http.Request) {
 	if _, ok := s.requireTaskSession(writer, request, request.PathValue("taskID"), true); !ok {
 		return
 	}
-	writeJSON(writer, http.StatusOK, s.messaging.Events(request.PathValue("taskID")))
+	events := s.messaging.Events(request.PathValue("taskID"))
+	totalEvents := len(events)
+	query := request.URL.Query()
+	after := 0
+	if value := query.Get("after"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 0 {
+			writeError(writer, http.StatusBadRequest, "after must be a non-negative integer")
+			return
+		}
+		after = parsed
+	}
+	limit := len(events)
+	if value := query.Get("limit"); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed <= 0 || parsed > 500 {
+			writeError(writer, http.StatusBadRequest, "limit must be between 1 and 500")
+			return
+		}
+		limit = parsed
+	}
+	if after >= len(events) {
+		events = []messaging.Event{}
+	} else {
+		end := after + limit
+		if end > len(events) {
+			end = len(events)
+		}
+		events = events[after:end]
+		if end < totalEvents {
+			writer.Header().Set("X-Next-After", strconv.Itoa(end))
+		}
+	}
+	writeJSON(writer, http.StatusOK, events)
 }
 
 func (s *Server) acknowledgeTask(writer http.ResponseWriter, request *http.Request) {

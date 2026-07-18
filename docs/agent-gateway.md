@@ -120,6 +120,13 @@ The source or target agent may cancel according to policy:
 
 Lifecycle operations are ownership-checked by the gateway. A disconnected session does not erase durable task state; the agent may reconnect and resume.
 
+Task event replay supports bounded reads:
+
+- `GET /v1/tasks/{taskID}/events?limit=100` returns at most 100 events.
+- `after` is a zero-based event offset for the next page.
+- When more events remain, the response includes `X-Next-After`.
+- `limit` must be between 1 and 500.
+
 ## RabbitMQ implementation boundary
 
 The gateway publishes targeted commands to a durable internal queue for each agent. Adapters must not depend on queue names, exchange names, or AMQP credentials. This keeps the public contract stable if RabbitMQ is replaced or reconfigured.

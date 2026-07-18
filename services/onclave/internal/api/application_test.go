@@ -93,6 +93,21 @@ func TestAgentAdmissionAndTaskSubmissionFlow(t *testing.T) {
 	if len(events) != 1 || events[0].Type != messaging.EventAccepted {
 		t.Fatalf("unexpected task events: %+v", events)
 	}
+
+	postJSONWithAuth(t, server.Handler(), "/v1/tasks/task-api-1/ack", map[string]any{}, auth.SessionToken, http.StatusNoContent)
+	postJSONWithAuth(t, server.Handler(), "/v1/tasks/task-api-1/start", map[string]any{}, auth.SessionToken, http.StatusNoContent)
+	pageResponse := getWithAuth(t, server.Handler(), "/v1/tasks/task-api-1/events?limit=1", auth.SessionToken, http.StatusOK)
+	var page []messaging.Event
+	decodeBody(t, pageResponse, &page)
+	if len(page) != 1 || page[0].Type != messaging.EventAccepted || pageResponse.Header().Get("X-Next-After") != "1" {
+		t.Fatalf("unexpected first event page: events=%+v next=%q", page, pageResponse.Header().Get("X-Next-After"))
+	}
+	nextResponse := getWithAuth(t, server.Handler(), "/v1/tasks/task-api-1/events?after=2&limit=1", auth.SessionToken, http.StatusOK)
+	decodeBody(t, nextResponse, &page)
+	if len(page) != 1 || page[0].Type != messaging.EventStarted {
+		t.Fatalf("unexpected second event page: %+v", page)
+	}
+	getWithAuth(t, server.Handler(), "/v1/tasks/task-api-1/events?limit=0", auth.SessionToken, http.StatusBadRequest)
 }
 
 func postJSON(t *testing.T, handler http.Handler, path string, body any, expectedStatus int) *httptest.ResponseRecorder {
