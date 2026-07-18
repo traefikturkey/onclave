@@ -128,15 +128,21 @@ Gate: menos deploys run only from onclave; old repo archived.
   already canonical.
 - Any API or schema changes to menos itself.
 
+## Decisions
+
+1. Object storage stays on the deployed MinIO (decided 2026-07-18). The
+   Garage migration compose/playbook are not ported. Migration to Garage
+   or another containerized S3-compatible service remains allowed as a
+   future, separately planned change; nothing in the ported deploy may
+   assume MinIO beyond the S3_* env contract.
+
 ## Open Questions
 
-1. MinIO vs Garage: the live stack runs menos-minio, but the repo carries
-   a Garage migration compose and playbook. Which is canonical for the
-   ported deploy?
-2. Are backup.yml / backup-setup.yml / update.yml still in use and worth
+1. Are backup.yml / backup-setup.yml / update.yml still in use and worth
    porting, or superseded?
-3. Should the menos API history import preserve full history (subtree
-   keeps it reachable) or is a squashed import acceptable?
+2. Should the menos API history import preserve full history (subtree
+   keeps it reachable) or is a squashed import acceptable? Defaulting to
+   full history.
 
 ## Risks
 
