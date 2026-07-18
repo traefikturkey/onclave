@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/traefikturkey/onclave/services/onclave/internal/admission"
 	"github.com/traefikturkey/onclave/services/onclave/internal/messaging"
@@ -57,6 +60,28 @@ func (s *Server) metrics(writer http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(writer, http.StatusOK, s.messaging.Metrics())
+}
+
+func (s *Server) metricsPrometheus(writer http.ResponseWriter, _ *http.Request) {
+	metrics := map[string]int64{}
+	if s.messaging != nil {
+		metrics = s.messaging.Metrics()
+	}
+	names := make([]string, 0, len(metrics))
+	for name := range metrics {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var output strings.Builder
+	for _, name := range names {
+		output.WriteString(name)
+		output.WriteByte(' ')
+		output.WriteString(strconv.FormatInt(metrics[name], 10))
+		output.WriteByte('\n')
+	}
+	writer.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	writer.WriteHeader(http.StatusOK)
+	_, _ = writer.Write([]byte(output.String()))
 }
 
 func writeStatus(writer http.ResponseWriter, status int, payload map[string]string) {

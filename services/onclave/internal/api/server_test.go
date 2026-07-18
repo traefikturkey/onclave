@@ -61,3 +61,18 @@ func TestMetricsEndpointReportsCoreState(t *testing.T) {
 		t.Fatalf("expected JSON metrics content type, got %q", response.Header().Get("Content-Type"))
 	}
 }
+
+func TestPrometheusMetricsEndpointUsesScrapeContentType(t *testing.T) {
+	server := NewApplicationServer(Config{}, nil, messaging.NewService(nil), nil)
+	request := httptest.NewRequest(http.MethodGet, "/metrics/prometheus", nil)
+	response := httptest.NewRecorder()
+
+	server.Handler().ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("expected prometheus metrics status 200, got %d", response.Code)
+	}
+	if response.Header().Get("Content-Type") != "text/plain; version=0.0.4" {
+		t.Fatalf("expected Prometheus content type, got %q", response.Header().Get("Content-Type"))
+	}
+}

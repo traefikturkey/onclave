@@ -441,6 +441,25 @@ func (store *Store) PruneAuditEvents(before time.Time) error {
 	return nil
 }
 
+func (store *Store) Metrics() map[string]int64 {
+	metrics := make(map[string]int64)
+	queries := map[string]string{
+		"onclave_tasks_persisted":         `SELECT COUNT(*) FROM tasks`,
+		"onclave_subscriptions_persisted": `SELECT COUNT(*) FROM subscriptions`,
+		"onclave_command_outbox_pending":  `SELECT COUNT(*) FROM command_outbox WHERE published_at IS NULL`,
+		"onclave_event_outbox_pending":    `SELECT COUNT(*) FROM event_outbox WHERE published_at IS NULL`,
+		"onclave_delivery_attempts":       `SELECT COALESCE(SUM(attempts), 0) FROM delivery_attempts`,
+		"onclave_audit_events":            `SELECT COUNT(*) FROM audit_events`,
+	}
+	for name, query := range queries {
+		var value int64
+		if err := store.db.QueryRow(query).Scan(&value); err == nil {
+			metrics[name] = value
+		}
+	}
+	return metrics
+}
+
 func (store *Store) enqueueOutbox(table string, envelope messaging.Envelope) error {
 	encoded, err := json.Marshal(envelope)
 	if err != nil {

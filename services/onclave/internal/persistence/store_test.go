@@ -162,6 +162,9 @@ func TestAuditEventsPersistAndPrune(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("expected one audit event, got %d", count)
 	}
+	if metrics := store.Metrics(); metrics["onclave_audit_events"] != 1 {
+		t.Fatalf("expected metrics to report one audit event, got %+v", metrics)
+	}
 	if err := store.PruneAuditEvents(now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
