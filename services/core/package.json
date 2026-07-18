@@ -1,0 +1,18 @@
+{
+  "name": "onclave-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.5",
+    "tsx": "^4.20.6"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.6"
+  }
+}

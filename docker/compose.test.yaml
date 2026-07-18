@@ -1,0 +1,16 @@
+# Ephemeral broker for integration tests; no volumes, throwaway credentials.
+services:
+  rabbitmq-test:
+    image: rabbitmq:4-management
+    environment:
+      RABBITMQ_DEFAULT_USER: onclave
+      RABBITMQ_DEFAULT_PASS: onclave-test
+      RABBITMQ_DEFAULT_VHOST: onclave
+    ports:
+      - "5673:5672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 10s
+      retries: 12
+      start_period: 10s

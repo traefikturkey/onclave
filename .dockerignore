@@ -1,0 +1,10 @@
+.git
+node_modules
+**/node_modules
+docs
+coverage
+dist
+**/dist
+.env
+**/.env
+docker/.env

@@ -1,0 +1,45 @@
+services:
+  rabbitmq:
+    image: rabbitmq:4-management
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-onclave}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-onclave-dev}
+      RABBITMQ_DEFAULT_VHOST: onclave
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
+  onclave-core:
+    build:
+      context: ..
+      dockerfile: services/core/Dockerfile
+    environment:
+      ONCLAVE_AMQP_URL: ${ONCLAVE_AMQP_URL:-amqp://onclave:onclave-dev@rabbitmq:5672/onclave}
+      ONCLAVE_HTTP_PORT: "8080"
+    ports:
+      - "8080:8080"
+    volumes:
+      - onclave-data:/data
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  rabbitmq-data:
+  onclave-data:
