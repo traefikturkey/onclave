@@ -31,21 +31,20 @@ services:
       - SURREALDB_PASSWORD=${SURREALDB_PASSWORD}
     restart: unless-stopped
 
-  garage:
-    image: dxflrs/garage:v2.2.0
+  minio:
+    image: quay.io/minio/minio:latest
     env_file:
       - .env
-    container_name: menos-garage
+    container_name: menos-minio
     ports:
-      - "3900:3900"
-      - "3903:3903"
+      - "9000:9000"
+      - "9001:9001"
     volumes:
-      - ${DATA_PATH:-/apps/menos/data}/garage/meta:/var/lib/garage/meta
-      - ${DATA_PATH:-/apps/menos/data}/garage/data:/var/lib/garage/data
-      - ./garage.toml:/etc/garage.toml:ro
+      - ${DATA_PATH:-/apps/menos/data}/minio:/data
+    command: server /data --console-address ":9001"
     environment:
-      - GARAGE_RPC_SECRET=${GARAGE_RPC_SECRET}
-      - GARAGE_ADMIN_TOKEN=${GARAGE_ADMIN_TOKEN}
+      - MINIO_ROOT_USER=${S3_ACCESS_KEY}
+      - MINIO_ROOT_PASSWORD=${S3_SECRET_KEY}
     restart: unless-stopped
 
   searxng:
@@ -84,7 +83,7 @@ services:
       - "8000:8000"
     depends_on:
       - surrealdb
-      - garage
+      - minio
       - ollama
       - docling-serve
     environment:
@@ -93,11 +92,11 @@ services:
       - SURREALDB_PASSWORD=${SURREALDB_PASSWORD}
       - SURREALDB_NAMESPACE=${SURREALDB_NAMESPACE}
       - SURREALDB_DATABASE=${SURREALDB_DATABASE}
-      - S3_ENDPOINT_URL=garage:3900
+      - S3_ENDPOINT_URL=minio:9000
       - S3_ACCESS_KEY=${S3_ACCESS_KEY}
       - S3_SECRET_KEY=${S3_SECRET_KEY}
       - S3_BUCKET=${S3_BUCKET}
-      - S3_REGION=garage
+      - S3_REGION=${S3_REGION}
       - OLLAMA_URL=http://ollama:11434
       - SSH_PUBLIC_KEYS_PATH=/keys
       - WEBSHARE_PROXY_USERNAME=${WEBSHARE_PROXY_USERNAME}
