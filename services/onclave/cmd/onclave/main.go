@@ -4,7 +4,10 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/traefikturkey/onclave/services/onclave/internal/admission"
@@ -16,6 +19,8 @@ import (
 
 func main() {
 	serviceConfig := config.FromEnvironment()
+	runContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	var publisher messaging.Publisher
 	var subscriber *messaging.RabbitMQPublisher
 	if serviceConfig.RabbitMQURL != "" {
@@ -41,12 +46,17 @@ func main() {
 		go func() {
 			ticker := time.NewTicker(5 * time.Second)
 			defer ticker.Stop()
-			for range ticker.C {
-				if err := messagingService.ReplayPendingCommands(context.Background()); err != nil {
-					log.Printf("command outbox replay failed: %v", err)
-				}
-				if err := messagingService.ReplayPendingEvents(context.Background()); err != nil {
-					log.Printf("event outbox replay failed: %v", err)
+			for {
+				select {
+				case <-runContext.Done():
+					return
+				case <-ticker.C:
+					if err := messagingService.ReplayPendingCommands(runContext); err != nil {
+						log.Printf("command outbox replay failed: %v", err)
+					}
+					if err := messagingService.ReplayPendingEvents(runContext); err != nil {
+						log.Printf("event outbox replay failed: %v", err)
+					}
 				}
 			}
 		}()
@@ -56,7 +66,21 @@ func main() {
 	})
 
 	log.Printf("Onclave API listening on %s", serviceConfig.Address)
-	if err := http.ListenAndServe(serviceConfig.Address, server.Handler()); err != nil {
-		log.Fatal(err)
+	httpServer := &http.Server{Addr: serviceConfig.Address, Handler: server.Handler()}
+	serverErrors := make(chan error, 1)
+	go func() {
+		serverErrors <- httpServer.ListenAndServe()
+	}()
+	select {
+	case err := <-serverErrors:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	case <-runContext.Done():
+		shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := httpServer.Shutdown(shutdownContext); err != nil {
+			log.Printf("HTTP shutdown failed: %v", err)
+		}
 	}
 }
