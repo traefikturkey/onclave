@@ -42,4 +42,20 @@ export {
   sanitizeField,
 } from "./framing";
 export { PERFORMATIVES, isPerformative, mayTriggerTurn, type Performative } from "./performative";
+export {
+  PROTOCOL_VERSION,
+  isAgentCard,
+  parseRpcRequest,
+  type AgentCard,
+  type HeartbeatTelemetry,
+  type RpcParseResult,
+  type RpcRequest,
+} from "./protocol";
+export {
+  EXCHANGE_AGENTS,
+  EXCHANGE_DLX,
+  EXCHANGE_EVENTS,
+  QUEUE_CORE_RPC,
+  QUEUE_DEAD_LETTER,
+} from "./topology";
 export { isUlid, ulid } from "./ulid";

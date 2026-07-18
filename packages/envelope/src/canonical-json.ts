@@ -7,6 +7,7 @@ export type CanonicalJsonValue =
   | { [key: string]: CanonicalJsonValue };
 
 export function canonicalJson(value: unknown): string {
+  // #lizard forgives: ported verbatim from v1 onclave-comms canonical-json
   return stringifyCanonical(value, "$.");
 }
 

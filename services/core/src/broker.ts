@@ -1,13 +1,14 @@
 import { connect } from "amqplib";
 import type { Channel } from "amqplib";
+import {
+  EXCHANGE_AGENTS,
+  EXCHANGE_DLX,
+  EXCHANGE_EVENTS,
+  QUEUE_CORE_RPC,
+  QUEUE_DEAD_LETTER,
+} from "@onclave/envelope";
 import { log } from "./log";
 import { redactAmqpUrl } from "./config";
-
-export const EXCHANGE_AGENTS = "onclave.agents";
-export const EXCHANGE_EVENTS = "onclave.events";
-export const EXCHANGE_DLX = "onclave.dlx";
-export const QUEUE_DEAD_LETTER = "onclave.dead-letter";
-export const QUEUE_CORE_RPC = "onclave.core.rpc";
 
 export type BrokerTopology = {
   exchanges: string[];
@@ -69,22 +70,24 @@ export function startBroker(options: BrokerOptions): BrokerClient {
     }, delay);
   };
 
+  const handleClose = (): void => {
+    status.connected = false;
+    status.topologyDeclared = false;
+    channel = undefined;
+    connection = undefined;
+    if (!closing) {
+      log("warn", "broker.connection_closed", {});
+      scheduleReconnect();
+    }
+  };
+
   const establish = async (): Promise<void> => {
     try {
       connection = await connect(options.amqpUrl);
       connection.on("error", (error: Error) => {
         log("warn", "broker.connection_error", { message: error.message });
       });
-      connection.on("close", () => {
-        status.connected = false;
-        status.topologyDeclared = false;
-        channel = undefined;
-        connection = undefined;
-        if (!closing) {
-          log("warn", "broker.connection_closed", {});
-          scheduleReconnect();
-        }
-      });
+      connection.on("close", handleClose);
       channel = await connection.createChannel();
       await declareTopology(channel);
       status.connected = true;

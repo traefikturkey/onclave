@@ -1,8 +1,7 @@
-import { ENVELOPE_VERSION } from "@onclave/envelope";
+import { ENVELOPE_VERSION, PROTOCOL_VERSION } from "@onclave/envelope";
 import { loadCoreConfig, redactAmqpUrl } from "./config";
-import { startBroker } from "./broker";
-import { startHealthServer } from "./health";
 import { log } from "./log";
+import { startCore, type CoreRuntime } from "./service";
 
 const config = loadCoreConfig();
 
@@ -10,15 +9,10 @@ log("info", "core.starting", {
   amqpUrl: redactAmqpUrl(config.amqpUrl),
   httpPort: config.httpPort,
   envelopeVersion: ENVELOPE_VERSION,
+  protocolVersion: PROTOCOL_VERSION,
 });
 
-const broker = startBroker({
-  amqpUrl: config.amqpUrl,
-  retryBaseMs: config.connectRetryBaseMs,
-  retryMaxMs: config.connectRetryMaxMs,
-});
-
-const healthServer = startHealthServer(config.httpPort, broker);
+const runtime: CoreRuntime = await startCore({ config });
 
 let shuttingDown = false;
 
@@ -28,11 +22,10 @@ async function shutdown(signal: string): Promise<void> {
   }
   shuttingDown = true;
   log("info", "core.shutdown", { signal });
-  healthServer.close();
   try {
-    await broker.close();
+    await runtime.stop();
   } catch (error) {
-    log("warn", "core.shutdown_broker_error", {
+    log("warn", "core.shutdown_error", {
       message: error instanceof Error ? error.message : String(error),
     });
   }
