@@ -19,6 +19,9 @@ import (
 
 func main() {
 	serviceConfig := config.FromEnvironment()
+	if (serviceConfig.TLSCertFile == "") != (serviceConfig.TLSKeyFile == "") {
+		log.Fatal("ONCLAVE_TLS_CERT_FILE and ONCLAVE_TLS_KEY_FILE must be configured together")
+	}
 	runContext, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	var publisher messaging.Publisher
@@ -68,7 +71,11 @@ func main() {
 		return nil
 	})
 
-	log.Printf("Onclave API listening on %s", serviceConfig.Address)
+	protocol := "http"
+	if serviceConfig.TLSCertFile != "" {
+		protocol = "https"
+	}
+	log.Printf("Onclave API listening on %s://%s", protocol, serviceConfig.Address)
 	httpServer := &http.Server{
 		Addr:              serviceConfig.Address,
 		Handler:           server.Handler(),
@@ -78,6 +85,10 @@ func main() {
 	}
 	serverErrors := make(chan error, 1)
 	go func() {
+		if serviceConfig.TLSCertFile != "" {
+			serverErrors <- httpServer.ListenAndServeTLS(serviceConfig.TLSCertFile, serviceConfig.TLSKeyFile)
+			return
+		}
 		serverErrors <- httpServer.ListenAndServe()
 	}()
 	select {

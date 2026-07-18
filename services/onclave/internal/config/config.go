@@ -11,6 +11,8 @@ type Config struct {
 	RabbitMQURL      string
 	RabbitMQExchange string
 	SessionTTL       time.Duration
+	TLSCertFile      string
+	TLSKeyFile       string
 }
 
 func FromEnvironment() Config {
@@ -35,6 +37,7 @@ func FromEnvironment() Config {
 	return Config{
 		Address: address, StateDir: stateDir,
 		RabbitMQURL: os.Getenv("ONCLAVE_RABBITMQ_URL"), RabbitMQExchange: exchange,
-		SessionTTL: sessionTTL,
+		SessionTTL:  sessionTTL,
+		TLSCertFile: os.Getenv("ONCLAVE_TLS_CERT_FILE"), TLSKeyFile: os.Getenv("ONCLAVE_TLS_KEY_FILE"),
 	}
 }
