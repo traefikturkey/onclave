@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { loadIdentityPrivateKeyHex, loadOrCreateIdentity } from "../src/lib/identity";
+import { loadIdentityPrivateKeyHex } from "../src/lib/identity";
 import { getOnclavePaths } from "../src/lib/state";
 
 const tempDirs: string[] = [];
@@ -16,7 +16,7 @@ describe("loadIdentityPrivateKeyHex", () => {
     const root = await mkdtemp(join(tmpdir(), "onclave-identity-key-"));
     tempDirs.push(root);
     const paths = getOnclavePaths(root);
-    await loadOrCreateIdentity(paths);
+    await writeFile(paths.privateKey, `${"ab".repeat(32)}\n`, "utf8");
 
     const privateKeyHex = await loadIdentityPrivateKeyHex(paths);
 

@@ -573,12 +573,3 @@ func cloneMap(value map[string]any) map[string]any {
 	}
 	return copy
 }
-
-func sortedKeys(value map[string]any) []string {
-	keys := make([]string, 0, len(value))
-	for key := range value {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}

@@ -1,5 +1,3 @@
-import json
-
 
 STATUS = {
     "name": "onclave_status",
@@ -56,7 +54,3 @@ DISCONNECT = {
     "description": "Stop the Onclave WebSocket session and release local timers.",
     "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
 }
-
-
-def as_json(value):
-    return json.dumps(value, separators=(",", ":"), default=str)

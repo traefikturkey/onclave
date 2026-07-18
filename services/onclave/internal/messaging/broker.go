@@ -395,31 +395,6 @@ func (publisher *RabbitMQPublisher) SubscribeEvents(ctx context.Context, subscri
 	}, handler)
 }
 
-func consumeDeliveries(ctx context.Context, subscription *Subscription, deliveries <-chan amqp.Delivery, handler DeliveryHandler) {
-	for {
-		select {
-		case <-ctx.Done():
-			_ = subscription.Close()
-			return
-		case delivery, ok := <-deliveries:
-			if !ok {
-				return
-			}
-			var envelope Envelope
-			if err := json.Unmarshal(delivery.Body, &envelope); err != nil {
-				_ = delivery.Nack(false, false)
-				continue
-			}
-			envelope.RoutingKey = delivery.RoutingKey
-			if err := handler(envelope); err != nil {
-				_ = delivery.Nack(false, deliveryRedeliveryCount(delivery.Headers) < maxDeliveryRedeliveries)
-				continue
-			}
-			_ = delivery.Ack(false)
-		}
-	}
-}
-
 func (publisher *RabbitMQPublisher) SubscribeDeadLetters(ctx context.Context, subscriberID string, handler DeliveryHandler) (*Subscription, error) {
 	return newResilientSubscription(ctx, func() (*amqp.Channel, string, <-chan amqp.Delivery, error) {
 		channel, err := publisher.openChannel()

@@ -11,9 +11,7 @@ if str(ROOT) not in sys.path:
 
 from src.config import ConfigError, GatewayConfig
 from src.gateway.client import GatewayClient, GatewayError
-from src.gateway.session import GatewaySession
-from src.gateway.subscriptions import SubscriptionManager
-from src.host.commands import OnclaveController
+
 
 
 def main() -> int:
