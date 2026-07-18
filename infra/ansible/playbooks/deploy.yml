@@ -4,27 +4,24 @@
   become: true
 
   tasks:
-    # --- Infisical secret preflight ---
-    - name: Validate onclave Infisical selectors
+    # --- Bitwarden Secrets Manager preflight ---
+    - name: Validate Bitwarden access configuration
       ansible.builtin.assert:
         that:
-          - onclave_infisical_project | length > 0
-          - onclave_infisical_environment | length > 0
-          - onclave_infisical_path | length > 0
-          - onclave_infisical_required_keys | length > 0
-          - onclave_infisical_machine_client_id | length > 0
-          - onclave_infisical_machine_client_secret | length > 0
+          - lookup('env', 'BITWARDEN_ACCESS_KEY') | length > 0
+          - onclave_secrets_required_keys | length > 0
         fail_msg: >-
-          Onclave Infisical preflight failed. Provide selectors and
-          vault-backed machine identity values using --ask-vault-pass,
-          --vault-password-file, or -e @vars-file.
+          Bitwarden preflight failed. Export BITWARDEN_ACCESS_KEY (and
+          BITWARDEN_API_SERVER for self-hosted) in the host shell; they are
+          loaded from ~/.dotfiles/private/secrets.env and passed through to
+          the harness container.
       delegate_to: localhost
       become: false
       tags: [preflight]
 
     - name: Create local onclave secret temp directory
       ansible.builtin.file:
-        path: "{{ onclave_infisical_tmp_dir }}"
+        path: "{{ onclave_secrets_tmp_dir }}"
         state: directory
         mode: "0700"
       delegate_to: localhost
@@ -34,43 +31,27 @@
       diff: false
       tags: [preflight]
 
-    - name: Validate onclave runtime secrets from Infisical
+    - name: Validate onclave runtime secrets from Bitwarden
       ansible.builtin.command:
-        cmd: >-
-          python3 /project/scripts/onclave-infisical-env.py
-          --project {{ onclave_infisical_project }}
-          --environment {{ onclave_infisical_environment }}
-          --path {{ onclave_infisical_path }}
-          --api-url {{ onclave_infisical_api_url }}
-          --validate
-      environment:
-        INFISICAL_MACHINE_CLIENT_ID: "{{ onclave_infisical_machine_client_id }}"
-        INFISICAL_MACHINE_CLIENT_SECRET: "{{ onclave_infisical_machine_client_secret }}"
+        cmd: python3 /project/scripts/onclave-bws-env.py --validate
       delegate_to: localhost
       become: false
-      register: onclave_infisical_validate
+      register: onclave_bws_validate
       changed_when: false
       check_mode: false
       no_log: true
       diff: false
       tags: [preflight]
 
-    - name: Render onclave runtime env from Infisical
+    - name: Render onclave runtime env from Bitwarden
       ansible.builtin.command:
         cmd: >-
-          python3 /project/scripts/onclave-infisical-env.py
-          --project {{ onclave_infisical_project }}
-          --environment {{ onclave_infisical_environment }}
-          --path {{ onclave_infisical_path }}
-          --api-url {{ onclave_infisical_api_url }}
-          --out {{ onclave_infisical_tmp_dir }}/onclave.env
+          python3 /project/scripts/onclave-bws-env.py
+          --out {{ onclave_secrets_tmp_dir }}/onclave.env
           --write
-      environment:
-        INFISICAL_MACHINE_CLIENT_ID: "{{ onclave_infisical_machine_client_id }}"
-        INFISICAL_MACHINE_CLIENT_SECRET: "{{ onclave_infisical_machine_client_secret }}"
       delegate_to: localhost
       become: false
-      register: onclave_infisical_render
+      register: onclave_bws_render
       changed_when: false
       check_mode: false
       no_log: true
@@ -207,11 +188,11 @@
       no_log: true
       diff: false
 
-    - name: Install Infisical-rendered runtime env atomically
+    - name: Install Bitwarden-rendered runtime env atomically
       ansible.builtin.copy:
-        src: "{{ onclave_infisical_tmp_dir }}/onclave.env"
+        src: "{{ onclave_secrets_tmp_dir }}/onclave.env"
         dest: "{{ deploy_path }}/.env"
-        mode: "{{ onclave_infisical_runtime_env_mode }}"
+        mode: "{{ onclave_secrets_runtime_env_mode }}"
       no_log: true
       diff: false
 
@@ -276,7 +257,7 @@
 
     - name: Remove local rendered onclave env
       ansible.builtin.file:
-        path: "{{ onclave_infisical_tmp_dir }}"
+        path: "{{ onclave_secrets_tmp_dir }}"
         state: absent
       delegate_to: localhost
       become: false

@@ -1,5 +1,8 @@
-# Copy values into a vault-encrypted vars file (or pass with -e/--vault-*)
-# to provide the Infisical machine identity for deploys. The identity needs
-# read access to the "dotfiles" project, "prod" environment, "/onclave" path.
-vault_onclave_infisical_machine_client_id: "<machine identity client id>"
-vault_onclave_infisical_machine_client_secret: "<machine identity client secret>"
+# Secrets come from Bitwarden Secrets Manager via a machine account access
+# token. Provide these on the host shell (loaded from
+# ~/.dotfiles/private/secrets.env); the harness passes them through:
+#   BITWARDEN_ACCESS_KEY      - machine account access token
+#   BITWARDEN_API_SERVER      - e.g. https://vault.bitwarden.com/api
+#   BITWARDEN_IDENTITY_SERVER - e.g. https://vault.bitwarden.com/identity
+#   ONCLAVE_BWS_PROJECT_ID    - optional project scope for bws secret list
+# Required secrets (by key name): RABBITMQ_DEFAULT_USER, RABBITMQ_DEFAULT_PASS.

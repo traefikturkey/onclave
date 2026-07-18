@@ -8,7 +8,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client \
     rsync \
     tar \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Install the Bitwarden Secrets Manager CLI for deploy-time secret rendering.
+ARG BWS_VERSION=1.0.0
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) bws_arch=x86_64-unknown-linux-gnu ;; \
+      arm64) bws_arch=aarch64-unknown-linux-gnu ;; \
+      *) echo "Unsupported architecture for bws: $arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/bitwarden/sdk-sm/releases/download/bws-v${BWS_VERSION}/bws-${bws_arch}-${BWS_VERSION}.zip" \
+      -o /tmp/bws.zip; \
+    unzip /tmp/bws.zip -d /usr/local/bin bws; \
+    chmod +x /usr/local/bin/bws; \
+    rm /tmp/bws.zip; \
+    bws --version
 
 # Install Gitleaks for repo secret scanning in the same validation container.
 ARG GITLEAKS_VERSION=8.24.3

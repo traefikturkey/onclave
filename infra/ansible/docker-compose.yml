@@ -17,6 +17,12 @@ services:
     environment:
       - ANSIBLE_CONFIG=/ansible/ansible.cfg
       - ANSIBLE_HOST_KEY_CHECKING=False
+      # Bitwarden Secrets Manager access, passed through from the host shell
+      # (loaded from ~/.dotfiles/private/secrets.env).
+      - BITWARDEN_ACCESS_KEY
+      - BITWARDEN_API_SERVER
+      - BITWARDEN_IDENTITY_SERVER
+      - ONCLAVE_BWS_PROJECT_ID
     stdin_open: true
     tty: true
     network_mode: host

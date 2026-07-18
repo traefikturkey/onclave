@@ -117,11 +117,12 @@ container:
 
 ```bash
 just deploy-build
-just deploy -- --ask-vault-pass -e @vault.yml
+just deploy
 ```
 
-The playbook renders broker credentials from Infisical (project `dotfiles`,
-path `/onclave`), syncs the build context to `/apps/onclave/src`, builds
-the core image on the host, starts the stack, and verifies `/health`
-reports broker connectivity. Local development keeps using
-`docker/compose.yaml` with the `docker/.env.example` defaults.
+The playbook renders broker credentials from Bitwarden Secrets Manager
+(machine account token from the host shell; see `infra/README.md`), syncs
+the build context to `/apps/onclave/src`, builds the core image on the
+host, starts the stack, and verifies `/health` reports broker
+connectivity. Local development keeps using `docker/compose.yaml` with the
+`docker/.env.example` defaults.
