@@ -23,7 +23,7 @@ func main() {
 			log.Fatal(err)
 		}
 		defer rabbitPublisher.Close()
-		publisher = rabbitPublisher
+		publisher = messaging.NewRetryingPublisher(rabbitPublisher, 3, 100*time.Millisecond)
 		subscriber = rabbitPublisher
 	}
 	store, err := persistence.Open(filepath.Join(serviceConfig.StateDir, "onclave.db"))
