@@ -36,9 +36,11 @@ services/
 ```
 
 `extensions/onclave-comms` is the first-party Pi extension and follows the
-extension layout. Existing runtime integrations such as `adapters/hermes`
-remain under `adapters/`; they are gateway clients, not Pi package extensions.
-Do not create empty package directories in advance.
+extension layout. `extensions/onclave-hermes` is the first-party Hermes
+extension and is the canonical Hermes integration for the public gateway.
+Runtime-specific gateway clients belong inside their corresponding extension
+unless they are independently maintained, reusable packages. Do not create
+empty adapter or package directories in advance.
 
 ## Manifest
 

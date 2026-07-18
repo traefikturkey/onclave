@@ -87,7 +87,6 @@ From the repository root:
 
 ```bash
 PYTHONPATH=extensions/onclave-hermes python -m pytest extensions/onclave-hermes/tests -q
-python -m unittest discover -s adapters/hermes -p 'test_*.py' -v
 ```
 
 The extension tests are hermetic and do not require RabbitMQ. A live acceptance test must use only an explicitly configured Onclave HTTPS/WSS endpoint and a disposable approved agent:
