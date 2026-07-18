@@ -59,6 +59,7 @@ type RabbitMQPublisher struct {
 	channel       *amqp.Channel
 	exchange      string
 	eventExchange string
+	deadExchange  string
 }
 
 func NewRabbitMQPublisher(url, exchange string) (*RabbitMQPublisher, error) {
@@ -82,7 +83,13 @@ func NewRabbitMQPublisher(url, exchange string) (*RabbitMQPublisher, error) {
 		_ = connection.Close()
 		return nil, fmt.Errorf("declare RabbitMQ event exchange: %w", err)
 	}
-	return &RabbitMQPublisher{connection: connection, channel: channel, exchange: exchange, eventExchange: eventExchange}, nil
+	deadExchange := exchange + ".dead"
+	if err := channel.ExchangeDeclare(deadExchange, "topic", true, false, false, false, nil); err != nil {
+		_ = channel.Close()
+		_ = connection.Close()
+		return nil, fmt.Errorf("declare RabbitMQ dead-letter exchange: %w", err)
+	}
+	return &RabbitMQPublisher{connection: connection, channel: channel, exchange: exchange, eventExchange: eventExchange, deadExchange: deadExchange}, nil
 }
 
 func (publisher *RabbitMQPublisher) Publish(ctx context.Context, envelope Envelope) error {
@@ -95,6 +102,7 @@ func (publisher *RabbitMQPublisher) Publish(ctx context.Context, envelope Envelo
 		DeliveryMode:  amqp.Persistent,
 		MessageId:     envelope.MessageID,
 		CorrelationId: envelope.CorrelationID,
+		Expiration:    messageExpiration(envelope.ExpiresAt),
 		Body:          body,
 	})
 }
@@ -106,7 +114,8 @@ func (publisher *RabbitMQPublisher) PublishEvent(ctx context.Context, envelope E
 	}
 	return publisher.channel.PublishWithContext(ctx, publisher.eventExchange, envelope.RoutingKey, false, false, amqp.Publishing{
 		ContentType: "application/json", DeliveryMode: amqp.Persistent,
-		MessageId: envelope.MessageID, CorrelationId: envelope.CorrelationID, Body: body,
+		MessageId: envelope.MessageID, CorrelationId: envelope.CorrelationID,
+		Expiration: messageExpiration(envelope.ExpiresAt), Body: body,
 	})
 }
 
@@ -116,7 +125,12 @@ func (publisher *RabbitMQPublisher) SubscribeAgent(ctx context.Context, agentID 
 		return nil, fmt.Errorf("open RabbitMQ consumer channel: %w", err)
 	}
 	queueName := "agent.command." + queueSegment(agentID)
-	queue, err := channel.QueueDeclare(queueName, true, false, false, false, nil)
+	deadRoutingKey := "dead.command." + queueSegment(agentID)
+	if err := publisher.declareDeadQueue(channel, "agent.command.dead."+queueSegment(agentID), deadRoutingKey); err != nil {
+		_ = channel.Close()
+		return nil, err
+	}
+	queue, err := channel.QueueDeclare(queueName, true, false, false, false, deadLetterArgs(publisher.deadExchange, deadRoutingKey))
 	if err != nil {
 		_ = channel.Close()
 		return nil, fmt.Errorf("declare agent queue: %w", err)
@@ -142,7 +156,12 @@ func (publisher *RabbitMQPublisher) SubscribeEvents(ctx context.Context, subscri
 		return nil, fmt.Errorf("open RabbitMQ event channel: %w", err)
 	}
 	queueName := "agent.event." + queueSegment(subscriberID) + "." + queueSegment(pattern)
-	queue, err := channel.QueueDeclare(queueName, true, false, false, false, nil)
+	deadRoutingKey := "dead.event." + queueSegment(subscriberID) + "." + queueSegment(pattern)
+	if err := publisher.declareDeadQueue(channel, "agent.event.dead."+queueSegment(subscriberID)+"."+queueSegment(pattern), deadRoutingKey); err != nil {
+		_ = channel.Close()
+		return nil, err
+	}
+	queue, err := channel.QueueDeclare(queueName, true, false, false, false, deadLetterArgs(publisher.deadExchange, deadRoutingKey))
 	if err != nil {
 		_ = channel.Close()
 		return nil, fmt.Errorf("declare event queue: %w", err)
@@ -185,6 +204,36 @@ func consumeDeliveries(ctx context.Context, subscription *Subscription, deliveri
 			_ = delivery.Ack(false)
 		}
 	}
+}
+
+func (publisher *RabbitMQPublisher) declareDeadQueue(channel *amqp.Channel, queueName, routingKey string) error {
+	queue, err := channel.QueueDeclare(queueName, true, false, false, false, nil)
+	if err != nil {
+		return fmt.Errorf("declare dead-letter queue: %w", err)
+	}
+	if err := channel.QueueBind(queue.Name, routingKey, publisher.deadExchange, false, nil); err != nil {
+		return fmt.Errorf("bind dead-letter queue: %w", err)
+	}
+	return nil
+}
+
+func deadLetterArgs(exchange, routingKey string) amqp.Table {
+	return amqp.Table{"x-dead-letter-exchange": exchange, "x-dead-letter-routing-key": routingKey}
+}
+
+func messageExpiration(expiresAt string) string {
+	if expiresAt == "" {
+		return ""
+	}
+	expires, err := time.Parse(time.RFC3339Nano, expiresAt)
+	if err != nil {
+		return ""
+	}
+	milliseconds := time.Until(expires).Milliseconds()
+	if milliseconds < 1 {
+		milliseconds = 1
+	}
+	return fmt.Sprintf("%d", milliseconds)
 }
 
 func queueSegment(agentID string) string {

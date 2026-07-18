@@ -25,6 +25,29 @@ func (publisher *recordingPublisher) PublishEvent(_ context.Context, envelope En
 	return nil
 }
 
+func TestMessageExpiration(t *testing.T) {
+	if got := messageExpiration(""); got != "" {
+		t.Fatalf("expected empty expiration, got %q", got)
+	}
+	if got := messageExpiration("not-a-time"); got != "" {
+		t.Fatalf("expected empty expiration for invalid timestamp, got %q", got)
+	}
+	future := time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano)
+	if got := messageExpiration(future); got == "" {
+		t.Fatal("expected expiration for future timestamp")
+	}
+	if got := messageExpiration(time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)); got != "1" {
+		t.Fatalf("expected immediate expiration of 1ms, got %q", got)
+	}
+}
+
+func TestDeadLetterArgs(t *testing.T) {
+	args := deadLetterArgs("onclave.dead", "dead.command.agent")
+	if args["x-dead-letter-exchange"] != "onclave.dead" || args["x-dead-letter-routing-key"] != "dead.command.agent" {
+		t.Fatalf("unexpected dead-letter args: %#v", args)
+	}
+}
+
 func TestSubmitPublishesDurableCommandEnvelope(t *testing.T) {
 	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
 	publisher := &recordingPublisher{}

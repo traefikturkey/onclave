@@ -49,4 +49,29 @@ func TestRabbitMQAgentQueueRoundTrip(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for RabbitMQ delivery")
 	}
+
+	eventReceived := make(chan Envelope, 1)
+	eventSubscription, err := publisher.SubscribeEvents(ctx, "observer-roundtrip", "task.#.agent-roundtrip", func(envelope Envelope) error {
+		eventReceived <- envelope
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eventSubscription.Close()
+	if err := publisher.PublishEvent(ctx, Envelope{
+		RoutingKey: "task.completed.agent-roundtrip", MessageID: "event-roundtrip", TaskID: "task-roundtrip",
+		MessageType: "task.completed", ExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339Nano),
+		Payload: []byte(`{"state":"completed"}`), Persistent: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case envelope := <-eventReceived:
+		if envelope.TaskID != "task-roundtrip" || envelope.RoutingKey != "task.completed.agent-roundtrip" {
+			t.Fatalf("unexpected event envelope: %+v", envelope)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for RabbitMQ event delivery")
+	}
 }
