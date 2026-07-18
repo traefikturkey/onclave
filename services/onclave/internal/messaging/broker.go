@@ -60,6 +60,8 @@ type RabbitMQPublisher struct {
 	exchange      string
 	eventExchange string
 	deadExchange  string
+	confirmations chan amqp.Confirmation
+	publishMu     sync.Mutex
 }
 
 func NewRabbitMQPublisher(url, exchange string) (*RabbitMQPublisher, error) {
@@ -89,34 +91,49 @@ func NewRabbitMQPublisher(url, exchange string) (*RabbitMQPublisher, error) {
 		_ = connection.Close()
 		return nil, fmt.Errorf("declare RabbitMQ dead-letter exchange: %w", err)
 	}
-	return &RabbitMQPublisher{connection: connection, channel: channel, exchange: exchange, eventExchange: eventExchange, deadExchange: deadExchange}, nil
+	if err := channel.Confirm(false); err != nil {
+		_ = channel.Close()
+		_ = connection.Close()
+		return nil, fmt.Errorf("enable RabbitMQ publisher confirms: %w", err)
+	}
+	confirmations := channel.NotifyPublish(make(chan amqp.Confirmation, 1))
+	return &RabbitMQPublisher{connection: connection, channel: channel, exchange: exchange, eventExchange: eventExchange, deadExchange: deadExchange, confirmations: confirmations}, nil
 }
 
 func (publisher *RabbitMQPublisher) Publish(ctx context.Context, envelope Envelope) error {
+	return publisher.publish(ctx, publisher.exchange, envelope)
+}
+
+func (publisher *RabbitMQPublisher) publish(ctx context.Context, exchange string, envelope Envelope) error {
 	body, err := json.Marshal(envelope)
 	if err != nil {
 		return fmt.Errorf("encode message envelope: %w", err)
 	}
-	return publisher.channel.PublishWithContext(ctx, publisher.exchange, envelope.RoutingKey, false, false, amqp.Publishing{
-		ContentType:   "application/json",
-		DeliveryMode:  amqp.Persistent,
-		MessageId:     envelope.MessageID,
-		CorrelationId: envelope.CorrelationID,
-		Expiration:    messageExpiration(envelope.ExpiresAt),
-		Body:          body,
-	})
-}
-
-func (publisher *RabbitMQPublisher) PublishEvent(ctx context.Context, envelope Envelope) error {
-	body, err := json.Marshal(envelope)
-	if err != nil {
-		return fmt.Errorf("encode event envelope: %w", err)
-	}
-	return publisher.channel.PublishWithContext(ctx, publisher.eventExchange, envelope.RoutingKey, false, false, amqp.Publishing{
+	publisher.publishMu.Lock()
+	defer publisher.publishMu.Unlock()
+	if err := publisher.channel.PublishWithContext(ctx, exchange, envelope.RoutingKey, false, false, amqp.Publishing{
 		ContentType: "application/json", DeliveryMode: amqp.Persistent,
 		MessageId: envelope.MessageID, CorrelationId: envelope.CorrelationID,
 		Expiration: messageExpiration(envelope.ExpiresAt), Body: body,
-	})
+	}); err != nil {
+		return err
+	}
+	select {
+	case confirmation, ok := <-publisher.confirmations:
+		if !ok {
+			return fmt.Errorf("RabbitMQ publisher confirmation channel closed")
+		}
+		if !confirmation.Ack {
+			return fmt.Errorf("RabbitMQ broker negatively acknowledged message %q", envelope.MessageID)
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (publisher *RabbitMQPublisher) PublishEvent(ctx context.Context, envelope Envelope) error {
+	return publisher.publish(ctx, publisher.eventExchange, envelope)
 }
 
 func (publisher *RabbitMQPublisher) SubscribeAgent(ctx context.Context, agentID string, handler DeliveryHandler) (*Subscription, error) {
