@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"os"
@@ -34,6 +35,36 @@ func main() {
 		defer rabbitPublisher.Close()
 		publisher = messaging.NewRetryingPublisher(rabbitPublisher, 3, 100*time.Millisecond)
 		subscriber = rabbitPublisher
+	}
+	if subscriber != nil {
+		eventPublisher, _ := publisher.(messaging.EventPublisher)
+		deadLetterSubscription, err := subscriber.SubscribeDeadLetters(runContext, func(envelope messaging.Envelope) error {
+			log.Printf("dead-lettered delivery message=%s task=%s routing=%s", envelope.MessageID, envelope.TaskID, envelope.RoutingKey)
+			if eventPublisher == nil || envelope.SourceAgentID == "" {
+				return nil
+			}
+			payload, err := json.Marshal(map[string]any{
+				"eventType":  "task.delivery.failed",
+				"messageId":  envelope.MessageID,
+				"taskId":     envelope.TaskID,
+				"routingKey": envelope.RoutingKey,
+			})
+			if err != nil {
+				return err
+			}
+			return eventPublisher.PublishEvent(runContext, messaging.Envelope{
+				RoutingKey: "task.delivery.failed." + envelope.SourceAgentID,
+				MessageID:  envelope.MessageID + ":delivery-failed", TaskID: envelope.TaskID,
+				SourceAgentID: "onclave", TargetAgentID: envelope.SourceAgentID,
+				MessageType: "task.delivery.failed", IssuedAt: time.Now().UTC().Format(time.RFC3339Nano),
+				ExpiresAt: time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano), Payload: payload, Persistent: true,
+			})
+		})
+		if err != nil {
+			log.Printf("dead-letter observer unavailable: %v", err)
+		} else {
+			defer deadLetterSubscription.Close()
+		}
 	}
 	store, err := persistence.Open(filepath.Join(serviceConfig.StateDir, "onclave.db"))
 	if err != nil {

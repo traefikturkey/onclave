@@ -223,6 +223,31 @@ func consumeDeliveries(ctx context.Context, subscription *Subscription, deliveri
 	}
 }
 
+func (publisher *RabbitMQPublisher) SubscribeDeadLetters(ctx context.Context, handler DeliveryHandler) (*Subscription, error) {
+	channel, err := publisher.connection.Channel()
+	if err != nil {
+		return nil, fmt.Errorf("open RabbitMQ dead-letter channel: %w", err)
+	}
+	queue, err := channel.QueueDeclare("onclave.dead-letter", true, false, false, false, nil)
+	if err != nil {
+		_ = channel.Close()
+		return nil, fmt.Errorf("declare dead-letter observer queue: %w", err)
+	}
+	if err := channel.QueueBind(queue.Name, "#", publisher.deadExchange, false, nil); err != nil {
+		_ = channel.Close()
+		return nil, fmt.Errorf("bind dead-letter observer queue: %w", err)
+	}
+	consumerTag := fmt.Sprintf("onclave-dead-letter-%d", time.Now().UnixNano())
+	deliveries, err := channel.Consume(queue.Name, consumerTag, false, false, false, false, nil)
+	if err != nil {
+		_ = channel.Close()
+		return nil, fmt.Errorf("consume dead-letter observer queue: %w", err)
+	}
+	subscription := &Subscription{channel: channel, consumerTag: consumerTag}
+	go consumeDeliveries(ctx, subscription, deliveries, handler)
+	return subscription, nil
+}
+
 func (publisher *RabbitMQPublisher) declareDeadQueue(channel *amqp.Channel, queueName, routingKey string) error {
 	queue, err := channel.QueueDeclare(queueName, true, false, false, false, nil)
 	if err != nil {
