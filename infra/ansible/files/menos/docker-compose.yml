@@ -24,6 +24,8 @@ services:
     container_name: menos-surrealdb
     ports:
       - "8080:8000"
+    labels:
+      joyride.host.name: "surrealdb.traefikturkey.icu"
     volumes:
       - ${DATA_PATH:-/apps/menos/data}/surrealdb:/data
     command: start --user root --pass ${SURREALDB_PASSWORD} file:/data/database.db
@@ -39,6 +41,8 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
+    labels:
+      joyride.host.name: "s3.traefikturkey.icu"
     volumes:
       - ${DATA_PATH:-/apps/menos/data}/minio:/data
     command: server /data --console-address ":9001"
@@ -54,6 +58,8 @@ services:
     container_name: menos-searxng
     ports:
       - "8888:8080"
+    labels:
+      joyride.host.name: "menos-searxng.traefikturkey.icu"
     volumes:
       - ./searxng:/etc/searxng
     environment:
@@ -66,6 +72,8 @@ services:
     container_name: menos-docling-serve
     ports:
       - "5001:5001"
+    labels:
+      joyride.host.name: "docling.traefikturkey.icu"
     environment:
       - DOCLING_SERVE_ENABLE_UI=0
     restart: unless-stopped
@@ -81,6 +89,8 @@ services:
     container_name: menos-api
     ports:
       - "8000:8000"
+    labels:
+      joyride.host.name: "menos.traefikturkey.icu"
     depends_on:
       - surrealdb
       - minio
