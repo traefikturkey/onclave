@@ -66,7 +66,13 @@ func main() {
 	})
 
 	log.Printf("Onclave API listening on %s", serviceConfig.Address)
-	httpServer := &http.Server{Addr: serviceConfig.Address, Handler: server.Handler()}
+	httpServer := &http.Server{
+		Addr:              serviceConfig.Address,
+		Handler:           server.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
 	serverErrors := make(chan error, 1)
 	go func() {
 		serverErrors <- httpServer.ListenAndServe()
