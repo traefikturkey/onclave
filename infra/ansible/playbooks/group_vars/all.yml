@@ -1,7 +1,7 @@
 onclave_infisical_project: dotfiles
 onclave_infisical_environment: prod
 onclave_infisical_path: /onclave
-onclave_infisical_api_url: https://infisical.ilude.com
+onclave_infisical_api_url: https://infisical.traefikturkey.icu
 onclave_infisical_tmp_dir: /dev/shm/onclave
 onclave_infisical_runtime_env_mode: "0600"
 onclave_infisical_required_keys:

@@ -152,7 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--path", default=os.environ.get("ONCLAVE_INFISICAL_PATH", "/onclave"))
     parser.add_argument(
-        "--api-url", default=os.environ.get("INFISICAL_API_URL", "https://infisical.ilude.com")
+        "--api-url", default=os.environ.get("INFISICAL_API_URL", "https://infisical.traefikturkey.icu")
     )
     parser.add_argument("--client-id")
     parser.add_argument("--client-secret")
