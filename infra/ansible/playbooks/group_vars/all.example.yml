@@ -1,0 +1,5 @@
+# Copy values into a vault-encrypted vars file (or pass with -e/--vault-*)
+# to provide the Infisical machine identity for deploys. The identity needs
+# read access to the "dotfiles" project, "prod" environment, "/onclave" path.
+vault_onclave_infisical_machine_client_id: "<machine identity client id>"
+vault_onclave_infisical_machine_client_secret: "<machine identity client secret>"

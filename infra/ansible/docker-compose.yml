@@ -1,0 +1,22 @@
+services:
+  ansible:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    user: root
+    volumes:
+      # Mount SSH keys to temp location (entrypoint copies with correct perms)
+      - ${HOME:-${USERPROFILE}}/.ssh:/mnt/ssh:ro
+      # Mount ansible playbooks and config
+      - ./:/ansible:rw
+      # Mount repo root for access to scripts/ and the core build context
+      - ../..:/project:ro
+      # Mount git modules (for when this repo is a dotfiles submodule)
+      - ../../../.git/modules:/.git/modules:ro
+    working_dir: /ansible
+    environment:
+      - ANSIBLE_CONFIG=/ansible/ansible.cfg
+      - ANSIBLE_HOST_KEY_CHECKING=False
+    stdin_open: true
+    tty: true
+    network_mode: host

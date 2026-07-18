@@ -109,20 +109,19 @@ ONCLAVE_AMQP_URL=amqp://onclave:onclave-dev@<broker-host>:5672/onclave \
 - Neither file may contain message bodies; grep for a body string you sent
   to confirm.
 
-## Docker host deployment note
+## Docker host deployment
 
-The operator's docker host runs a placeholder `onclave` container next to
-`rabbitmq`. Replace it with the real image from this branch:
+The central stack deploys to the docker host with the ansible harness in
+`infra/` (see `infra/README.md`), replacing the placeholder `onclave`
+container:
 
 ```bash
-git clone https://github.com/traefikturkey/onclave.git && cd onclave
-git checkout feature/v2-broker-core
-docker compose -f docker/compose.yaml build onclave-core
-docker compose -f docker/compose.yaml up -d
+just deploy-build
+just deploy -- --ask-vault-pass -e @vault.yml
 ```
 
-If the host keeps its own compose file, point the `onclave` service at the
-built image and give it the same environment (`ONCLAVE_AMQP_URL`), a `/data`
-volume, and the `/health` healthcheck from `docker/compose.yaml`. Broker
-credentials belong in `docker/.env` (gitignored); `docker/.env.example`
-documents the local-dev defaults, which must be changed for LAN exposure.
+The playbook renders broker credentials from Infisical (project `dotfiles`,
+path `/onclave`), syncs the build context to `/apps/onclave/src`, builds
+the core image on the host, starts the stack, and verifies `/health`
+reports broker connectivity. Local development keeps using
+`docker/compose.yaml` with the `docker/.env.example` defaults.

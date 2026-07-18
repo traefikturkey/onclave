@@ -1,0 +1,11 @@
+onclave_infisical_project: dotfiles
+onclave_infisical_environment: prod
+onclave_infisical_path: /onclave
+onclave_infisical_api_url: https://infisical.ilude.com
+onclave_infisical_tmp_dir: /dev/shm/onclave
+onclave_infisical_runtime_env_mode: "0600"
+onclave_infisical_required_keys:
+  - RABBITMQ_DEFAULT_USER
+  - RABBITMQ_DEFAULT_PASS
+onclave_infisical_machine_client_id: "{{ vault_onclave_infisical_machine_client_id | default('') }}"
+onclave_infisical_machine_client_secret: "{{ vault_onclave_infisical_machine_client_secret | default('') }}"

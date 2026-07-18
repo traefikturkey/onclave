@@ -1,0 +1,285 @@
+---
+- name: Deploy onclave stack
+  hosts: onclave
+  become: true
+
+  tasks:
+    # --- Infisical secret preflight ---
+    - name: Validate onclave Infisical selectors
+      ansible.builtin.assert:
+        that:
+          - onclave_infisical_project | length > 0
+          - onclave_infisical_environment | length > 0
+          - onclave_infisical_path | length > 0
+          - onclave_infisical_required_keys | length > 0
+          - onclave_infisical_machine_client_id | length > 0
+          - onclave_infisical_machine_client_secret | length > 0
+        fail_msg: >-
+          Onclave Infisical preflight failed. Provide selectors and
+          vault-backed machine identity values using --ask-vault-pass,
+          --vault-password-file, or -e @vars-file.
+      delegate_to: localhost
+      become: false
+      tags: [preflight]
+
+    - name: Create local onclave secret temp directory
+      ansible.builtin.file:
+        path: "{{ onclave_infisical_tmp_dir }}"
+        state: directory
+        mode: "0700"
+      delegate_to: localhost
+      become: false
+      check_mode: false
+      no_log: true
+      diff: false
+      tags: [preflight]
+
+    - name: Validate onclave runtime secrets from Infisical
+      ansible.builtin.command:
+        cmd: >-
+          python3 /project/scripts/onclave-infisical-env.py
+          --project {{ onclave_infisical_project }}
+          --environment {{ onclave_infisical_environment }}
+          --path {{ onclave_infisical_path }}
+          --api-url {{ onclave_infisical_api_url }}
+          --validate
+      environment:
+        INFISICAL_MACHINE_CLIENT_ID: "{{ onclave_infisical_machine_client_id }}"
+        INFISICAL_MACHINE_CLIENT_SECRET: "{{ onclave_infisical_machine_client_secret }}"
+      delegate_to: localhost
+      become: false
+      register: onclave_infisical_validate
+      changed_when: false
+      check_mode: false
+      no_log: true
+      diff: false
+      tags: [preflight]
+
+    - name: Render onclave runtime env from Infisical
+      ansible.builtin.command:
+        cmd: >-
+          python3 /project/scripts/onclave-infisical-env.py
+          --project {{ onclave_infisical_project }}
+          --environment {{ onclave_infisical_environment }}
+          --path {{ onclave_infisical_path }}
+          --api-url {{ onclave_infisical_api_url }}
+          --out {{ onclave_infisical_tmp_dir }}/onclave.env
+          --write
+      environment:
+        INFISICAL_MACHINE_CLIENT_ID: "{{ onclave_infisical_machine_client_id }}"
+        INFISICAL_MACHINE_CLIENT_SECRET: "{{ onclave_infisical_machine_client_secret }}"
+      delegate_to: localhost
+      become: false
+      register: onclave_infisical_render
+      changed_when: false
+      check_mode: false
+      no_log: true
+      diff: false
+      tags: [preflight]
+
+    # --- Git state checks ---
+    - name: Configure git for container environment
+      ansible.builtin.command:
+        argv:
+          - git
+          - config
+          - --global
+          - "{{ item.name }}"
+          - "{{ item.value }}"
+      loop:
+        - name: safe.directory
+          value: /project
+        - name: core.autocrlf
+          value: input
+      delegate_to: localhost
+      changed_when: false
+
+    - name: Detect git directory (handles submodules)
+      ansible.builtin.shell: |
+        set -o pipefail
+        cd /project
+        if [ -f .git ]; then
+          gitdir=$(sed 's/gitdir: //' .git)
+          echo "/project/$gitdir"
+        else
+          echo "/project/.git"
+        fi
+      args:
+        executable: /bin/bash
+      delegate_to: localhost
+      register: git_dir_result
+      changed_when: false
+
+    - name: Get local git SHA
+      ansible.builtin.command:
+        argv:
+          - git
+          - "--git-dir={{ git_dir_result.stdout }}"
+          - --work-tree=/project
+          - rev-parse
+          - HEAD
+      delegate_to: localhost
+      register: local_git_sha
+      changed_when: false
+
+    - name: Get local git branch
+      ansible.builtin.command:
+        argv:
+          - git
+          - "--git-dir={{ git_dir_result.stdout }}"
+          - --work-tree=/project
+          - rev-parse
+          - --abbrev-ref
+          - HEAD
+      delegate_to: localhost
+      register: local_git_branch
+      changed_when: false
+
+    - name: Check for uncommitted changes
+      ansible.builtin.command:
+        argv:
+          - git
+          - "--git-dir={{ git_dir_result.stdout }}"
+          - --work-tree=/project
+          - status
+          - --porcelain
+      delegate_to: localhost
+      register: git_status
+      changed_when: false
+      failed_when: git_status.stdout != ""
+
+    - name: Display deploy info
+      ansible.builtin.debug:
+        msg: "Deploying {{ local_git_sha.stdout[:8] }} ({{ local_git_branch.stdout }}) to {{ ansible_host }}"
+
+    # --- Target layout ---
+    - name: Create deploy directory
+      ansible.builtin.file:
+        path: "{{ deploy_path }}"
+        state: directory
+        mode: "0755"
+
+    - name: Create data directories
+      ansible.builtin.file:
+        path: "{{ data_path }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - rabbitmq
+        - onclave
+        - onclave/trust
+
+    - name: Sync compose file
+      ansible.builtin.copy:
+        src: /ansible/files/onclave/docker-compose.yml
+        dest: "{{ deploy_path }}/docker-compose.yml"
+        mode: "0644"
+
+    - name: Sync core build context
+      ansible.builtin.command:
+        argv:
+          - /bin/sh
+          - -c
+          - >-
+            rsync -av --delete
+            --exclude='.git' --exclude='node_modules' --exclude='docs'
+            --exclude='infra' --exclude='coverage' --exclude='dist'
+            -e "ssh -o StrictHostKeyChecking=no"
+            /project/
+            {{ ansible_user }}@{{ ansible_host }}:{{ deploy_path }}/src/
+      delegate_to: localhost
+      register: rsync_result
+      changed_when: rsync_result.stdout_lines | length > 4
+
+    # --- Runtime env ---
+    - name: Check existing runtime env
+      ansible.builtin.stat:
+        path: "{{ deploy_path }}/.env"
+      register: onclave_existing_env
+
+    - name: Backup existing runtime env
+      ansible.builtin.copy:
+        src: "{{ deploy_path }}/.env"
+        dest: "{{ deploy_path }}/.env.bak"
+        remote_src: true
+        mode: "0600"
+      when: onclave_existing_env.stat.exists
+      no_log: true
+      diff: false
+
+    - name: Install Infisical-rendered runtime env atomically
+      ansible.builtin.copy:
+        src: "{{ onclave_infisical_tmp_dir }}/onclave.env"
+        dest: "{{ deploy_path }}/.env"
+        mode: "{{ onclave_infisical_runtime_env_mode }}"
+      no_log: true
+      diff: false
+
+    # --- Compose actions ---
+    - name: Validate compose interpolation before compose actions
+      ansible.builtin.command:
+        cmd: docker compose -f docker-compose.yml config
+        chdir: "{{ deploy_path }}"
+      changed_when: false
+      check_mode: false
+      tags: [preflight]
+
+    - name: Pull container images
+      ansible.builtin.command:
+        cmd: docker compose pull rabbitmq
+        chdir: "{{ deploy_path }}"
+      changed_when: true
+
+    - name: Build core image
+      ansible.builtin.command:
+        cmd: docker compose build onclave-core
+        chdir: "{{ deploy_path }}"
+      changed_when: true
+
+    - name: Start services
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: "{{ deploy_path }}"
+      changed_when: true
+
+    - name: Show service status
+      ansible.builtin.command:
+        cmd: docker compose ps
+        chdir: "{{ deploy_path }}"
+      register: compose_status
+      changed_when: false
+
+    - name: Display status
+      ansible.builtin.debug:
+        var: compose_status.stdout_lines
+
+    # --- Post-deploy verification ---
+    - name: Verify core health and broker connectivity
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:8080/health"
+        return_content: true
+      register: post_deploy_health
+      retries: 10
+      delay: 3
+      until:
+        - post_deploy_health.status == 200
+        - post_deploy_health.json.broker.connected | default(false)
+      changed_when: false
+
+    - name: Confirm broker connectivity
+      ansible.builtin.assert:
+        that:
+          - post_deploy_health.json.broker.connected
+          - post_deploy_health.json.broker.topologyDeclared
+        success_msg: "Deploy verified: core connected to broker on {{ ansible_host }}"
+        fail_msg: "Deploy verification failed: core is not connected to the broker"
+
+    - name: Remove local rendered onclave env
+      ansible.builtin.file:
+        path: "{{ onclave_infisical_tmp_dir }}"
+        state: absent
+      delegate_to: localhost
+      become: false
+      no_log: true
+      diff: false
+      tags: [preflight]

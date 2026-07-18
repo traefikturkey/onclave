@@ -1,0 +1,45 @@
+# Production onclave stack, deployed to the docker host by
+# infra/ansible/playbooks/deploy.yml. Credentials come from the
+# Infisical-rendered .env installed next to this file.
+services:
+  rabbitmq:
+    image: rabbitmq:4-management
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?}
+      RABBITMQ_DEFAULT_VHOST: onclave
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - ./data/rabbitmq:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  onclave-core:
+    build:
+      context: ./src
+      dockerfile: services/core/Dockerfile
+    image: onclave-core:deployed
+    restart: unless-stopped
+    environment:
+      ONCLAVE_AMQP_URL: amqp://${RABBITMQ_DEFAULT_USER:?}:${RABBITMQ_DEFAULT_PASS:?}@rabbitmq:5672/onclave
+      ONCLAVE_HTTP_PORT: "8080"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data/onclave:/data
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s

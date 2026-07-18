@@ -38,6 +38,18 @@ test-integration:
     ONCLAVE_TEST_AMQP_URL=amqp://onclave:onclave-test@localhost:5673/onclave pnpm exec vitest run --config vitest.integration.config.ts || (docker compose -f docker/compose.test.yaml down -v; exit 1)
     docker compose -f docker/compose.test.yaml down -v
 
+deploy-build:
+    docker compose -f infra/ansible/docker-compose.yml build
+
+deploy *ARGS:
+    docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-playbook playbooks/deploy.yml {{ARGS}}
+
+deploy-syntax:
+    docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-playbook --syntax-check playbooks/deploy.yml
+
+deploy-lint:
+    docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-lint playbooks/deploy.yml
+
 pi-local:
     pi -e ./extensions/onclave-comms
 
