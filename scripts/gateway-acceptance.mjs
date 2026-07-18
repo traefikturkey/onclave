@@ -92,7 +92,9 @@ if (restartGateway) {
   initialTargetSession.socket.close();
   await submit();
   sourceSession.socket.close();
-  execFileSync("docker", ["compose", "-f", "infrastructure/docker/onclave-compose.yml", "restart", "onclave"], { stdio: "inherit" });
+  const gatewayContainer = execFileSync("docker", ["ps", "--filter", "label=com.docker.compose.service=onclave", "--format", "{{.ID}}"], { encoding: "utf8" }).trim();
+  if (!gatewayContainer) throw new Error("could not find the running Onclave container to restart");
+  execFileSync("docker", ["restart", gatewayContainer], { stdio: "inherit" });
   const readyDeadline = Date.now() + 30000;
   while (Date.now() < readyDeadline) {
     try {
