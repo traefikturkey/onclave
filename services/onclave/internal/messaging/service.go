@@ -103,6 +103,12 @@ type EventOutbox interface {
 	MarkEventPublished(string) error
 }
 
+type CommandOutbox interface {
+	EnqueueCommand(Envelope) error
+	PendingCommands() ([]Envelope, error)
+	MarkCommandPublished(string) error
+}
+
 func NewService(now func() time.Time) *Service {
 	return NewServiceWithPublisher(now, nil)
 }
@@ -131,22 +137,6 @@ func (s *Service) Submit(command Command) (Task, error) {
 	if command.ExpiresAt.IsZero() || !command.ExpiresAt.After(s.now()) {
 		return Task{}, ErrExpired
 	}
-	if s.publisher != nil {
-		payload, err := json.Marshal(command.Payload)
-		if err != nil {
-			return Task{}, fmt.Errorf("encode command payload: %w", err)
-		}
-		envelope := Envelope{
-			RoutingKey: command.Type + "." + command.TargetAgentID,
-			MessageID:  command.MessageID, TaskID: command.TaskID, CorrelationID: command.CorrelationID,
-			SourceAgentID: command.SourceAgentID, TargetAgentID: command.TargetAgentID, MessageType: command.Type,
-			IssuedAt: s.now().UTC().Format(time.RFC3339Nano), ExpiresAt: command.ExpiresAt.UTC().Format(time.RFC3339Nano),
-			Payload: payload, Persistent: true,
-		}
-		if err := s.publisher.Publish(context.Background(), envelope); err != nil {
-			return Task{}, fmt.Errorf("publish command: %w", err)
-		}
-	}
 	task := &Task{
 		MessageID: command.MessageID, TaskID: command.TaskID, CorrelationID: command.CorrelationID,
 		SourceAgentID: command.SourceAgentID, TargetAgentID: command.TargetAgentID, Type: command.Type,
@@ -157,6 +147,34 @@ func (s *Service) Submit(command Command) (Task, error) {
 		if err := s.store.SaveTask(*task); err != nil {
 			delete(s.tasks, task.TaskID)
 			return Task{}, fmt.Errorf("persist task: %w", err)
+		}
+	}
+	payload, err := json.Marshal(command.Payload)
+	if err != nil {
+		delete(s.tasks, task.TaskID)
+		return Task{}, fmt.Errorf("encode command payload: %w", err)
+	}
+	envelope := Envelope{
+		RoutingKey: command.Type + "." + command.TargetAgentID,
+		MessageID:  command.MessageID, TaskID: command.TaskID, CorrelationID: command.CorrelationID,
+		SourceAgentID: command.SourceAgentID, TargetAgentID: command.TargetAgentID, MessageType: command.Type,
+		IssuedAt: s.now().UTC().Format(time.RFC3339Nano), ExpiresAt: command.ExpiresAt.UTC().Format(time.RFC3339Nano),
+		Payload: payload, Persistent: true,
+	}
+	if outbox, ok := s.store.(CommandOutbox); ok {
+		if err := outbox.EnqueueCommand(envelope); err != nil {
+			delete(s.tasks, task.TaskID)
+			return Task{}, fmt.Errorf("enqueue command: %w", err)
+		}
+	}
+	if s.publisher != nil {
+		if err := s.publisher.Publish(context.Background(), envelope); err != nil {
+			return Task{}, fmt.Errorf("publish command: %w", err)
+		}
+		if outbox, ok := s.store.(CommandOutbox); ok {
+			if err := outbox.MarkCommandPublished(envelope.MessageID); err != nil {
+				return Task{}, fmt.Errorf("mark command published: %w", err)
+			}
 		}
 	}
 	s.record(task, Event{Type: EventAccepted, TaskID: task.TaskID})
@@ -387,6 +405,29 @@ func (s *Service) record(task *Task, event Event) {
 			_ = outbox.MarkEventPublished(envelope.MessageID)
 		}
 	}
+}
+
+func (s *Service) ReplayPendingCommands(ctx context.Context) error {
+	if s.publisher == nil {
+		return nil
+	}
+	outbox, ok := s.store.(CommandOutbox)
+	if !ok {
+		return nil
+	}
+	pending, err := outbox.PendingCommands()
+	if err != nil {
+		return err
+	}
+	for _, envelope := range pending {
+		if err := s.publisher.Publish(ctx, envelope); err != nil {
+			return err
+		}
+		if err := outbox.MarkCommandPublished(envelope.MessageID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) ReplayPendingEvents(ctx context.Context) error {

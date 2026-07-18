@@ -182,3 +182,40 @@ func TestEventOutboxSurvivesReopenAndMarksPublished(t *testing.T) {
 	}
 	_ = store.Close()
 }
+
+func TestCommandOutboxSurvivesReopenAndMarksPublished(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "onclave.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := messaging.Envelope{MessageID: "command-message-1", RoutingKey: "task.assign.target", TaskID: "task-1", MessageType: "task.assign", Payload: []byte(`{"instruction":"run"}`), Persistent: true}
+	if err := store.EnqueueCommand(envelope); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.PendingCommands()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].MessageID != envelope.MessageID {
+		t.Fatalf("unexpected pending commands: %+v", pending)
+	}
+	if err := store.MarkCommandPublished(envelope.MessageID); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = store.PendingCommands()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("expected no pending commands after publish, got %+v", pending)
+	}
+	_ = store.Close()
+}

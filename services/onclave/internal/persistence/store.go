@@ -76,6 +76,12 @@ CREATE TABLE IF NOT EXISTS event_outbox (
   created_at TEXT NOT NULL,
   published_at TEXT
 );
+CREATE TABLE IF NOT EXISTS command_outbox (
+  message_id TEXT PRIMARY KEY,
+  envelope_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  published_at TEXT
+);
 CREATE TABLE IF NOT EXISTS admission_agents (
   agent_id TEXT PRIMARY KEY,
   runtime_type TEXT NOT NULL,
@@ -263,46 +269,70 @@ func (store *Store) GetEvents(taskID string) ([]messaging.Event, error) {
 	return events, nil
 }
 
+func (store *Store) EnqueueCommand(envelope messaging.Envelope) error {
+	return store.enqueueOutbox("command_outbox", envelope)
+}
+
+func (store *Store) PendingCommands() ([]messaging.Envelope, error) {
+	return store.pendingOutbox("command_outbox")
+}
+
+func (store *Store) MarkCommandPublished(messageID string) error {
+	return store.markOutboxPublished("command_outbox", messageID)
+}
+
 func (store *Store) EnqueueEvent(envelope messaging.Envelope) error {
+	return store.enqueueOutbox("event_outbox", envelope)
+}
+
+func (store *Store) PendingEvents() ([]messaging.Envelope, error) {
+	return store.pendingOutbox("event_outbox")
+}
+
+func (store *Store) MarkEventPublished(messageID string) error {
+	return store.markOutboxPublished("event_outbox", messageID)
+}
+
+func (store *Store) enqueueOutbox(table string, envelope messaging.Envelope) error {
 	encoded, err := json.Marshal(envelope)
 	if err != nil {
 		return fmt.Errorf("encode outbox envelope: %w", err)
 	}
-	_, err = store.db.Exec(`INSERT OR IGNORE INTO event_outbox(message_id, envelope_json, created_at) VALUES(?, ?, ?)`, envelope.MessageID, string(encoded), time.Now().UTC().Format(time.RFC3339Nano))
+	_, err = store.db.Exec(`INSERT OR IGNORE INTO `+table+`(message_id, envelope_json, created_at) VALUES(?, ?, ?)`, envelope.MessageID, string(encoded), time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
-		return fmt.Errorf("enqueue event: %w", err)
+		return fmt.Errorf("enqueue %s: %w", table, err)
 	}
 	return nil
 }
 
-func (store *Store) PendingEvents() ([]messaging.Envelope, error) {
-	rows, err := store.db.Query(`SELECT envelope_json FROM event_outbox WHERE published_at IS NULL ORDER BY created_at, message_id`)
+func (store *Store) pendingOutbox(table string) ([]messaging.Envelope, error) {
+	rows, err := store.db.Query(`SELECT envelope_json FROM ` + table + ` WHERE published_at IS NULL ORDER BY created_at, message_id`)
 	if err != nil {
-		return nil, fmt.Errorf("query pending events: %w", err)
+		return nil, fmt.Errorf("query pending %s: %w", table, err)
 	}
 	defer rows.Close()
 	var envelopes []messaging.Envelope
 	for rows.Next() {
 		var encoded string
 		if err := rows.Scan(&encoded); err != nil {
-			return nil, fmt.Errorf("scan pending event: %w", err)
+			return nil, fmt.Errorf("scan pending %s: %w", table, err)
 		}
 		var envelope messaging.Envelope
 		if err := json.Unmarshal([]byte(encoded), &envelope); err != nil {
-			return nil, fmt.Errorf("decode pending event: %w", err)
+			return nil, fmt.Errorf("decode pending %s: %w", table, err)
 		}
 		envelopes = append(envelopes, envelope)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate pending events: %w", err)
+		return nil, fmt.Errorf("iterate pending %s: %w", table, err)
 	}
 	return envelopes, nil
 }
 
-func (store *Store) MarkEventPublished(messageID string) error {
-	_, err := store.db.Exec(`UPDATE event_outbox SET published_at = ? WHERE message_id = ?`, time.Now().UTC().Format(time.RFC3339Nano), messageID)
+func (store *Store) markOutboxPublished(table, messageID string) error {
+	_, err := store.db.Exec(`UPDATE `+table+` SET published_at = ? WHERE message_id = ?`, time.Now().UTC().Format(time.RFC3339Nano), messageID)
 	if err != nil {
-		return fmt.Errorf("mark event published: %w", err)
+		return fmt.Errorf("mark %s published: %w", table, err)
 	}
 	return nil
 }

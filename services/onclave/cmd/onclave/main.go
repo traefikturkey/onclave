@@ -42,6 +42,9 @@ func main() {
 			ticker := time.NewTicker(5 * time.Second)
 			defer ticker.Stop()
 			for range ticker.C {
+				if err := messagingService.ReplayPendingCommands(context.Background()); err != nil {
+					log.Printf("command outbox replay failed: %v", err)
+				}
 				if err := messagingService.ReplayPendingEvents(context.Background()); err != nil {
 					log.Printf("event outbox replay failed: %v", err)
 				}
