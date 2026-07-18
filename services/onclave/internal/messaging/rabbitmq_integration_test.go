@@ -7,6 +7,27 @@ import (
 	"time"
 )
 
+func TestRabbitMQPublisherReconnectsAfterChannelClose(t *testing.T) {
+	url := os.Getenv("ONCLAVE_RABBITMQ_TEST_URL")
+	if url == "" {
+		t.Skip("ONCLAVE_RABBITMQ_TEST_URL is not configured")
+	}
+	publisher, err := NewRabbitMQPublisher(url, "onclave.commands.reconnect-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer publisher.Close()
+	if err := publisher.channel.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.Publish(context.Background(), Envelope{
+		RoutingKey: "task.reconnect.agent", MessageID: "message-reconnect", TaskID: "task-reconnect",
+		MessageType: "task.assign", Payload: []byte(`{"instruction":"reconnect"}`), Persistent: true,
+	}); err != nil {
+		t.Fatalf("publish after channel close: %v", err)
+	}
+}
+
 func TestRabbitMQDeadLetterObserver(t *testing.T) {
 	url := os.Getenv("ONCLAVE_RABBITMQ_TEST_URL")
 	if url == "" {

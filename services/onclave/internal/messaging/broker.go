@@ -57,11 +57,13 @@ func (subscription *Subscription) Close() error {
 type RabbitMQPublisher struct {
 	connection    *amqp.Connection
 	channel       *amqp.Channel
+	url           string
 	exchange      string
 	eventExchange string
 	deadExchange  string
 	confirmations chan amqp.Confirmation
 	publishMu     sync.Mutex
+	connectionMu  sync.Mutex
 }
 
 func NewRabbitMQPublisher(url, exchange string) (*RabbitMQPublisher, error) {
@@ -97,10 +99,17 @@ func NewRabbitMQPublisher(url, exchange string) (*RabbitMQPublisher, error) {
 		return nil, fmt.Errorf("enable RabbitMQ publisher confirms: %w", err)
 	}
 	confirmations := channel.NotifyPublish(make(chan amqp.Confirmation, 1))
-	return &RabbitMQPublisher{connection: connection, channel: channel, exchange: exchange, eventExchange: eventExchange, deadExchange: deadExchange, confirmations: confirmations}, nil
+	return &RabbitMQPublisher{connection: connection, channel: channel, url: url, exchange: exchange, eventExchange: eventExchange, deadExchange: deadExchange, confirmations: confirmations}, nil
 }
 
 func (publisher *RabbitMQPublisher) Publish(ctx context.Context, envelope Envelope) error {
+	err := publisher.publish(ctx, publisher.exchange, envelope)
+	if err == nil {
+		return nil
+	}
+	if reconnectErr := publisher.reconnect(); reconnectErr != nil {
+		return err
+	}
 	return publisher.publish(ctx, publisher.exchange, envelope)
 }
 
@@ -133,6 +142,13 @@ func (publisher *RabbitMQPublisher) publish(ctx context.Context, exchange string
 }
 
 func (publisher *RabbitMQPublisher) PublishEvent(ctx context.Context, envelope Envelope) error {
+	err := publisher.publish(ctx, publisher.eventExchange, envelope)
+	if err == nil {
+		return nil
+	}
+	if reconnectErr := publisher.reconnect(); reconnectErr != nil {
+		return err
+	}
 	return publisher.publish(ctx, publisher.eventExchange, envelope)
 }
 
@@ -296,6 +312,49 @@ func messageExpiration(expiresAt string) string {
 
 func queueSegment(agentID string) string {
 	return strings.NewReplacer("/", "_", "\\", "_", " ", "_").Replace(agentID)
+}
+
+func (publisher *RabbitMQPublisher) reconnect() error {
+	publisher.connectionMu.Lock()
+	defer publisher.connectionMu.Unlock()
+	connection, err := amqp.Dial(publisher.url)
+	if err != nil {
+		return fmt.Errorf("reconnect to RabbitMQ: %w", err)
+	}
+	channel, err := connection.Channel()
+	if err != nil {
+		_ = connection.Close()
+		return fmt.Errorf("open RabbitMQ reconnect channel: %w", err)
+	}
+	for name, kind := range map[string]string{
+		publisher.exchange:      "topic",
+		publisher.eventExchange: "topic",
+		publisher.deadExchange:  "topic",
+	} {
+		if err := channel.ExchangeDeclare(name, kind, true, false, false, false, nil); err != nil {
+			_ = channel.Close()
+			_ = connection.Close()
+			return fmt.Errorf("declare RabbitMQ reconnect exchange: %w", err)
+		}
+	}
+	if err := channel.Confirm(false); err != nil {
+		_ = channel.Close()
+		_ = connection.Close()
+		return fmt.Errorf("enable RabbitMQ reconnect confirms: %w", err)
+	}
+	confirmations := channel.NotifyPublish(make(chan amqp.Confirmation, 1))
+	oldConnection := publisher.connection
+	oldChannel := publisher.channel
+	publisher.connection = connection
+	publisher.channel = channel
+	publisher.confirmations = confirmations
+	if oldChannel != nil {
+		_ = oldChannel.Close()
+	}
+	if oldConnection != nil {
+		_ = oldConnection.Close()
+	}
+	return nil
 }
 
 func (publisher *RabbitMQPublisher) Close() error {
