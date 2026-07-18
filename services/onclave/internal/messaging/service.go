@@ -394,15 +394,25 @@ func (s *Service) record(task *Task, event Event) {
 		MessageType: string(event.Type), IssuedAt: event.At.UTC().Format(time.RFC3339Nano),
 		ExpiresAt: task.ExpiresAt.UTC().Format(time.RFC3339Nano), Payload: payload, Persistent: true,
 	}
-	if outbox, ok := s.store.(EventOutbox); ok {
-		_ = outbox.EnqueueEvent(envelope)
+	envelopes := []Envelope{envelope}
+	if task.SourceAgentID != "" && task.SourceAgentID != task.TargetAgentID {
+		sourceEnvelope := envelope
+		sourceEnvelope.RoutingKey = string(event.Type) + "." + task.SourceAgentID
+		sourceEnvelope.MessageID = envelope.MessageID + ":source"
+		sourceEnvelope.TargetAgentID = task.SourceAgentID
+		envelopes = append(envelopes, sourceEnvelope)
 	}
-	if s.eventPublisher == nil {
-		return
-	}
-	if err := s.eventPublisher.PublishEvent(context.Background(), envelope); err == nil {
+	for _, eventEnvelope := range envelopes {
 		if outbox, ok := s.store.(EventOutbox); ok {
-			_ = outbox.MarkEventPublished(envelope.MessageID)
+			_ = outbox.EnqueueEvent(eventEnvelope)
+		}
+		if s.eventPublisher == nil {
+			continue
+		}
+		if err := s.eventPublisher.PublishEvent(context.Background(), eventEnvelope); err == nil {
+			if outbox, ok := s.store.(EventOutbox); ok {
+				_ = outbox.MarkEventPublished(eventEnvelope.MessageID)
+			}
 		}
 	}
 }

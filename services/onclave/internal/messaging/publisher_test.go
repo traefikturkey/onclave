@@ -68,10 +68,13 @@ func TestSubmitPublishesDurableCommandEnvelope(t *testing.T) {
 	if envelope.RoutingKey != "task.assign.target" || !envelope.Persistent || envelope.TaskID != "task-1" {
 		t.Fatalf("unexpected envelope: %+v", envelope)
 	}
-	if len(publisher.eventEnvelopes) != 1 {
-		t.Fatalf("expected accepted lifecycle event, got %d", len(publisher.eventEnvelopes))
+	if len(publisher.eventEnvelopes) != 2 {
+		t.Fatalf("expected target and source lifecycle events, got %d", len(publisher.eventEnvelopes))
 	}
 	if event := publisher.eventEnvelopes[0]; event.RoutingKey != "task.accepted.target" || event.MessageType != string(EventAccepted) {
-		t.Fatalf("unexpected lifecycle event: %+v", event)
+		t.Fatalf("unexpected target lifecycle event: %+v", event)
+	}
+	if event := publisher.eventEnvelopes[1]; event.RoutingKey != "task.accepted.source" || event.TargetAgentID != "source" || event.MessageType != string(EventAccepted) {
+		t.Fatalf("unexpected source lifecycle event: %+v", event)
 	}
 }
