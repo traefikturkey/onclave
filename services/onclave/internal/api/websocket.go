@@ -17,6 +17,10 @@ type agentSubscriber interface {
 	SubscribeAgent(context.Context, string, messaging.DeliveryHandler) (*messaging.Subscription, error)
 }
 
+type eventSubscriber interface {
+	SubscribeEvents(context.Context, string, string, messaging.DeliveryHandler) (*messaging.Subscription, error)
+}
+
 func (s *Server) agentSession(writer http.ResponseWriter, request *http.Request) {
 	agentID := request.PathValue("agentID")
 	if !s.authorizeRequest(request, agentID) {
@@ -82,6 +86,27 @@ func (s *Server) agentSession(writer http.ResponseWriter, request *http.Request)
 			return
 		}
 		defer subscription.Close()
+	}
+	if s.events != nil {
+		eventSubscription, eventErr := s.events.SubscribeEvents(ctx, "agent-events-"+agentID, "task.*."+agentID, func(envelope messaging.Envelope) error {
+			return write(map[string]any{
+				"type":          "task.event",
+				"messageId":     envelope.MessageID,
+				"taskId":        envelope.TaskID,
+				"correlationId": envelope.CorrelationID,
+				"sourceAgentId": envelope.SourceAgentID,
+				"targetAgentId": envelope.TargetAgentID,
+				"messageType":   envelope.MessageType,
+				"issuedAt":      envelope.IssuedAt,
+				"expiresAt":     envelope.ExpiresAt,
+				"payload":       json.RawMessage(envelope.Payload),
+			})
+		})
+		if eventErr != nil {
+			_ = write(map[string]string{"type": "error", "error": "event queue unavailable"})
+			return
+		}
+		defer eventSubscription.Close()
 	}
 
 	for {

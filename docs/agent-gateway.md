@@ -89,6 +89,18 @@ Command delivery:
 }
 ```
 
+Target agents also receive lifecycle fan-out messages for their own tasks:
+
+```json
+{
+  "type": "task.event",
+  "messageId": "message-1:task.completed:2026-07-17T12:00:00Z",
+  "taskId": "task-1",
+  "messageType": "task.completed",
+  "payload": {"eventType": "task.completed", "state": "completed"}
+}
+```
+
 ## Task lifecycle
 
 The target agent may send:

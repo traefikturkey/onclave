@@ -21,6 +21,9 @@ func NewApplicationServerWithBroker(config Config, admissionService *admission.S
 	server.admission = admissionService
 	server.messaging = messagingService
 	server.subscriber = subscriber
+	if eventSource, ok := subscriber.(eventSubscriber); ok {
+		server.events = eventSource
+	}
 	return server
 }
 

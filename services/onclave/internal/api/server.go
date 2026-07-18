@@ -23,6 +23,7 @@ type Server struct {
 	admission  *admission.Service
 	messaging  *messaging.Service
 	subscriber agentSubscriber
+	events     eventSubscriber
 }
 
 func NewServer(config Config, readiness ReadinessCheck) *Server {
