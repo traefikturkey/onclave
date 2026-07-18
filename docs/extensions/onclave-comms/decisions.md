@@ -179,3 +179,157 @@ extension runtime.
   authentication behavior so operators do not need a workflow change.
 - Reverse-direction acceptance helpers and higher-level orchestration remain
   operator UX work above the transport layer, not transport redesign tasks.
+
+## Decision 6: Independent Containerized Core Service
+
+**Status:** accepted 2026-07-17 (planning discussion) - see `./v2-PRD.md`
+Workstream D; lands with branch `feature/v2-broker-core`.
+
+**Decision:** Move the hub out of the first Pi session into an independent
+core service running as a Docker container, deployed via Docker Compose
+alongside RabbitMQ. Agent-specific adapters (Pi first) connect to it as
+clients.
+
+### Rationale
+
+- Resolves Decision 1's deferred follow-up: hub lifetime becomes independent
+  of any Pi session, so registrations and message state survive session
+  churn.
+- Docker restart policies own the lifecycle, eliminating the custom
+  auto-start, single-instance election, and idle-exit machinery a per-user
+  daemon would need. That per-user Go daemon design (go-winio pipes with
+  user-scoped DACLs, bind-as-election, drain-and-exit upgrades) was fully
+  researched and is recorded as a rejected alternative in the v2 PRD.
+- An always-on core is the natural anchor for durable delivery, the registry,
+  and later interop faces (MCP, Hermes bridge).
+- Central-broker topology replaces hub-per-machine UDP discovery and
+  hub-to-hub WSS; machines find the broker by address/DNS name (Joyride can
+  publish it on the LAN). v1 stays frozen on `main` until the v2 adapter
+  reaches parity, then retires; no wire compatibility is carried.
+
+### Consequences
+
+- The broker host becomes a single point of failure for agent comms; this is
+  a conscious homelab trade recorded in the v2 PRD risks.
+- The Pi extension becomes a thin adapter client with reconnect/backoff.
+- Adapter/core handshakes carry a version field so mismatches fail loudly.
+
+## Decision 7: RabbitMQ as the Delivery Substrate
+
+**Status:** accepted 2026-07-17 (planning discussion) - see `./v2-PRD.md`
+Workstream A.
+
+**Decision:** Use RabbitMQ durable queues (one per agent) with a dead-letter
+exchange for message delivery, replacing the v1 in-memory router. The
+previously proposed maildir file store is superseded.
+
+### Rationale
+
+- v1 `MessageRouter` state dies with the hub process and cannot reach
+  unregistered agents; broker-managed durable queues close both gaps with
+  battle-tested store-and-forward, acks, and redelivery.
+- At-least-once delivery with receiver-side dedup on message id is the
+  correct guarantee for agents that restart; at-most-once drops messages in
+  exactly that window.
+- Per-queue TTL and length bounds with dead-lettering give bounded state and
+  auditable expiry/overflow without custom sweep code.
+- The envelope maps onto native AMQP properties (`message-id`,
+  `correlation-id`, `expiration`, `reply-to`) with performative, hops,
+  origin, and traceparent in headers.
+- Validate-on-read at the adapter (reject without requeue, reply
+  `not_understood`) prevents a malformed message from wedging a consumer.
+
+### Consequences
+
+- RabbitMQ becomes a deployment dependency (already running on the Docker
+  host).
+- Messages are inspectable via the management UI rather than as files.
+- Conversation correlation state persists in the core's data volume so core
+  restarts do not orphan pending responses.
+
+## Decision 8: Performatives, Inert Inform, Conversation Budgets
+
+**Status:** accepted 2026-07-17 (planning discussion) - see `./v2-PRD.md`
+Workstream B.
+
+**Decision:** Add a required enumerated `performative` field
+(`request | inform | query | failure | not_understood`); make `inform`
+structurally unable to trigger turns or tool calls; enforce per-conversation
+exchange and token budgets in the router.
+
+### Rationale
+
+- Cross-agent prompt injection propagates epidemically, and provenance labels
+  alone barely reduce attack success; the effective control is structural:
+  only `request`/`query` may initiate a turn, and `inform` is inert by code
+  path, not by prompt instruction.
+- A message-class field lets the router rate-limit and gate without parsing
+  free text (FIPA-ACL lesson).
+- Hop counters bound forwarding but not ping-pong; budgets bound the
+  conversation itself, which is the failure mode supervision cannot see.
+- Sparse, scoped messaging is both cheaper and more robust than broad
+  chatter.
+
+### Consequences
+
+- Envelope and frame schema change (versioned).
+- Strict reply correlation replaces the latest-inbound fallback; unmatched
+  runs submit nothing and audit the miss.
+- Budget exhaustion ends conversations with `failure` to both sides.
+
+## Decision 9: Cross-Host Request Confirmation and Reloadable Policy
+
+**Status:** accepted 2026-07-17 (planning discussion) - see `./v2-PRD.md`
+Workstream C. Amended from the earlier `local_only` proposal: with the
+central-broker topology no listener runs on agent workstations, so a
+loopback-only binding mode is moot; the surviving substance is origin-gated
+confirmation and restart-free policy reloads.
+
+**Decision:** Requests whose origin host differs from the receiving agent's
+host require operator confirmation by default, with per-origin auto-accept as
+explicit opt-in; policy configuration reloads without session restarts.
+
+### Rationale
+
+- Peer authentication proves sender identity, not content safety; a trusted
+  peer that ingested poisoned content is a hostile sender with a valid badge,
+  so cross-host instructions warrant a human gate by default.
+- Scoping confirmation to cross-host origin keeps same-machine workflows
+  frictionless and avoids rubber-stamp fatigue.
+- v1 required session restarts after trust changes; policy that reloads live
+  removes the operational friction recorded in the v1 status doc.
+
+### Consequences
+
+- Config schema gains per-origin policy fields owned by the core.
+- Acceptance flows and the runbook need a confirmation step for cross-host
+  requests.
+- Transport authentication is broker credentials (per-adapter users on a
+  dedicated vhost); TLS to the broker is the documented multi-machine
+  hardening step.
+
+## Decision 10: TypeScript Core Service
+
+**Status:** accepted 2026-07-17 (planning discussion) - see
+`./v2-implementation-plan.md`.
+
+**Decision:** Implement the core service in TypeScript (Node 22), sharing an
+envelope package (schema, validation, performatives, budget types) with the
+Pi adapter.
+
+### Rationale
+
+- With RabbitMQ containerized, the per-user Go daemon rationale (pipe DACLs,
+  auto-start, election, idle-exit) no longer applies; Docker owns the
+  lifecycle.
+- One language lets core and adapters consume the same envelope package,
+  eliminating cross-language contract drift.
+- Existing repo tooling (pnpm, vitest, tsc, just) carries over unchanged.
+
+### Consequences
+
+- Go remains open for a future component that independently earns it (for
+  example a Joyride-integrated discovery sidecar).
+- The repo converts to a pnpm workspace to host `packages/envelope`,
+  `services/core`, and `extensions/onclave-pi` alongside the frozen v1
+  extension.
