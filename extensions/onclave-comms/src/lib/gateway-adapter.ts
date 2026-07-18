@@ -36,6 +36,10 @@ export type GatewayClientOptions = {
   webSocketImpl?: WebSocketLike;
 };
 
+export type GatewaySessionOptions = {
+  events?: string;
+};
+
 export class OnclaveGatewayError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -108,9 +112,10 @@ export class OnclaveGatewayClient {
     });
   }
 
-  connectSession(agentId: string, token: string, onMessage: (message: GatewaySessionMessage) => void): WebSocket {
+  connectSession(agentId: string, token: string, onMessage: (message: GatewaySessionMessage) => void, options: GatewaySessionOptions = {}): WebSocket {
     const url = new URL(`/v1/agents/${encodeURIComponent(agentId)}/session`, this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    if (options.events) url.searchParams.set("events", options.events);
     const socket = new this.webSocketImpl(url.toString(), {
       headers: { Authorization: `Bearer ${token}` },
     });

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import WebSocket from "ws";
 import { OnclaveGatewayClient, OnclaveGatewayError } from "../src/lib/gateway-adapter";
 
 describe("OnclaveGatewayClient", () => {
@@ -43,5 +44,21 @@ describe("OnclaveGatewayClient", () => {
 
     await expect(client.authenticateWithPrivateKey("agent-1", "11".repeat(32))).resolves.toBe("session-token");
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("supports an agent-scoped event subscription when opening a session", () => {
+    class FakeWebSocket {
+      static lastUrl = "";
+      on() { return this; }
+      constructor(url: string) { FakeWebSocket.lastUrl = url; }
+    }
+    const client = new OnclaveGatewayClient({
+      baseUrl: "https://gateway.example",
+      webSocketImpl: FakeWebSocket as unknown as typeof WebSocket,
+    });
+
+    client.connectSession("agent-1", "session-token", () => {}, { events: "task.completed.agent-1" });
+
+    expect(FakeWebSocket.lastUrl).toBe("wss://gateway.example/v1/agents/agent-1/session?events=task.completed.agent-1");
   });
 });
