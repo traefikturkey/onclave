@@ -18,6 +18,9 @@ typecheck:
 check:
     pnpm typecheck && pnpm test
 
+go-rabbitmq-test:
+    bash ./scripts/rabbitmq-test.sh
+
 pi-local:
     pi -e ./extensions/onclave-comms
 

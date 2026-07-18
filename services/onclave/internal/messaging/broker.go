@@ -136,25 +136,41 @@ func (publisher *RabbitMQPublisher) PublishEvent(ctx context.Context, envelope E
 	return publisher.publish(ctx, publisher.eventExchange, envelope)
 }
 
+func (publisher *RabbitMQPublisher) DeclareAgentQueue(agentID string) error {
+	channel, err := publisher.connection.Channel()
+	if err != nil {
+		return fmt.Errorf("open RabbitMQ queue channel: %w", err)
+	}
+	defer channel.Close()
+	_, err = publisher.declareAgentQueue(channel, agentID)
+	return err
+}
+
+func (publisher *RabbitMQPublisher) declareAgentQueue(channel *amqp.Channel, agentID string) (amqp.Queue, error) {
+	queueName := "agent.command." + queueSegment(agentID)
+	deadRoutingKey := "dead.command." + queueSegment(agentID)
+	if err := publisher.declareDeadQueue(channel, "agent.command.dead."+queueSegment(agentID), deadRoutingKey); err != nil {
+		return amqp.Queue{}, err
+	}
+	queue, err := channel.QueueDeclare(queueName, true, false, false, false, deadLetterArgs(publisher.deadExchange, deadRoutingKey))
+	if err != nil {
+		return amqp.Queue{}, fmt.Errorf("declare agent queue: %w", err)
+	}
+	if err := channel.QueueBind(queue.Name, "task.#."+agentID, publisher.exchange, false, nil); err != nil {
+		return amqp.Queue{}, fmt.Errorf("bind agent queue: %w", err)
+	}
+	return queue, nil
+}
+
 func (publisher *RabbitMQPublisher) SubscribeAgent(ctx context.Context, agentID string, handler DeliveryHandler) (*Subscription, error) {
 	channel, err := publisher.connection.Channel()
 	if err != nil {
 		return nil, fmt.Errorf("open RabbitMQ consumer channel: %w", err)
 	}
-	queueName := "agent.command." + queueSegment(agentID)
-	deadRoutingKey := "dead.command." + queueSegment(agentID)
-	if err := publisher.declareDeadQueue(channel, "agent.command.dead."+queueSegment(agentID), deadRoutingKey); err != nil {
-		_ = channel.Close()
-		return nil, err
-	}
-	queue, err := channel.QueueDeclare(queueName, true, false, false, false, deadLetterArgs(publisher.deadExchange, deadRoutingKey))
+	queue, err := publisher.declareAgentQueue(channel, agentID)
 	if err != nil {
 		_ = channel.Close()
-		return nil, fmt.Errorf("declare agent queue: %w", err)
-	}
-	if err := channel.QueueBind(queue.Name, "task.#."+agentID, publisher.exchange, false, nil); err != nil {
-		_ = channel.Close()
-		return nil, fmt.Errorf("bind agent queue: %w", err)
+		return nil, err
 	}
 	consumerTag := fmt.Sprintf("onclave-%s-%d", queueSegment(agentID), time.Now().UnixNano())
 	deliveries, err := channel.Consume(queue.Name, consumerTag, false, false, false, false, nil)
