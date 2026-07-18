@@ -157,6 +157,8 @@ type RabbitMQPublisher struct {
 // publish will reconnect, but readiness should stop the gateway from claiming
 // broker-backed service availability during that recovery window.
 func (publisher *RabbitMQPublisher) Ready() error {
+	publisher.publishMu.Lock()
+	defer publisher.publishMu.Unlock()
 	publisher.connectionMu.Lock()
 	defer publisher.connectionMu.Unlock()
 	if publisher.connection == nil || publisher.connection.IsClosed() {
@@ -426,6 +428,8 @@ func queueSegment(agentID string) string {
 }
 
 func (publisher *RabbitMQPublisher) reconnect() error {
+	publisher.publishMu.Lock()
+	defer publisher.publishMu.Unlock()
 	publisher.connectionMu.Lock()
 	defer publisher.connectionMu.Unlock()
 	connection, err := amqp.Dial(publisher.url)
@@ -469,14 +473,18 @@ func (publisher *RabbitMQPublisher) reconnect() error {
 }
 
 func (publisher *RabbitMQPublisher) Close() error {
+	publisher.publishMu.Lock()
+	defer publisher.publishMu.Unlock()
+	publisher.connectionMu.Lock()
+	defer publisher.connectionMu.Unlock()
+	var closeErr error
 	if publisher.channel != nil {
-		if err := publisher.channel.Close(); err != nil {
-			_ = publisher.connection.Close()
-			return err
-		}
+		closeErr = publisher.channel.Close()
 	}
 	if publisher.connection != nil {
-		return publisher.connection.Close()
+		if err := publisher.connection.Close(); closeErr == nil {
+			closeErr = err
+		}
 	}
-	return nil
+	return closeErr
 }
