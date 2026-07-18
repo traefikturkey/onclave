@@ -18,6 +18,9 @@ typecheck:
 check:
     pnpm typecheck && pnpm test
 
+gateway-acceptance:
+    node ./scripts/gateway-acceptance.mjs
+
 go-rabbitmq-test:
     bash ./scripts/rabbitmq-test.sh
 

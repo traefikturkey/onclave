@@ -2,17 +2,19 @@ package config
 
 import (
 	"os"
+	"strings"
 	"time"
 )
 
 type Config struct {
-	Address          string
-	StateDir         string
-	RabbitMQURL      string
-	RabbitMQExchange string
-	SessionTTL       time.Duration
-	TLSCertFile      string
-	TLSKeyFile       string
+	Address             string
+	StateDir            string
+	RabbitMQURL         string
+	RabbitMQExchange    string
+	SessionTTL          time.Duration
+	TLSCertFile         string
+	TLSKeyFile          string
+	AllowedCapabilities map[string]map[string]bool
 }
 
 func FromEnvironment() Config {
@@ -34,10 +36,17 @@ func FromEnvironment() Config {
 			sessionTTL = parsed
 		}
 	}
+	allowedCapabilities := map[string]map[string]bool{"*": {}}
+	for _, capability := range strings.Split(os.Getenv("ONCLAVE_ALLOWED_CAPABILITIES"), ",") {
+		if capability = strings.TrimSpace(capability); capability != "" {
+			allowedCapabilities["*"][capability] = true
+		}
+	}
 	return Config{
 		Address: address, StateDir: stateDir,
 		RabbitMQURL: os.Getenv("ONCLAVE_RABBITMQ_URL"), RabbitMQExchange: exchange,
 		SessionTTL:  sessionTTL,
 		TLSCertFile: os.Getenv("ONCLAVE_TLS_CERT_FILE"), TLSKeyFile: os.Getenv("ONCLAVE_TLS_KEY_FILE"),
+		AllowedCapabilities: allowedCapabilities,
 	}
 }

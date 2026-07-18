@@ -38,7 +38,7 @@ func main() {
 	}
 	if subscriber != nil {
 		eventPublisher, _ := publisher.(messaging.EventPublisher)
-		deadLetterSubscription, err := subscriber.SubscribeDeadLetters(runContext, func(envelope messaging.Envelope) error {
+		deadLetterSubscription, err := subscriber.SubscribeDeadLetters(runContext, "gateway-core", func(envelope messaging.Envelope) error {
 			log.Printf("dead-lettered delivery message=%s task=%s routing=%s", envelope.MessageID, envelope.TaskID, envelope.RoutingKey)
 			if eventPublisher == nil || envelope.SourceAgentID == "" {
 				return nil
@@ -71,7 +71,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer store.Close()
-	admissionService, err := admission.NewServiceWithStore(admission.Policy{SessionTTL: serviceConfig.SessionTTL}, store)
+	admissionService, err := admission.NewServiceWithStore(admission.Policy{SessionTTL: serviceConfig.SessionTTL, AllowedCapabilities: serviceConfig.AllowedCapabilities}, store)
 	if err != nil {
 		log.Fatal(err)
 	}

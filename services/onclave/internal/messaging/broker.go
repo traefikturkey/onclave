@@ -350,13 +350,13 @@ func consumeDeliveries(ctx context.Context, subscription *Subscription, deliveri
 	}
 }
 
-func (publisher *RabbitMQPublisher) SubscribeDeadLetters(ctx context.Context, handler DeliveryHandler) (*Subscription, error) {
+func (publisher *RabbitMQPublisher) SubscribeDeadLetters(ctx context.Context, subscriberID string, handler DeliveryHandler) (*Subscription, error) {
 	return newResilientSubscription(ctx, func() (*amqp.Channel, string, <-chan amqp.Delivery, error) {
 		channel, err := publisher.openChannel()
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("open RabbitMQ dead-letter channel: %w", err)
 		}
-		queue, err := channel.QueueDeclare("onclave.dead-letter", true, false, false, false, nil)
+		queue, err := channel.QueueDeclare("onclave.dead-letter."+queueSegment(subscriberID), true, false, false, false, nil)
 		if err != nil {
 			_ = channel.Close()
 			return nil, "", nil, fmt.Errorf("declare dead-letter observer queue: %w", err)

@@ -11,6 +11,7 @@ func TestFromEnvironmentUsesSafeDefaults(t *testing.T) {
 	t.Setenv("ONCLAVE_SESSION_TTL", "")
 	t.Setenv("ONCLAVE_TLS_CERT_FILE", "")
 	t.Setenv("ONCLAVE_TLS_KEY_FILE", "")
+	t.Setenv("ONCLAVE_ALLOWED_CAPABILITIES", "")
 
 	config := FromEnvironment()
 
@@ -26,6 +27,9 @@ func TestFromEnvironmentUsesSafeDefaults(t *testing.T) {
 	if config.SessionTTL != 24*time.Hour {
 		t.Fatalf("expected 24-hour default session TTL, got %s", config.SessionTTL)
 	}
+	if config.AllowedCapabilities["*"]["message.send"] {
+		t.Fatal("expected empty default capability allowlist")
+	}
 }
 
 func TestFromEnvironmentReadsOverrides(t *testing.T) {
@@ -36,11 +40,15 @@ func TestFromEnvironmentReadsOverrides(t *testing.T) {
 	t.Setenv("ONCLAVE_SESSION_TTL", "45m")
 	t.Setenv("ONCLAVE_TLS_CERT_FILE", "/run/secrets/onclave.crt")
 	t.Setenv("ONCLAVE_TLS_KEY_FILE", "/run/secrets/onclave.key")
+	t.Setenv("ONCLAVE_ALLOWED_CAPABILITIES", "message.send, message.receive")
 
 	config := FromEnvironment()
 
 	if config.Address != "127.0.0.1:9090" || config.StateDir != "/tmp/onclave" || config.RabbitMQURL == "" || config.RabbitMQExchange != "custom.commands" || config.SessionTTL != 45*time.Minute || config.TLSCertFile == "" || config.TLSKeyFile == "" {
 		t.Fatalf("unexpected environment config: %+v", config)
+	}
+	if !config.AllowedCapabilities["*"]["message.send"] || !config.AllowedCapabilities["*"]["message.receive"] {
+		t.Fatalf("unexpected capability allowlist: %+v", config.AllowedCapabilities)
 	}
 }
 

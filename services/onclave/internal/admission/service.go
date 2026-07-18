@@ -358,6 +358,9 @@ func (s *Service) AcceptCapabilities(agentID, requestID, nonce string, capabilit
 	agent.capabilityNonce = ""
 	agent.declared = uniqueSorted(capabilities)
 	allowed := s.policy.AllowedCapabilities[agent.runtimeType]
+	if allowed == nil {
+		allowed = s.policy.AllowedCapabilities["*"]
+	}
 	agent.effective = agent.effectiveCapabilities(allowed)
 	agent.status = StatusRegistered
 	return s.save(agent)

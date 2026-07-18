@@ -9,6 +9,7 @@ services:
       ONCLAVE_RABBITMQ_URL: amqp://onclave:${ONCLAVE_RABBITMQ_PASSWORD}@rabbitmq:5672/%2Fonclave
       ONCLAVE_RABBITMQ_EXCHANGE: onclave.commands
       ONCLAVE_SESSION_TTL: ${ONCLAVE_SESSION_TTL:-24h}
+      ONCLAVE_ALLOWED_CAPABILITIES: ${ONCLAVE_ALLOWED_CAPABILITIES:-message.send,message.receive}
     ports:
       - "127.0.0.1:8080:8080"
     volumes:

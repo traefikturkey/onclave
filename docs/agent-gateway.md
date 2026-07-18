@@ -17,6 +17,7 @@ Gateway deployment settings:
 
 - `ONCLAVE_SESSION_TTL`: Go duration for authenticated session leases; defaults to `24h`.
 - `ONCLAVE_TLS_CERT_FILE` and `ONCLAVE_TLS_KEY_FILE`: configure both to enable native HTTPS. Mount certificate material read-only; configuring only one is rejected at startup.
+- `ONCLAVE_ALLOWED_CAPABILITIES`: comma-separated capabilities available to all runtime types; Compose defaults to `message.send,message.receive`. Agents still receive only the intersection of declared and allowed capabilities.
 - If native TLS is not configured, terminate HTTPS at the deployment's reverse proxy and keep the gateway bound to a private network or loopback address.
 
 ## Authentication

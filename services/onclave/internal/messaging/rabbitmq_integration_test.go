@@ -46,7 +46,7 @@ func TestRabbitMQDeadLetterObserver(t *testing.T) {
 	}
 
 	deadLetters := make(chan Envelope, 1)
-	deadLetterSubscription, err := publisher.SubscribeDeadLetters(ctx, func(envelope Envelope) error {
+	deadLetterSubscription, err := publisher.SubscribeDeadLetters(ctx, "integration-dead-letter", func(envelope Envelope) error {
 		deadLetters <- envelope
 		return nil
 	})
