@@ -90,7 +90,7 @@ ONCLAVE_AMQP_URL=amqp://onclave:onclave-dev@<broker-host>:5672/onclave \
    runs.
 2. Policy reload without restart (PRD acceptance 9): while both sessions
    stay up, write the sender's hostname into
-   `~/.pi/onclave/v2-policy.json`:
+   `~/.pi/agent/onclave/v2-policy.json`:
 
    ```json
    { "autoAcceptHosts": ["<remote-hostname>"] }
@@ -101,7 +101,7 @@ ONCLAVE_AMQP_URL=amqp://onclave:onclave-dev@<broker-host>:5672/onclave \
 
 ## Audit checks
 
-- Adapter: `~/.pi/onclave/v2-audit.jsonl` records register, delivery,
+- Adapter: `~/.pi/agent/onclave/v2-audit.jsonl` records register, delivery,
   dedup, confirm, reply, and correlation-miss events.
 - Core: `docker compose -f docker/compose.yaml exec onclave-core cat
   /data/audit.jsonl` records registration, exchanges, terminations, and

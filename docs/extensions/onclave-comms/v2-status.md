@@ -50,10 +50,19 @@ Acceptance run summary (run id a3b0e7d0 and the follow-up full pass):
 - core audit recorded registration, exchanges, and termination with no
   message bodies
 
-Not covered by automation (see ./v2-manual-acceptance.md): live Pi turn
-semantics, broker-outage widget behavior, cross-host confirmation and
-restart-free policy reload (needs a second host), TLS/per-adapter broker
-users (deferred hardening).
+Live-session verification, 2026-07-18: the operator ran the manual runbook
+with two live Pi sessions on the Windows host and confirmed registration
+and listing, framed request/reply with automatic reply capture, inert
+imperative informs (no turn), offline durability with single delivery, and
+broker-outage reconnect with re-registration. Audit review of the same run:
+adapter audit (~/.pi/agent/onclave/v2-audit.jsonl, 167 entries) and core
+audit (/data/audit.jsonl, 89 entries) contain only metadata keys, zero
+message-body matches, and a credential-redacted broker URL.
+
+Still not covered (see ./v2-manual-acceptance.md): cross-host confirmation
+and restart-free policy reload (needs a second host), live budget halt
+(compose does not yet pass ONCLAVE_MAX_EXCHANGES; the automated script
+covers the path), TLS/per-adapter broker users (deferred hardening).
 
 ## Decisions Review
 
