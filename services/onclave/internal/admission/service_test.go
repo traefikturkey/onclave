@@ -3,6 +3,7 @@ package admission
 import (
 	"crypto/ed25519"
 	"testing"
+	"time"
 )
 
 func TestEnrollmentRequiresApprovalBeforeAuthentication(t *testing.T) {
@@ -112,4 +113,37 @@ func approvedService(t *testing.T, agentID string) (*Service, ed25519.PrivateKey
 		t.Fatal(err)
 	}
 	return service, privateKey
+}
+
+func TestSessionLeaseExpires(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	service, err := NewServiceWithStoreAndClock(Policy{SessionTTL: time.Hour}, nil, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, privateKey, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Enroll(EnrollmentRequest{AgentID: "lease-agent", RuntimeType: "reference", PublicKey: publicKey}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Approve("lease-agent"); err != nil {
+		t.Fatal(err)
+	}
+	nonce, err := service.IssueChallenge("lease-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := service.AuthenticateSession("lease-agent", ed25519.Sign(privateKey, nonce))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.AuthorizeSession("lease-agent", token); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Hour)
+	if err := service.AuthorizeSession("lease-agent", token); err != ErrInvalidSession {
+		t.Fatalf("expected expired session, got %v", err)
+	}
 }

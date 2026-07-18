@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 )
 
 var (
@@ -41,6 +42,7 @@ type EnrollmentRequest struct {
 
 type Policy struct {
 	AllowedCapabilities map[string]map[string]bool
+	SessionTTL          time.Duration
 }
 
 type Snapshot struct {
@@ -52,6 +54,7 @@ type Snapshot struct {
 	CapabilityRequestID string
 	CapabilityNonce     string
 	SessionToken        string
+	SessionExpiresAt    string
 	Declared            []string
 	Effective           []string
 }
@@ -70,6 +73,7 @@ type record struct {
 	capabilityRequestID string
 	capabilityNonce     string
 	sessionToken        string
+	sessionExpiresAt    time.Time
 	declared            []string
 	effective           []string
 }
@@ -80,6 +84,7 @@ type Service struct {
 	agents  map[string]*record
 	counter uint64
 	store   Store
+	now     func() time.Time
 }
 
 func NewService(policy Policy) *Service {
@@ -91,7 +96,14 @@ func NewService(policy Policy) *Service {
 }
 
 func NewServiceWithStore(policy Policy, store Store) (*Service, error) {
-	service := &Service{policy: policy, agents: make(map[string]*record), store: store}
+	return NewServiceWithStoreAndClock(policy, store, time.Now)
+}
+
+func NewServiceWithStoreAndClock(policy Policy, store Store, now func() time.Time) (*Service, error) {
+	if now == nil {
+		now = time.Now
+	}
+	service := &Service{policy: policy, agents: make(map[string]*record), store: store, now: now}
 	if store != nil {
 		snapshots, err := store.LoadAdmissionAgents()
 		if err != nil {
@@ -153,6 +165,7 @@ func (s *Service) Revoke(agentID string) error {
 	agent.capabilityRequestID = ""
 	agent.capabilityNonce = ""
 	agent.sessionToken = ""
+	agent.sessionExpiresAt = time.Time{}
 	return s.save(agent)
 }
 
@@ -210,8 +223,14 @@ func (s *Service) AuthenticateSession(agentID string, signature []byte) (string,
 		return "", fmt.Errorf("generate session token: %w", err)
 	}
 	agent.sessionToken = base64.RawURLEncoding.EncodeToString(tokenBytes)
+	if s.policy.SessionTTL > 0 {
+		agent.sessionExpiresAt = s.now().Add(s.policy.SessionTTL)
+	} else {
+		agent.sessionExpiresAt = time.Time{}
+	}
 	if err := s.save(agent); err != nil {
 		agent.sessionToken = ""
+		agent.sessionExpiresAt = time.Time{}
 		return "", fmt.Errorf("persist agent session: %w", err)
 	}
 	return agent.sessionToken, nil
@@ -233,6 +252,9 @@ func (s *Service) AuthorizeSession(agentID, token string) error {
 	if token == "" || token != agent.sessionToken {
 		return ErrInvalidSession
 	}
+	if !agent.sessionExpiresAt.IsZero() && !s.now().Before(agent.sessionExpiresAt) {
+		return ErrInvalidSession
+	}
 	return nil
 }
 
@@ -246,6 +268,9 @@ func (s *Service) AgentForSession(token string) (string, error) {
 		if agent.sessionToken == token {
 			if agent.status == StatusRevoked {
 				return "", ErrRevoked
+			}
+			if !agent.sessionExpiresAt.IsZero() && !s.now().Before(agent.sessionExpiresAt) {
+				return "", ErrInvalidSession
 			}
 			return agentID, nil
 		}
@@ -339,17 +364,26 @@ func (s *Service) save(agent *record) error {
 		AgentID: agent.agentID, RuntimeType: agent.runtimeType, PublicKey: append([]byte(nil), agent.publicKey...),
 		Status: agent.status, Challenge: append([]byte(nil), agent.challenge...),
 		CapabilityRequestID: agent.capabilityRequestID, CapabilityNonce: agent.capabilityNonce,
-		SessionToken: agent.sessionToken, Declared: append([]string(nil), agent.declared...), Effective: append([]string(nil), agent.effective...),
+		SessionToken: agent.sessionToken, SessionExpiresAt: formatSessionExpiry(agent.sessionExpiresAt),
+		Declared: append([]string(nil), agent.declared...), Effective: append([]string(nil), agent.effective...),
 	})
 }
 
 func recordFromSnapshot(snapshot Snapshot) *record {
+	expiresAt, _ := time.Parse(time.RFC3339Nano, snapshot.SessionExpiresAt)
 	return &record{
 		agentID: snapshot.AgentID, runtimeType: snapshot.RuntimeType, publicKey: ed25519.PublicKey(append([]byte(nil), snapshot.PublicKey...)),
 		status: snapshot.Status, challenge: append([]byte(nil), snapshot.Challenge...), capabilityRequestID: snapshot.CapabilityRequestID,
-		capabilityNonce: snapshot.CapabilityNonce, sessionToken: snapshot.SessionToken, declared: append([]string(nil), snapshot.Declared...),
-		effective: append([]string(nil), snapshot.Effective...),
+		capabilityNonce: snapshot.CapabilityNonce, sessionToken: snapshot.SessionToken, sessionExpiresAt: expiresAt,
+		declared: append([]string(nil), snapshot.Declared...), effective: append([]string(nil), snapshot.Effective...),
 	}
+}
+
+func formatSessionExpiry(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339Nano)
 }
 
 func (s *Service) agent(agentID string) (*record, error) {

@@ -82,6 +82,10 @@ CREATE TABLE IF NOT EXISTS admission_agents (
   declared_json TEXT NOT NULL,
   effective_json TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS admission_session_leases (
+  agent_id TEXT PRIMARY KEY,
+  expires_at TEXT NOT NULL
 );`
 	if _, err := store.db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate SQLite schema: %w", err)
@@ -166,11 +170,21 @@ ON CONFLICT(agent_id) DO UPDATE SET runtime_type=excluded.runtime_type, public_k
 	if err != nil {
 		return fmt.Errorf("save admission agent: %w", err)
 	}
+	if snapshot.SessionExpiresAt == "" {
+		_, err = store.db.Exec(`DELETE FROM admission_session_leases WHERE agent_id = ?`, snapshot.AgentID)
+	} else {
+		_, err = store.db.Exec(`INSERT INTO admission_session_leases(agent_id, expires_at) VALUES(?, ?)
+ON CONFLICT(agent_id) DO UPDATE SET expires_at=excluded.expires_at`, snapshot.AgentID, snapshot.SessionExpiresAt)
+	}
+	if err != nil {
+		return fmt.Errorf("save admission session lease: %w", err)
+	}
 	return nil
 }
 
 func (store *Store) LoadAdmissionAgents() ([]admission.Snapshot, error) {
-	rows, err := store.db.Query(`SELECT agent_id, runtime_type, public_key, status, challenge, capability_request_id, capability_nonce, session_token, declared_json, effective_json FROM admission_agents ORDER BY agent_id`)
+	rows, err := store.db.Query(`SELECT a.agent_id, a.runtime_type, a.public_key, a.status, a.challenge, a.capability_request_id, a.capability_nonce, a.session_token, l.expires_at, a.declared_json, a.effective_json
+FROM admission_agents a LEFT JOIN admission_session_leases l ON l.agent_id = a.agent_id ORDER BY a.agent_id`)
 	if err != nil {
 		return nil, fmt.Errorf("query admission agents: %w", err)
 	}
@@ -179,8 +193,12 @@ func (store *Store) LoadAdmissionAgents() ([]admission.Snapshot, error) {
 	for rows.Next() {
 		var snapshot admission.Snapshot
 		var declared, effective string
-		if err := rows.Scan(&snapshot.AgentID, &snapshot.RuntimeType, &snapshot.PublicKey, &snapshot.Status, &snapshot.Challenge, &snapshot.CapabilityRequestID, &snapshot.CapabilityNonce, &snapshot.SessionToken, &declared, &effective); err != nil {
+		var sessionExpiresAt sql.NullString
+		if err := rows.Scan(&snapshot.AgentID, &snapshot.RuntimeType, &snapshot.PublicKey, &snapshot.Status, &snapshot.Challenge, &snapshot.CapabilityRequestID, &snapshot.CapabilityNonce, &snapshot.SessionToken, &sessionExpiresAt, &declared, &effective); err != nil {
 			return nil, fmt.Errorf("scan admission agent: %w", err)
+		}
+		if sessionExpiresAt.Valid {
+			snapshot.SessionExpiresAt = sessionExpiresAt.String
 		}
 		if err := json.Unmarshal([]byte(declared), &snapshot.Declared); err != nil {
 			return nil, fmt.Errorf("decode declared capabilities: %w", err)

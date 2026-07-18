@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/traefikturkey/onclave/services/onclave/internal/admission"
 	"github.com/traefikturkey/onclave/services/onclave/internal/messaging"
 )
 
@@ -112,5 +113,32 @@ func TestMessagingServiceReloadsTaskEventsAfterRestart(t *testing.T) {
 	events := restarted.Events("task-events")
 	if len(events) != 4 || events[0].Type != messaging.EventAccepted || events[3].Type != messaging.EventFailed {
 		t.Fatalf("unexpected restarted events: %+v", events)
+	}
+}
+
+func TestAdmissionSessionLeaseSurvivesReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "onclave.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiresAt := time.Date(2026, 7, 17, 13, 0, 0, 0, time.UTC).Format(time.RFC3339Nano)
+	if err := store.SaveAdmissionAgent(admission.Snapshot{AgentID: "lease-agent", RuntimeType: "reference", Status: admission.StatusAuthenticated, SessionToken: "persisted-token", SessionExpiresAt: expiresAt}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	snapshots, err := store.LoadAdmissionAgents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshots) != 1 || snapshots[0].SessionExpiresAt != expiresAt {
+		t.Fatalf("unexpected persisted lease: %+v", snapshots)
 	}
 }
