@@ -12,6 +12,7 @@ type Config struct {
 	RabbitMQURL         string
 	RabbitMQExchange    string
 	RabbitMQCAFile      string
+	EventRetention      time.Duration
 	SessionTTL          time.Duration
 	TLSCertFile         string
 	TLSKeyFile          string
@@ -37,6 +38,12 @@ func FromEnvironment() Config {
 			sessionTTL = parsed
 		}
 	}
+	eventRetention := 30 * 24 * time.Hour
+	if value := os.Getenv("ONCLAVE_EVENT_RETENTION"); value != "" {
+		if parsed, err := time.ParseDuration(value); err == nil && parsed > 0 {
+			eventRetention = parsed
+		}
+	}
 	allowedCapabilities := map[string]map[string]bool{"*": {}}
 	for _, capability := range strings.Split(os.Getenv("ONCLAVE_ALLOWED_CAPABILITIES"), ",") {
 		if capability = strings.TrimSpace(capability); capability != "" {
@@ -48,6 +55,7 @@ func FromEnvironment() Config {
 		RabbitMQURL: os.Getenv("ONCLAVE_RABBITMQ_URL"), RabbitMQExchange: exchange,
 		RabbitMQCAFile: os.Getenv("ONCLAVE_RABBITMQ_CA_FILE"),
 		SessionTTL:     sessionTTL,
+		EventRetention: eventRetention,
 		TLSCertFile:    os.Getenv("ONCLAVE_TLS_CERT_FILE"), TLSKeyFile: os.Getenv("ONCLAVE_TLS_KEY_FILE"),
 		AllowedCapabilities: allowedCapabilities,
 	}

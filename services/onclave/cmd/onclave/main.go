@@ -95,6 +95,12 @@ func main() {
 						log.Printf("outbox cleanup failed: %v", err)
 					}
 				}
+				if err := store.PruneTaskEvents(time.Now().Add(-serviceConfig.EventRetention)); err != nil {
+					log.Printf("event retention cleanup failed: %v", err)
+				}
+				if err := store.PruneDeliveryAttempts(time.Now().Add(-serviceConfig.EventRetention)); err != nil {
+					log.Printf("delivery attempt cleanup failed: %v", err)
+				}
 				if err := messagingService.ExpireSubscriptions(); err != nil {
 					log.Printf("subscription cleanup failed: %v", err)
 				}

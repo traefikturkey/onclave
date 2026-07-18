@@ -120,6 +120,31 @@ func TestDeliveryAttemptsAccumulateAndRetainLastError(t *testing.T) {
 	}
 }
 
+func TestRetentionPrunesTerminalTaskEvents(t *testing.T) {
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	if err := store.SaveTask(messaging.Task{TaskID: "task-retention", State: messaging.StateCompleted, ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveEvent("task-retention", messaging.Event{Type: messaging.EventCompleted, TaskID: "task-retention", At: now.Add(-2 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PruneTaskEvents(now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.GetEvents("task-retention")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected old terminal event to be pruned, got %+v", events)
+	}
+}
+
 func TestMessagingServiceReloadsTaskAfterRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "onclave.db")
 	store, err := Open(path)

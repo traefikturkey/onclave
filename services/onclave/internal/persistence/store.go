@@ -389,6 +389,24 @@ ON CONFLICT(message_id) DO UPDATE SET attempts=delivery_attempts.attempts + 1,
 	return nil
 }
 
+func (store *Store) PruneTaskEvents(before time.Time) error {
+	_, err := store.db.Exec(`DELETE FROM task_events
+WHERE at < ? AND task_id IN (SELECT task_id FROM tasks WHERE state IN (?, ?, ?, ?))`,
+		before.UTC().Format(time.RFC3339Nano), messaging.StateCompleted, messaging.StateFailed,
+		messaging.StateCancelled, messaging.StateExpired)
+	if err != nil {
+		return fmt.Errorf("prune task events: %w", err)
+	}
+	return nil
+}
+
+func (store *Store) PruneDeliveryAttempts(before time.Time) error {
+	if _, err := store.db.Exec(`DELETE FROM delivery_attempts WHERE last_attempt_at < ?`, before.UTC().Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("prune delivery attempts: %w", err)
+	}
+	return nil
+}
+
 func (store *Store) enqueueOutbox(table string, envelope messaging.Envelope) error {
 	encoded, err := json.Marshal(envelope)
 	if err != nil {
