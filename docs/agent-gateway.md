@@ -23,10 +23,11 @@ Gateway deployment settings:
 
 1. Enroll the runtime with `POST /v1/enroll`.
 2. An operator approves the agent with `POST /v1/agents/{agentID}/approve`.
-3. Request a challenge with `POST /v1/agents/{agentID}/challenge`.
-4. Sign the returned nonce with the enrolled private key.
-5. Authenticate with `POST /v1/agents/{agentID}/authenticate`.
-6. Use the returned token as `Authorization: Bearer <token>`.
+3. An operator revokes an enrolled agent with `POST /v1/agents/{agentID}/revoke`; existing sessions are rejected thereafter.
+4. Request a challenge with `POST /v1/agents/{agentID}/challenge`.
+5. Sign the returned nonce with the enrolled private key.
+6. Authenticate with `POST /v1/agents/{agentID}/authenticate`.
+7. Use the returned token as `Authorization: Bearer <token>`.
 
 Tokens are bound to the authenticated agent and are required for capability, command, task, and WebSocket operations.
 
@@ -130,3 +131,13 @@ Task event replay supports bounded reads:
 ## RabbitMQ implementation boundary
 
 The gateway publishes targeted commands to a durable internal queue for each agent. Adapters must not depend on queue names, exchange names, or AMQP credentials. This keeps the public contract stable if RabbitMQ is replaced or reconfigured.
+
+## Live RabbitMQ verification
+
+The repository includes a private-network integration runner:
+
+```bash
+just go-rabbitmq-test
+```
+
+It starts the Compose RabbitMQ service and runs the full Go suite from a temporary container sharing RabbitMQ's network namespace. The suite covers queue delivery, publisher recovery after channel closure, and TTL/dead-letter observation.
