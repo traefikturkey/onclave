@@ -38,6 +38,14 @@ export type GatewayClientOptions = {
 
 export type GatewaySessionOptions = {
   events?: string;
+  subscriptionId?: string;
+  correlationId?: string;
+  taskId?: string;
+};
+
+export type CapabilityRequest = {
+  requestId: string;
+  nonce: string;
 };
 
 export class OnclaveGatewayError extends Error {
@@ -87,6 +95,32 @@ export class OnclaveGatewayClient {
     return this.authenticate(agentId, Buffer.from(signature).toString("base64"));
   }
 
+  async requestCapabilities(token: string, agentId: string): Promise<CapabilityRequest> {
+    const response = await this.request(`/v1/agents/${encodeURIComponent(agentId)}/capabilities/request`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const value = (await response.json()) as Partial<CapabilityRequest>;
+    if (typeof value.requestId !== "string" || typeof value.nonce !== "string") {
+      throw new OnclaveGatewayError(response.status, "gateway response did not contain a capability request");
+    }
+    return { requestId: value.requestId, nonce: value.nonce };
+  }
+
+  async acceptCapabilities(
+    token: string,
+    agentId: string,
+    request: CapabilityRequest,
+    capabilities: string[],
+  ): Promise<string[]> {
+    await this.request(`/v1/agents/${encodeURIComponent(agentId)}/capabilities`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ ...request, capabilities }),
+    });
+    return [...capabilities];
+  }
+
   async submitCommand(token: string, command: GatewayCommand): Promise<GatewayTask> {
     const response = await this.request("/v1/commands", {
       method: "POST",
@@ -116,6 +150,9 @@ export class OnclaveGatewayClient {
     const url = new URL(`/v1/agents/${encodeURIComponent(agentId)}/session`, this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     if (options.events) url.searchParams.set("events", options.events);
+    if (options.subscriptionId) url.searchParams.set("subscriptionId", options.subscriptionId);
+    if (options.correlationId) url.searchParams.set("correlationId", options.correlationId);
+    if (options.taskId) url.searchParams.set("taskId", options.taskId);
     const socket = new this.webSocketImpl(url.toString(), {
       headers: { Authorization: `Bearer ${token}` },
     });

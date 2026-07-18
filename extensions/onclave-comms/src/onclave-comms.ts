@@ -1,373 +1,113 @@
 import { randomBytes } from "node:crypto";
-import { networkInterfaces } from "node:os";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { Type } from "typebox";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { StringEnum } from "@earendil-works/pi-ai";
-import { appendAuditEvent, type AuditEventName, type AuditMetadata } from "./lib/audit";
-import { bootstrapLocalHub, type BootstrapLocalHubResult } from "./lib/bootstrap";
-import { findStaticPeer, loadOnclaveConfig } from "./lib/config";
-import { createLocalAgentRegistration } from "./lib/extension-helpers";
 import { loadIdentityPrivateKeyHex } from "./lib/identity";
-import { createRemoteHubClient, RemoteHubAuthError } from "./lib/remote-client";
-import { OnclaveGatewayClient } from "./lib/gateway-adapter";
+import { getOnclavePaths } from "./lib/state";
+import { OnclaveGatewayClient, type GatewayTask } from "./lib/gateway-adapter";
 import { PiGatewaySession, type PiGatewayCommand } from "./lib/pi-gateway-session";
 import type { DeliveredPrompt } from "./lib/messages";
-import { renderOnclavePeerWidget } from "./lib/peer-widget";
-import type { LocalAgentRegistration } from "./lib/local-registry";
-import {
-  assertAsyncReplyablePrompt,
-  type PromptOriginMetadata,
-} from "./lib/prompt-metadata";
-import { getOnclavePaths } from "./lib/state";
-import {
-  buildKnownOnclavePeers,
-  buildOnclaveAgentList,
-  buildOnclavePeers,
-  buildOnclaveStatus,
-  choosePreferredRemoteEndpoint,
-  resolveOnclavePeerDisplayName,
-} from "./lib/status";
-import { addAuthorizedKeyLine } from "./lib/trust";
-import { sendWssFrames } from "./lib/wss-transport";
 
-const DEFAULT_DISCOVERY_PORT = 48889;
-const DEFAULT_BROADCAST_ADDRESS = "255.255.255.255";
 const MAX_MESSAGE_LENGTH = 100_000;
 const MAX_WAIT_TIMEOUT_MS = 300_000;
+const REQUIRED_CAPABILITIES = ["message.send", "message.receive"];
+
+type GatewayRuntime = {
+  client: OnclaveGatewayClient;
+  token: string;
+  agentId: string;
+  session: PiGatewaySession;
+};
 
 export default function (pi: ExtensionAPI) {
-  pi.registerFlag("agent-name", {
-    description: "Override Onclave local agent name",
-    type: "string",
-    default: undefined,
-  });
-  pi.registerFlag("purpose", {
-    description: "Describe this Onclave local agent purpose",
-    type: "string",
-    default: undefined,
-  });
-  pi.registerFlag("color", {
-    description: "Hex color #RRGGBB for this Onclave local agent",
-    type: "string",
-    default: undefined,
-  });
-  pi.registerFlag("explicit", {
-    description: "Hide this Onclave local agent from default listings",
-    type: "boolean",
-    default: false,
-  });
-
   const paths = getOnclavePaths(join(getAgentDir(), "onclave"));
-  const audit = (event: AuditEventName, metadata: AuditMetadata) => appendAuditEvent(paths.auditLog, event, metadata);
-  let bootstrap: BootstrapLocalHubResult | null = null;
-  let localSessionId: string | null = null;
-  let localRegistration: LocalAgentRegistration | null = null;
+  let runtime: GatewayRuntime | null = null;
   let sessionUi: ExtensionContext["ui"] | null = null;
-  let peerWidgetTimer: ReturnType<typeof setInterval> | null = null;
-  let gatewaySession: PiGatewaySession | null = null;
-  const peerDisplayCache = new Map<string, { peerName?: string; model?: string }>();
-  const inboundPrompts = new Map<string, DeliveredPrompt>();
-  const gatewayCommands = new Map<string, PiGatewayCommand>();
+  const inbound = new Map<string, DeliveredPrompt>();
+  const commands = new Map<string, PiGatewayCommand>();
 
   pi.on("session_start", async (_event, ctx) => {
     sessionUi = ctx.ui;
     try {
-      localSessionId = sessionIdFromContext(ctx);
-      localRegistration = await createRegistrationForContext(pi, ctx, localSessionId);
-      const gatewayUrl = process.env.ONCLAVE_GATEWAY_URL;
-      if (gatewayUrl) {
-        const agentId = process.env.ONCLAVE_AGENT_ID || localRegistration.sessionId;
-        const client = new OnclaveGatewayClient({ baseUrl: gatewayUrl });
-        const token = await client.authenticateWithPrivateKey(agentId, await loadIdentityPrivateKeyHex(paths));
-        gatewaySession = new PiGatewaySession(client, agentId, token, async (command) => {
-          gatewayCommands.set(command.messageId, command);
-          await deliverInboundPrompt(pi, {
-            msgId: command.messageId,
-            targetSessionId: agentId,
-            deliveryEndpoint: gatewayUrl,
-            prompt: gatewayPromptText(command),
-            hops: 0,
-            receivedAt: new Date().toISOString(),
-          }, inboundPrompts);
-        });
-        gatewaySession.connect();
-        return;
-      }
-      bootstrap = await bootstrapLocalHub(paths, {
-        host: "0.0.0.0",
-        discoveryPort: DEFAULT_DISCOVERY_PORT,
-        broadcastAddress: DEFAULT_BROADCAST_ADDRESS,
-        now: () => new Date().toISOString(),
-        healthCheck: checkHubHealth,
-        deliverPrompt: async (prompt) => deliverInboundPrompt(pi, prompt, inboundPrompts),
-        audit,
+      const gatewayUrl = requiredEnvironment("ONCLAVE_GATEWAY_URL");
+      const agentId = requiredEnvironment("ONCLAVE_AGENT_ID");
+      const client = new OnclaveGatewayClient({ baseUrl: gatewayUrl });
+      const token = await client.authenticateWithPrivateKey(agentId, await loadIdentityPrivateKeyHex(paths));
+      const capabilityRequest = await client.requestCapabilities(token, agentId);
+      await client.acceptCapabilities(token, agentId, capabilityRequest, REQUIRED_CAPABILITIES);
+      const refreshToken = async (): Promise<string> => {
+        const refreshed = await client.authenticateWithPrivateKey(agentId, await loadIdentityPrivateKeyHex(paths));
+        const refreshedRequest = await client.requestCapabilities(refreshed, agentId);
+        await client.acceptCapabilities(refreshed, agentId, refreshedRequest, REQUIRED_CAPABILITIES);
+        if (runtime) runtime.token = refreshed;
+        return refreshed;
+      };
+      const session = new PiGatewaySession(client, agentId, refreshToken, async (command) => {
+        commands.set(command.messageId, command);
+        await deliverInboundPrompt(pi, {
+          msgId: command.messageId,
+          targetSessionId: agentId,
+          deliveryEndpoint: gatewayUrl,
+          prompt: gatewayPromptText(command),
+          hops: 0,
+          receivedAt: new Date().toISOString(),
+        }, inbound);
       });
-
-      if (bootstrap.runtime?.registerLocalAgent) {
-        bootstrap.runtime.registerLocalAgent(localRegistration);
-      } else {
-        await registerWithLocalHub(bootstrap.state.endpoint, localRegistration, bootstrap.localAuthToken);
-      }
-
-      await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
-      peerWidgetTimer = setInterval(() => {
-        void refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache).catch(() => undefined);
-      }, 5_000);
-      peerWidgetTimer.unref?.();
+      runtime = { client, token, agentId, session };
+      session.connect();
+      sessionUi?.setStatus?.("onclave", `gateway: ${agentId}`);
     } catch (error) {
-      const failedBootstrap = bootstrap;
-      if (failedBootstrap?.runtime && failedBootstrap.started) {
-        await failedBootstrap.runtime.stop().catch(() => undefined);
-      }
-      bootstrap = null;
-      localSessionId = null;
-      localRegistration = null;
-      ctx.ui.notify(`Onclave initialization failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+      runtime = null;
+      ctx.ui.notify(`Onclave gateway initialization failed: ${safeErrorMessage(error)}`, "error");
     }
   });
 
   pi.on("session_shutdown", async () => {
-    if (peerWidgetTimer) {
-      clearInterval(peerWidgetTimer);
-      peerWidgetTimer = null;
-    }
-    gatewaySession?.close();
-    gatewaySession = null;
-    if (bootstrap && localSessionId) {
-      if (bootstrap.runtime?.unregisterLocalAgent) {
-        bootstrap.runtime.unregisterLocalAgent(localSessionId);
-      } else {
-        await unregisterWithLocalHub(bootstrap.state.endpoint, localSessionId, bootstrap.localAuthToken);
-      }
-    }
-    if (bootstrap?.runtime && bootstrap.started) {
-      await bootstrap.runtime.stop();
-    }
-    sessionUi?.setWidget?.("onclave-peers", undefined);
+    runtime?.session.close();
+    runtime = null;
+    inbound.clear();
+    commands.clear();
     sessionUi?.setStatus?.("onclave", undefined);
-    bootstrap = null;
-    localSessionId = null;
-    localRegistration = null;
     sessionUi = null;
-    peerDisplayCache.clear();
-    inboundPrompts.clear();
   });
 
   pi.on("agent_end", async (event, ctx) => {
-    if (!localSessionId) return;
-    const inbound = inboundPromptForAgentRun(event.messages, inboundPrompts);
-    if (!inbound || inbound.replyMode === "async_message") return;
+    if (!runtime) return;
+    const prompt = findInboundPrompt(event.messages, inbound);
+    if (!prompt) return;
+    const command = commands.get(prompt.msgId);
+    if (!command) return;
     const response = extractLastAssistantText(ctx);
-    if (gatewaySession) {
-      const command = gatewayCommands.get(inbound.msgId);
-      if (!command) return;
-      gatewaySession.complete(command, { response, status: "completed" });
-      gatewayCommands.delete(inbound.msgId);
-      inboundPrompts.delete(inbound.msgId);
-      return;
-    }
-    if (!bootstrap) return;
-    const responses = await sendWssFrames(
-      localHubWssUrl(bootstrap.state.endpoint),
-      [
-        {
-          type: "local_submit_response",
-          localAuthToken: bootstrap.localAuthToken,
-          msgId: inbound.msgId,
-          responderSessionId: localSessionId,
-          response,
-          error: null,
-          completedAt: new Date().toISOString(),
-        },
-      ],
-      { rejectUnauthorized: false, timeoutMs: 5_000 }
-    );
-    const submit = responses[0];
-    if (submit?.type === "response_submitted") {
-      inboundPrompts.delete(inbound.msgId);
-    }
-  });
-
-  pi.registerCommand("onclave-trust", {
-    description: "Show Onclave public key and authorized_keys trust setup paths",
-    handler: async (_args, ctx) => {
-      if (!bootstrap) {
-        ctx.ui.notify("onclave is not initialized", "error");
-        return;
-      }
-      ctx.ui.notify(
-        `Add this line to a peer authorized_keys file:\n${bootstrap.publicAuthorizedKeyLine}\n\nLocal file: ${paths.authorizedKeys}`,
-        "info"
-      );
-    },
-  });
-
-  pi.registerTool({
-    name: "onclave_trust_info",
-    label: "Onclave Trust Info",
-    description: "Show the local public key line and authorized_keys path for trust setup.",
-    parameters: Type.Object({}),
-    async execute() {
-      if (!bootstrap) throw new Error("onclave is not initialized");
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text:
-              `authorized_keys: ${paths.authorizedKeys}\n` +
-              `public_key: ${bootstrap.publicAuthorizedKeyLine}`,
-          },
-        ],
-        details: {
-          authorizedKeysPath: paths.authorizedKeys,
-          publicAuthorizedKeyLine: bootstrap.publicAuthorizedKeyLine,
-        },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "onclave_trust_add",
-    label: "Onclave Trust Add",
-    description: "Validate and append a public ssh-ed25519 key line to the local Onclave authorized_keys file.",
-    parameters: Type.Object({
-      public_key_line: Type.String({ description: "Full ssh-ed25519 public key line from a peer onclave_trust_info output." }),
-    }),
-    async execute(_callId, params) {
-      const result = await addAuthorizedKeyLine(paths, params.public_key_line);
-      await audit("trust_changed", {
-        action: "add",
-        fingerprint: result.key.fingerprint,
-        duplicate: !result.added,
-      });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: result.added
-              ? "trusted key added; restart Onclave sessions to reload trust"
-              : "trusted key already present; no change made",
-          },
-        ],
-        details: {
-          added: result.added,
-          fingerprint: result.key.fingerprint,
-          authorizedKeysPath: paths.authorizedKeys,
-        },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "onclave_status",
-    label: "Onclave Status",
-    description: "Show local Onclave hub status and the public key line to add to trusted peers.",
-    parameters: Type.Object({}),
-    async execute() {
-      if (!bootstrap) throw new Error("onclave is not initialized");
-      const status = buildOnclaveStatus({
-        endpoint: bootstrap.state.endpoint,
-        started: bootstrap.started,
-        nodeId: bootstrap.state.nodeId,
-        hubInstanceId: bootstrap.state.hubInstanceId,
-        publicAuthorizedKeyLine: bootstrap.publicAuthorizedKeyLine,
-        networkInterfaces: networkInterfaces(),
-      });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: status.text,
-          },
-        ],
-        details: {
-          state: bootstrap.state,
-          started: bootstrap.started,
-          publicAuthorizedKeyLine: bootstrap.publicAuthorizedKeyLine,
-          nodeId: status.details.nodeId,
-          hubInstanceId: status.details.hubInstanceId,
-          remoteEndpoints: status.details.remoteEndpoints,
-        },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "onclave_peers",
-    label: "Onclave Peers",
-    description: "List discovered LAN hubs known to this Onclave runtime.",
-    parameters: Type.Object({}),
-    async execute() {
-      const peers = bootstrap?.runtime?.discoveredPeers?.() ?? [];
-      const config = await loadOnclaveConfig(paths);
-      const peerList = buildOnclavePeers({
-        discoveredPeers: peers,
-        staticPeers: config.staticPeers,
-        learnedPeerNames: new Map(
-          [...peerDisplayCache.entries()]
-            .filter(([, value]) => Boolean(value.peerName))
-            .map(([nodeId, value]) => [nodeId, value.peerName as string])
-        ),
-      });
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: peerList.text,
-          },
-        ],
-        details: peerList.details,
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "onclave_static_peers",
-    label: "Onclave Static Peers",
-    description: "List persistent static peers configured in ~/.pi/onclave/config.json.",
-    parameters: Type.Object({}),
-    async execute() {
-      const config = await loadOnclaveConfig(paths);
-      return {
-        content: [{ type: "text" as const, text: `${config.staticPeers.length} static peer(s)` }],
-        details: { staticPeers: config.staticPeers, configPath: paths.config },
-      };
-    },
+    runtime.session.complete(command, { response, status: "completed" });
+    commands.delete(prompt.msgId);
+    inbound.delete(prompt.msgId);
   });
 
   pi.registerTool({
     name: "onclave_send",
     label: "Onclave Send",
-    description: "Send a prompt to a local Onclave agent by session ID through the local hub.",
+    description: "Submit a task prompt to an enrolled Onclave agent through the gateway.",
     parameters: Type.Object({
-      target_session_id: Type.String({ description: "Target local agent session ID.", maxLength: 256 }),
+      target_agent_id: Type.String({ description: "Enrolled target agent ID.", maxLength: 256 }),
       prompt: Type.String({ description: "Prompt to deliver.", maxLength: MAX_MESSAGE_LENGTH }),
     }),
     async execute(_callId, params) {
-      if (!bootstrap) throw new Error("onclave is not initialized");
-      const msgId = `msg_${randomId()}`;
-      const responses = await sendWssFrames(
-        localHubWssUrl(bootstrap.state.endpoint),
-        [
-          {
-            type: "local_send_prompt",
-            localAuthToken: bootstrap.localAuthToken,
-            msgId,
-            targetSessionId: params.target_session_id,
-            prompt: params.prompt,
-            hops: 0,
-          },
-        ],
-        { rejectUnauthorized: false, timeoutMs: 5_000 }
-      );
-      const response = responses[0];
-      if (!response || response.type !== "send_accepted") {
-        throw new Error(`onclave send failed: ${JSON.stringify(response ?? null)}`);
-      }
+      const active = requireRuntime(runtime);
+      const messageId = `msg_${randomId()}`;
+      const taskId = `task_${randomId()}`;
+      const task = await active.client.submitCommand(active.token, {
+        messageId,
+        taskId,
+        correlationId: `corr_${randomId()}`,
+        sourceAgentId: active.agentId,
+        targetAgentId: params.target_agent_id,
+        type: "task.assign",
+        expiresAt: new Date(Date.now() + MAX_WAIT_TIMEOUT_MS).toISOString(),
+        payload: { instruction: params.prompt },
+      });
       return {
-        content: [{ type: "text" as const, text: `onclave_send → ${params.target_session_id}\nmsg_id ${msgId}` }],
-        details: { msg_id: msgId, target_session_id: params.target_session_id, status: response.status },
+        content: [{ type: "text" as const, text: `task submitted: ${taskId}` }],
+        details: { messageId, taskId, task },
       };
     },
   });
@@ -375,16 +115,16 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "onclave_get",
     label: "Onclave Get",
-    description: "Poll an Onclave message response by msg_id.",
+    description: "Retrieve an Onclave task by task ID.",
     parameters: Type.Object({
-      msg_id: Type.String({ description: "Message ID returned by onclave_send." }),
+      task_id: Type.String({ description: "Task ID returned by onclave_send." }),
     }),
     async execute(_callId, params) {
-      if (!bootstrap) throw new Error("onclave is not initialized");
-      const result = await getLocalResponse(bootstrap.state.endpoint, params.msg_id, bootstrap.localAuthToken);
+      const active = requireRuntime(runtime);
+      const task = await active.client.getTask(active.token, params.task_id);
       return {
-        content: [{ type: "text" as const, text: formatResponseResult(result) }],
-        details: { msg_id: params.msg_id, result },
+        content: [{ type: "text" as const, text: formatTask(task) }],
+        details: { task },
       };
     },
   });
@@ -392,617 +132,99 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "onclave_await",
     label: "Onclave Await",
-    description: "Wait for an Onclave message response by msg_id until timeout.",
+    description: "Wait for an Onclave task to reach a terminal state.",
     parameters: Type.Object({
-      msg_id: Type.String({ description: "Message ID returned by onclave_send." }),
-      timeout_ms: Type.Optional(Type.Integer({ description: "Maximum wait time in milliseconds. Default 30000.", minimum: 1, maximum: MAX_WAIT_TIMEOUT_MS })),
+      task_id: Type.String({ description: "Task ID returned by onclave_send." }),
+      timeout_ms: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_WAIT_TIMEOUT_MS })),
     }),
     async execute(_callId, params) {
-      const timeoutMs = typeof params.timeout_ms === "number" && params.timeout_ms > 0
-        ? Math.min(params.timeout_ms, MAX_WAIT_TIMEOUT_MS)
-        : 30_000;
+      const active = requireRuntime(runtime);
+      const timeoutMs = Math.min(params.timeout_ms ?? 30_000, MAX_WAIT_TIMEOUT_MS);
       const deadline = Date.now() + timeoutMs;
-      if (!bootstrap) throw new Error("onclave is not initialized");
-      let result = await getLocalResponse(bootstrap.state.endpoint, params.msg_id, bootstrap.localAuthToken);
-      while (result.status === "pending" && Date.now() < deadline) {
+      let task = await active.client.getTask(active.token, params.task_id);
+      while (!isTerminal(task) && Date.now() < deadline) {
         await sleep(250);
-        result = await getLocalResponse(bootstrap.state.endpoint, params.msg_id, bootstrap.localAuthToken);
+        task = await active.client.getTask(active.token, params.task_id);
       }
       return {
-        content: [{ type: "text" as const, text: formatResponseResult(result) }],
-        details: { msg_id: params.msg_id, result },
+        content: [{ type: "text" as const, text: formatTask(task) }],
+        details: { task },
       };
     },
   });
-
-  pi.registerTool({
-    name: "onclave_remote_agents",
-    label: "Onclave Remote Agents",
-    description: "List agents from a trusted remote Onclave hub using explicit metadata or a static peer name.",
-    parameters: Type.Object({
-      peer_name: Type.Optional(Type.String({ description: "Name of a static peer in ~/.pi/onclave/config.json." })),
-      endpoint: Type.Optional(Type.String({ description: "Remote WSS endpoint, for example wss://host:1234/v1/hub." })),
-      node_id: Type.Optional(Type.String({ description: "Remote persistent node ID." })),
-      hub_instance_id: Type.Optional(Type.String({ description: "Remote runtime hub instance ID." })),
-    }),
-    async execute(_callId, params) {
-      if (!bootstrap) throw new Error("onclave is not initialized");
-      const remote = await resolveRemotePeer(paths, params);
-      const client = await createRemoteClient(bootstrap, paths, remote.endpoint, remote.nodeId, remote.hubInstanceId);
-      bootstrap.runtime?.markPeerAuthInProgress?.(remote.nodeId);
-      try {
-        const agents = await client.listAgents();
-        bootstrap.runtime?.markPeerAuthenticated?.(remote.nodeId);
-        cachePeerDisplay(peerDisplayCache, remote.nodeId, agents);
-        await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
-        const agentList = buildOnclaveAgentList({ heading: "remote_agents", agents });
-        return {
-          content: [{ type: "text" as const, text: agentList.text }],
-          details: { agents, endpoint: remote.endpoint, node_id: remote.nodeId },
-        };
-      } catch (error) {
-        if (error instanceof RemoteHubAuthError) {
-          bootstrap.runtime?.markPeerAuthFailed?.(remote.nodeId);
-          await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
-        }
-        throw error;
-      }
-    },
-  });
-
-  pi.registerTool({
-    name: "onclave_remote_send",
-    label: "Onclave Remote Send",
-    description: "Send a prompt to a trusted remote Onclave hub using explicit metadata or a static peer name. Defaults to async replies via onclave_reply.",
-    parameters: Type.Object({
-      peer_name: Type.Optional(Type.String({ description: "Name of a static peer in ~/.pi/onclave/config.json." })),
-      endpoint: Type.Optional(Type.String({ description: "Remote WSS endpoint, for example wss://host:1234/v1/hub." })),
-      node_id: Type.Optional(Type.String({ description: "Remote persistent node ID." })),
-      hub_instance_id: Type.Optional(Type.String({ description: "Remote runtime hub instance ID." })),
-      target_session_id: Type.String({ description: "Remote target agent session ID.", maxLength: 256 }),
-      prompt: Type.String({ description: "Prompt to deliver.", maxLength: MAX_MESSAGE_LENGTH }),
-      reply_mode: Type.Optional(
-        StringEnum(["async_message", "pollable"] as const)
-      ),
-    }),
-    async execute(_callId, params) {
-      if (!bootstrap || !localSessionId || !localRegistration) throw new Error("onclave is not initialized");
-      const msgId = `msg_${randomId()}`;
-      const correlationId = `corr_${randomId()}`;
-      const replyMode = params.reply_mode ?? "async_message";
-      const remote = await resolveRemotePeer(paths, params);
-      const client = await createRemoteClient(bootstrap, paths, remote.endpoint, remote.nodeId, remote.hubInstanceId);
-      bootstrap.runtime?.markPeerAuthInProgress?.(remote.nodeId);
-      try {
-        const response = await client.sendPrompt({
-          msgId,
-          targetSessionId: params.target_session_id,
-          prompt: params.prompt,
-          hops: 0,
-          replyMode,
-          origin: createOriginMetadata({
-            bootstrap,
-            localSessionId,
-            localRegistration,
-            correlationId,
-          }),
-        });
-        bootstrap.runtime?.markPeerAuthenticated?.(remote.nodeId);
-        await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
-        if (response.type !== "send_accepted") {
-          throw new Error(`remote send failed: ${JSON.stringify(response)}`);
-        }
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text:
-                `onclave_remote_send → ${params.target_session_id}\n` +
-                `msg_id ${msgId}\n` +
-                `correlation_id ${correlationId}\n` +
-                `reply_mode ${replyMode}`,
-            },
-          ],
-          details: {
-            msg_id: msgId,
-            correlation_id: correlationId,
-            reply_mode: replyMode,
-            target_session_id: params.target_session_id,
-            status: response.status,
-            endpoint: remote.endpoint,
-          },
-        };
-      } catch (error) {
-        if (error instanceof RemoteHubAuthError) {
-          bootstrap.runtime?.markPeerAuthFailed?.(remote.nodeId);
-          await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
-        }
-        throw error;
-      }
-    },
-  });
-
-  pi.registerTool({
-    name: "onclave_remote_get",
-    label: "Onclave Remote Get",
-    description: "Poll a message response from a trusted remote Onclave hub for pollable requests.",
-    parameters: Type.Object({
-      peer_name: Type.Optional(Type.String({ description: "Name of a static peer in ~/.pi/onclave/config.json." })),
-      endpoint: Type.Optional(Type.String({ description: "Remote WSS endpoint, for example wss://host:1234/v1/hub." })),
-      node_id: Type.Optional(Type.String({ description: "Remote persistent node ID." })),
-      hub_instance_id: Type.Optional(Type.String({ description: "Remote runtime hub instance ID." })),
-      msg_id: Type.String({ description: "Message ID returned by onclave_remote_send." }),
-    }),
-    async execute(_callId, params) {
-      if (!bootstrap) throw new Error("onclave is not initialized");
-      const remote = await resolveRemotePeer(paths, params);
-      const client = await createRemoteClient(bootstrap, paths, remote.endpoint, remote.nodeId, remote.hubInstanceId);
-      bootstrap.runtime?.markPeerAuthInProgress?.(remote.nodeId);
-      try {
-        const result = await client.getResponse(params.msg_id);
-        bootstrap.runtime?.markPeerAuthenticated?.(remote.nodeId);
-        await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
-        return {
-          content: [{ type: "text" as const, text: formatResponseResult(result) }],
-          details: { msg_id: params.msg_id, result, endpoint: remote.endpoint },
-        };
-      } catch (error) {
-        if (error instanceof RemoteHubAuthError) {
-          bootstrap.runtime?.markPeerAuthFailed?.(remote.nodeId);
-          await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
-        }
-        throw error;
-      }
-    },
-  });
-
-  pi.registerTool({
-    name: "onclave_reply",
-    label: "Onclave Reply",
-    description: "Send an asynchronous reply back to the origin host for a received Onclave message.",
-    parameters: Type.Object({
-      msg_id: Type.Optional(Type.String({ description: "Inbound Onclave msg_id to reply to. Defaults to the latest inbound message with origin metadata." })),
-      response: Type.String({ description: "Reply body to send back to the originating host.", maxLength: MAX_MESSAGE_LENGTH }),
-      status: Type.Optional(
-        StringEnum(["completed", "failed", "needs_input"] as const)
-      ),
-    }),
-    async execute(_callId, params) {
-      if (!bootstrap || !localSessionId || !localRegistration) throw new Error("onclave is not initialized");
-      const inbound = resolveInboundPromptForReply(inboundPrompts, params.msg_id);
-      assertAsyncReplyablePrompt({
-        msgId: inbound.msgId,
-        replyMode: inbound.replyMode,
-        origin: inbound.origin,
-      });
-      const origin = inbound.origin as NonNullable<typeof inbound.origin>;
-      const remote = {
-        endpoint: origin.endpoint,
-        nodeId: origin.nodeId,
-        hubInstanceId: origin.hubInstanceId,
-      };
-      const client = await createRemoteClient(bootstrap, paths, remote.endpoint, remote.nodeId, remote.hubInstanceId);
-      const msgId = `msg_${randomId()}`;
-      const status = params.status ?? "completed";
-      bootstrap.runtime?.markPeerAuthInProgress?.(remote.nodeId);
-      try {
-        const response = await client.sendPrompt({
-          msgId,
-          targetSessionId: origin.sessionId,
-          prompt: formatAsyncReplyPrompt(inbound, status, params.response),
-          hops: 0,
-          replyMode: "async_message",
-          origin: createOriginMetadata({
-            bootstrap,
-            localSessionId,
-            localRegistration,
-            correlationId: origin.correlationId,
-            inReplyToMsgId: inbound.msgId,
-          }),
-        });
-        bootstrap.runtime?.markPeerAuthenticated?.(remote.nodeId);
-        await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
-        if (response.type !== "send_accepted") {
-          throw new Error(`onclave reply failed: ${JSON.stringify(response)}`);
-        }
-        inboundPrompts.delete(inbound.msgId);
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text:
-                `onclave_reply → ${origin.sessionId}\n` +
-                `msg_id ${msgId}\n` +
-                `in_reply_to ${inbound.msgId}\n` +
-                `correlation_id ${origin.correlationId}\n` +
-                `status ${status}`,
-            },
-          ],
-          details: {
-            msg_id: msgId,
-            in_reply_to: inbound.msgId,
-            correlation_id: origin.correlationId,
-            status,
-            endpoint: remote.endpoint,
-            target_session_id: origin.sessionId,
-          },
-        };
-      } catch (error) {
-        if (error instanceof RemoteHubAuthError) {
-          bootstrap.runtime?.markPeerAuthFailed?.(remote.nodeId);
-          await refreshOnclaveUi(sessionUi, bootstrap, paths, localRegistration, peerDisplayCache);
-        }
-        throw error;
-      }
-    },
-  });
-
-  pi.registerTool({
-    name: "onclave_agents",
-    label: "Onclave Agents",
-    description: "List local agents registered with this Onclave runtime.",
-    parameters: Type.Object({}),
-    async execute() {
-      const agents = bootstrap?.runtime?.localAgents?.() ?? [];
-      const agentList = buildOnclaveAgentList({ heading: "local_agents", agents });
-      return {
-        content: [{ type: "text" as const, text: agentList.text }],
-        details: { agents },
-      };
-    },
-  });
-}
-
-function gatewayPromptText(command: PiGatewayCommand): string {
-  const instruction = command.payload?.instruction;
-  if (typeof instruction === "string") return instruction;
-  return JSON.stringify(command.payload ?? {}, null, 2);
 }
 
 async function deliverInboundPrompt(
   pi: ExtensionAPI,
   prompt: DeliveredPrompt,
-  inboundPrompts: Map<string, DeliveredPrompt>
+  inbound: Map<string, DeliveredPrompt>,
 ): Promise<void> {
-  inboundPrompts.set(prompt.msgId, prompt);
-  pi.sendMessage(
-    {
-      customType: "onclave-inbound",
-      content: formatInboundPromptMessage(prompt),
-      display: true,
-      details: {
-        msgId: prompt.msgId,
-        targetSessionId: prompt.targetSessionId,
-        hops: prompt.hops,
-        replyMode: prompt.replyMode ?? "pollable",
-        origin: prompt.origin,
-      },
-    },
-    { triggerTurn: true, deliverAs: "followUp" }
-  );
+  inbound.set(prompt.msgId, prompt);
+  pi.sendMessage({
+    customType: "onclave-inbound",
+    content: `[inbound onclave task ${prompt.msgId}]\n\n${prompt.prompt}`,
+    display: true,
+    details: { msgId: prompt.msgId },
+  }, { triggerTurn: true, deliverAs: "followUp" });
 }
 
-function formatInboundPromptMessage(prompt: DeliveredPrompt): string {
-  const lines = ["[inbound onclave message]"];
-  if (prompt.origin) {
-    lines.push(`[from ${prompt.origin.nodeId} session ${prompt.origin.sessionId}]`);
-    lines.push(`[correlation_id ${prompt.origin.correlationId}]`);
-    if (prompt.origin.inReplyToMsgId) {
-      lines.push(`[in_reply_to ${prompt.origin.inReplyToMsgId}]`);
-      lines.push(`[remote reply received; no automatic reply is expected.]`);
-    }
-  }
-  if (prompt.replyMode === "async_message" && !prompt.origin?.inReplyToMsgId) {
-    lines.push(`[msg_id ${prompt.msgId}; use onclave_reply when you are ready to respond.]`);
-  } else if (prompt.replyMode !== "async_message") {
-    lines.push(`[msg_id ${prompt.msgId}; reply with a normal assistant response.]`);
-    lines.push("[do not use onclave_reply for this message.]");
-  }
-  lines.push("", prompt.prompt);
-  return lines.join("\n");
-}
-
-function inboundPromptForAgentRun(
-  messages: unknown[],
-  inboundPrompts: Map<string, DeliveredPrompt>
-): DeliveredPrompt | null {
+function findInboundPrompt(messages: unknown[], inbound: Map<string, DeliveredPrompt>): DeliveredPrompt | null {
   for (const message of [...messages].reverse()) {
     if (!message || typeof message !== "object") continue;
     const record = message as { customType?: unknown; details?: { msgId?: unknown } };
-    if (record.customType !== "onclave-inbound" || typeof record.details?.msgId !== "string") continue;
-    const prompt = inboundPrompts.get(record.details.msgId);
-    if (prompt) return prompt;
+    if (record.customType === "onclave-inbound" && typeof record.details?.msgId === "string") {
+      return inbound.get(record.details.msgId) ?? null;
+    }
   }
-  return [...inboundPrompts.values()].at(-1) ?? null;
+  return null;
 }
 
-function resolveInboundPromptForReply(
-  inboundPrompts: Map<string, DeliveredPrompt>,
-  msgId?: string
-): DeliveredPrompt {
-  if (msgId) {
-    const prompt = inboundPrompts.get(msgId);
-    if (!prompt) throw new Error(`inbound onclave message not found: ${msgId}`);
-    return prompt;
-  }
-  const latestReplyable = [...inboundPrompts.values()]
-    .reverse()
-    .find((prompt) => Boolean(prompt.origin) && !prompt.origin?.inReplyToMsgId);
-  if (!latestReplyable) {
-    throw new Error("no inbound Onclave message with reply routing metadata is available");
-  }
-  return latestReplyable;
-}
-
-function formatAsyncReplyPrompt(
-  inbound: DeliveredPrompt,
-  status: "completed" | "failed" | "needs_input",
-  response: string
-): string {
-  const lines = [
-    "[onclave reply]",
-    `[status ${status}]`,
-  ];
-  if (inbound.origin?.correlationId) {
-    lines.push(`[correlation_id ${inbound.origin.correlationId}]`);
-  }
-  lines.push(`[in_reply_to ${inbound.msgId}]`, "", response);
-  return lines.join("\n");
-}
-
-async function refreshOnclaveUi(
-  ui: ExtensionContext["ui"] | null,
-  bootstrap: BootstrapLocalHubResult | null,
-  paths: ReturnType<typeof getOnclavePaths>,
-  localRegistration: LocalAgentRegistration | null,
-  peerDisplayCache: Map<string, { peerName?: string; model?: string }>
-): Promise<void> {
-  if (!ui) return;
-  if (!bootstrap) {
-    ui.setWidget?.("onclave-peers", undefined);
-    ui.setStatus?.("onclave", undefined);
-    return;
-  }
-
-  const peers = bootstrap.runtime?.discoveredPeers?.() ?? [];
-  const config = await loadOnclaveConfig(paths).catch(() => ({ version: 1 as const, staticPeers: [] }));
-  const knownPeers = buildKnownOnclavePeers({
-    discoveredPeers: peers,
-    staticPeers: config.staticPeers,
-    learnedPeerNames: new Map(
-      [...peerDisplayCache.entries()]
-        .filter(([, value]) => Boolean(value.peerName))
-        .map(([nodeId, value]) => [nodeId, value.peerName as string])
-    ),
-  });
-  const widgetPeers = knownPeers.slice(0, 6).map((peer) => {
-    const cachedDisplay = peerDisplayCache.get(peer.nodeId);
-    return {
-      ...peer,
-      displayName: resolveOnclavePeerDisplayName({
-        nodeId: peer.nodeId,
-        name: peer.name,
-        peerName: peer.peerName ?? cachedDisplay?.peerName,
-      }),
-      model: cachedDisplay?.model,
-    };
-  });
-
-  ui.setWidget?.(
-    "onclave-peers",
-    (_tui, theme) => ({
-      invalidate() {},
-      render(width: number): string[] {
-        return renderOnclavePeerWidget(
-          width,
-          {
-            localLabel: widgetLocalLabel(localRegistration, bootstrap.state.nodeId),
-            localColor: localRegistration?.color,
-            peers: widgetPeers,
-          },
-          theme
-        );
-      },
-    }),
-    { placement: "belowEditor" }
-  );
-  ui.setStatus?.("onclave", undefined);
-}
-
-function cachePeerDisplay(
-  peerDisplayCache: Map<string, { peerName?: string; model?: string }>,
-  nodeId: string,
-  agents: Array<{ name: string; model: string; status: string }>
-): void {
-  const preferred = agents.find((agent) => agent.status === "online") ?? agents[0];
-  if (!preferred) return;
-  peerDisplayCache.set(nodeId, { peerName: preferred.name, model: preferred.model });
-}
-
-function shortNodeId(nodeId: string): string {
-  return nodeId.startsWith("node_") ? nodeId.slice(5, 13) : nodeId.slice(0, 8);
-}
-
-function widgetLocalLabel(localRegistration: LocalAgentRegistration | null, nodeId: string): string {
-  if (!localRegistration?.name || localRegistration.name.startsWith("agent-")) {
-    return shortNodeId(nodeId);
-  }
-  return localRegistration.name;
-}
-
-function createOriginMetadata(input: {
-  bootstrap: BootstrapLocalHubResult;
-  localSessionId: string;
-  localRegistration: LocalAgentRegistration;
-  correlationId: string;
-  inReplyToMsgId?: string;
-}): PromptOriginMetadata {
-  return {
-    nodeId: input.bootstrap.identity.nodeId,
-    hubInstanceId: input.bootstrap.state.hubInstanceId,
-    endpoint: choosePreferredRemoteEndpoint(input.bootstrap.state.endpoint, networkInterfaces()),
-    sessionId: input.localSessionId,
-    correlationId: input.correlationId,
-    agentName: input.localRegistration.name,
-    projectLabel: input.localRegistration.projectLabel,
-    ...(input.inReplyToMsgId ? { inReplyToMsgId: input.inReplyToMsgId } : {}),
-  };
+function gatewayPromptText(command: PiGatewayCommand): string {
+  const instruction = command.payload?.instruction;
+  return typeof instruction === "string" ? instruction : JSON.stringify(command.payload ?? {}, null, 2);
 }
 
 function extractLastAssistantText(ctx: ExtensionContext): string {
-  let lastAssistantText = "";
-  for (const entry of ctx.sessionManager.getBranch()) {
+  for (const entry of [...ctx.sessionManager.getBranch()].reverse()) {
     if (entry.type !== "message" || entry.message.role !== "assistant") continue;
     const content = entry.message.content;
-    if (typeof content === "string") {
-      lastAssistantText = content;
-    } else if (Array.isArray(content)) {
-      lastAssistantText = content
-        .filter((block): block is { type: "text"; text: string } => {
-          return Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "text";
-        })
-        .map((block) => block.text)
-        .join("\n");
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      return content.filter((block): block is { type: "text"; text: string } =>
+        Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "text"
+      ).map((block) => block.text).join("\n");
     }
   }
-  return lastAssistantText;
+  return "";
 }
 
-type RemotePeerParams = {
-  peer_name?: string;
-  endpoint?: string;
-  node_id?: string;
-  hub_instance_id?: string;
-};
-
-async function resolveRemotePeer(
-  paths: ReturnType<typeof getOnclavePaths>,
-  params: RemotePeerParams
-): Promise<{ endpoint: string; nodeId: string; hubInstanceId: string }> {
-  if (params.peer_name) {
-    const peer = findStaticPeer(await loadOnclaveConfig(paths), params.peer_name);
-    if (!peer) throw new Error(`static peer not found: ${params.peer_name}`);
-    return { endpoint: peer.endpoint, nodeId: peer.nodeId, hubInstanceId: peer.hubInstanceId };
-  }
-  if (!params.endpoint || !params.node_id || !params.hub_instance_id) {
-    throw new Error("provide peer_name or endpoint, node_id, and hub_instance_id");
-  }
-  return { endpoint: params.endpoint, nodeId: params.node_id, hubInstanceId: params.hub_instance_id };
+function requireRuntime(runtime: GatewayRuntime | null): GatewayRuntime {
+  if (!runtime) throw new Error("Onclave gateway is not initialized");
+  return runtime;
 }
 
-async function createRemoteClient(
-  bootstrap: BootstrapLocalHubResult,
-  paths: ReturnType<typeof getOnclavePaths>,
-  endpoint: string,
-  nodeId: string,
-  hubInstanceId: string
-) {
-  return createRemoteHubClient({
-    identity: {
-      nodeId: bootstrap.identity.nodeId,
-      hubInstanceId: bootstrap.state.hubInstanceId,
-      endpoint: choosePreferredRemoteEndpoint(bootstrap.state.endpoint, networkInterfaces()),
-      publicKeyHex: bootstrap.identity.publicKey,
-      privateKeyHex: await loadIdentityPrivateKeyHex(paths),
-    },
-    authorizedKeys: bootstrap.authorizedKeys,
-    remote: {
-      nodeId,
-      hubInstanceId,
-      endpoint,
-    },
-    now: () => new Date().toISOString(),
-    rejectUnauthorized: false,
-    audit: (event, metadata) => appendAuditEvent(paths.auditLog, event, metadata),
-  });
+function requiredEnvironment(name: string): string {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`${name} is required`);
+  return value;
 }
 
-async function createRegistrationForContext(
-  pi: ExtensionAPI,
-  ctx: ExtensionContext,
-  sessionId: string
-): Promise<LocalAgentRegistration> {
-  return createLocalAgentRegistration({
-    sessionId,
-    instanceId: `pi_${randomId()}`,
-    cwd: ctx.cwd || process.cwd(),
-    model: ctx.model?.id ?? "unknown",
-    name: readStringFlag(pi, "agent-name"),
-    sessionName: pi.getSessionName?.(),
-    purpose: readStringFlag(pi, "purpose"),
-    color: readStringFlag(pi, "color"),
-    explicit: pi.getFlag("explicit") === true,
-    deliveryEndpoint: `local://${sessionId}`,
-  });
+function formatTask(task: GatewayTask): string {
+  return `${task.taskId}: ${task.state}${task.result === undefined ? "" : `\n${JSON.stringify(task.result, null, 2)}`}`;
 }
 
-async function registerWithLocalHub(endpoint: string, registration: LocalAgentRegistration, localAuthToken: string): Promise<void> {
-  await sendWssFrames(localHubWssUrl(endpoint), [{ type: "local_register", registration, localAuthToken }], {
-    rejectUnauthorized: false,
-    timeoutMs: 2_000,
-  });
+function isTerminal(task: GatewayTask): boolean {
+  return ["completed", "failed", "cancelled", "expired"].includes(task.state);
 }
 
-async function unregisterWithLocalHub(endpoint: string, sessionId: string, localAuthToken: string): Promise<void> {
-  await sendWssFrames(localHubWssUrl(endpoint), [{ type: "local_unregister", sessionId, localAuthToken }], {
-    rejectUnauthorized: false,
-    timeoutMs: 2_000,
-  });
-}
-
-async function checkHubHealth(endpoint: string): Promise<boolean> {
-  const url = localHubWssUrl(endpoint);
-  try {
-    const responses = await sendWssFrames(url, [{ type: "list_agents" }], {
-      rejectUnauthorized: false,
-      timeoutMs: 2_000,
-    });
-    return responses.some((response) => response.type === "error" && response.code === "auth_required") || responses.length > 0;
-  } catch {
-    return false;
-  }
-}
-
-function localHubWssUrl(endpoint: string): string {
-  return endpoint.replace(/^https:/, "wss:").replace(/\/$/, "") + "/v1/hub";
-}
-
-async function getLocalResponse(endpoint: string, msgId: string, localAuthToken: string) {
-  const responses = await sendWssFrames(
-    localHubWssUrl(endpoint),
-    [{ type: "local_get_response", msgId, localAuthToken }],
-    { rejectUnauthorized: false, timeoutMs: 5_000 }
-  );
-  const response = responses[0];
-  if (!response || response.type !== "response") {
-    throw new Error(`onclave get failed: ${JSON.stringify(response ?? null)}`);
-  }
-  return response.result;
-}
-
-function formatResponseResult(result: { status: string; response?: unknown; error?: string | null }): string {
-  if (result.status === "complete") {
-    return typeof result.response === "string" ? result.response : JSON.stringify(result.response, null, 2);
-  }
-  if (result.error) return `${result.status}: ${result.error}`;
-  return result.status;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function sessionIdFromContext(ctx: ExtensionContext): string {
-  const sessionFile = ctx.sessionManager.getSessionFile();
-  if (sessionFile) return basename(sessionFile).replace(/\W+/g, "_");
-  return `session_${randomId()}`;
-}
-
-function readStringFlag(pi: ExtensionAPI, name: string): string | undefined {
-  const value = pi.getFlag(name);
-  return typeof value === "string" && value.length > 0 ? value : undefined;
+function safeErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function randomId(): string {
   return randomBytes(10).toString("hex");
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

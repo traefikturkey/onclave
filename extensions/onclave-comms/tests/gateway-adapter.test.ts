@@ -46,6 +46,24 @@ describe("OnclaveGatewayClient", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it("negotiates the requested capabilities after authentication", async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ requestId: "request-1", nonce: "nonce-1" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ capabilities: ["message.receive"] }), { status: 200 }));
+    const client = new OnclaveGatewayClient({ baseUrl: "https://gateway.example", fetchImpl });
+
+    const request = await client.requestCapabilities("session-token", "agent-1");
+    const effective = await client.acceptCapabilities("session-token", "agent-1", request, ["message.receive"]);
+
+    expect(effective).toEqual(["message.receive"]);
+    expect(fetchImpl).toHaveBeenNthCalledWith(1, "https://gateway.example/v1/agents/agent-1/capabilities/request", expect.objectContaining({
+      headers: expect.objectContaining({ Authorization: "Bearer session-token" }),
+    }));
+    expect(fetchImpl).toHaveBeenNthCalledWith(2, "https://gateway.example/v1/agents/agent-1/capabilities", expect.objectContaining({
+      body: JSON.stringify({ requestId: "request-1", nonce: "nonce-1", capabilities: ["message.receive"] }),
+    }));
+  });
+
   it("supports an agent-scoped event subscription when opening a session", () => {
     class FakeWebSocket {
       static lastUrl = "";

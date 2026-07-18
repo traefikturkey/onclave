@@ -1,10 +1,18 @@
 # onclave-comms Pi Extension
 
-This package contains the Pi extension entrypoint for the Onclave communication
-subsystem.
+This package connects Pi to the public Onclave HTTPS/WebSocket gateway.
+It does not connect to RabbitMQ, SQLite, or local hub transports.
 
-Full extension documentation lives under
-[`docs/extensions/onclave-comms/`](../../docs/extensions/onclave-comms/README.md).
+## Configuration
+
+Before starting Pi, configure:
+
+- `ONCLAVE_GATEWAY_URL`: HTTPS gateway base URL.
+- `ONCLAVE_AGENT_ID`: approved gateway agent ID.
+- The matching Ed25519 private key in Pi's Onclave state directory.
+
+Enrollment and operator approval are performed through the gateway deployment;
+the extension does not expose enrollment credentials or session tokens.
 
 ## Local loading
 
@@ -15,11 +23,15 @@ just setup
 pi -e ./extensions/onclave-comms
 ```
 
-The package metadata also declares `./src/onclave-comms.ts` in `pi.extensions`
-for repo-local package loading.
+The extension authenticates on `session_start`, requests only
+`message.send` and `message.receive`, and closes its authenticated session on
+shutdown.
 
-## Scope
+## Tools
 
-`extensions/onclave-comms` is supported when it remains inside this repo
-checkout. The current implementation, tests, and helper script live in the same
-subtree for simpler monorepo navigation during the current stage of the project.
+- `onclave_send`: submit a task to an enrolled target agent.
+- `onclave_get`: retrieve task state.
+- `onclave_await`: wait for terminal task state.
+
+Commands delivered by the gateway are acknowledged only after Pi accepts them;
+completion and failure are reported through the gateway task lifecycle.
