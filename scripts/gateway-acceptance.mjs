@@ -5,6 +5,8 @@ import WebSocket from "ws";
 
 const baseUrl = process.env.ONCLAVE_GATEWAY_URL ?? "http://127.0.0.1:8080";
 const restartGateway = process.env.ONCLAVE_ACCEPTANCE_RESTART === "1";
+const restartBroker = process.env.ONCLAVE_ACCEPTANCE_BROKER_RESTART === "1";
+const composeProject = process.env.ONCLAVE_ACCEPTANCE_COMPOSE_PROJECT;
 
 async function request(path, options = {}, expected = [200]) {
   const response = await fetch(`${baseUrl}${path}`, {
@@ -83,7 +85,7 @@ const submit = () => request("/v1/commands", {
   headers: source.headers,
 }, [202]);
 
-if (restartGateway) {
+if (restartGateway || restartBroker) {
   await sourceSession.ready;
   // Declare the durable target queue before submitting, then disconnect the
   // target runtime to prove the command survives the gateway restart.
@@ -92,17 +94,25 @@ if (restartGateway) {
   initialTargetSession.socket.close();
   await submit();
   sourceSession.socket.close();
-  const gatewayContainer = execFileSync("docker", ["ps", "--filter", "label=com.docker.compose.service=onclave", "--format", "{{.ID}}"], { encoding: "utf8" }).trim();
-  if (!gatewayContainer) throw new Error("could not find the running Onclave container to restart");
-  execFileSync("docker", ["restart", gatewayContainer], { stdio: "inherit" });
+  const service = restartBroker ? "rabbitmq" : "onclave";
+  const filters = ["--filter", `label=com.docker.compose.service=${service}`];
+  if (composeProject) filters.push("--filter", `label=com.docker.compose.project=${composeProject}`);
+  const container = execFileSync("docker", ["ps", ...filters, "--format", "{{.ID}}"], { encoding: "utf8" }).trim().split(/\s+/)[0];
+  if (!container) throw new Error(`could not find the running ${service} container to restart`);
+  execFileSync("docker", ["restart", container], { stdio: "inherit" });
+  if (restartBroker) await new Promise((resolve) => setTimeout(resolve, 2000));
   const readyDeadline = Date.now() + 30000;
+  let consecutiveReady = 0;
   while (Date.now() < readyDeadline) {
     try {
       await request("/readyz");
-      break;
+      consecutiveReady += 1;
+      if (consecutiveReady >= (restartBroker ? 3 : 1)) break;
     } catch {
+      consecutiveReady = 0;
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
+    if (consecutiveReady > 0) await new Promise((resolve) => setTimeout(resolve, 500));
   }
   sourceSession = openSession(source, onSourceMessage);
   targetSession = openSession(target, onTargetMessage);

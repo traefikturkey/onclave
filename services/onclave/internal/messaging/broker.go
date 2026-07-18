@@ -301,8 +301,17 @@ func (publisher *RabbitMQPublisher) PublishEvent(ctx context.Context, envelope E
 
 func (publisher *RabbitMQPublisher) openChannel() (*amqp.Channel, error) {
 	publisher.connectionMu.Lock()
+	connection := publisher.connection
+	closed := connection == nil || connection.IsClosed()
+	publisher.connectionMu.Unlock()
+	if closed {
+		if err := publisher.reconnect(); err != nil {
+			return nil, err
+		}
+	}
+	publisher.connectionMu.Lock()
 	defer publisher.connectionMu.Unlock()
-	if publisher.connection == nil {
+	if publisher.connection == nil || publisher.connection.IsClosed() {
 		return nil, fmt.Errorf("RabbitMQ connection is closed")
 	}
 	return publisher.connection.Channel()
