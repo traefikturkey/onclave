@@ -142,3 +142,43 @@ func TestAdmissionSessionLeaseSurvivesReopen(t *testing.T) {
 		t.Fatalf("unexpected persisted lease: %+v", snapshots)
 	}
 }
+
+func TestEventOutboxSurvivesReopenAndMarksPublished(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "onclave.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := messaging.Envelope{MessageID: "event-message-1", RoutingKey: "task.completed.target", TaskID: "task-1", MessageType: "task.completed", Payload: []byte(`{"ok":true}`), Persistent: true}
+	if err := store.EnqueueEvent(envelope); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnqueueEvent(envelope); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := store.PendingEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].MessageID != envelope.MessageID {
+		t.Fatalf("unexpected pending events: %+v", pending)
+	}
+	if err := store.MarkEventPublished(envelope.MessageID); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = store.PendingEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("expected no pending events after publish, got %+v", pending)
+	}
+	_ = store.Close()
+}

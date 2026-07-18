@@ -70,6 +70,12 @@ CREATE TABLE IF NOT EXISTS task_events (
   payload_json TEXT NOT NULL,
   PRIMARY KEY(task_id, sequence)
 );
+CREATE TABLE IF NOT EXISTS event_outbox (
+  message_id TEXT PRIMARY KEY,
+  envelope_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  published_at TEXT
+);
 CREATE TABLE IF NOT EXISTS admission_agents (
   agent_id TEXT PRIMARY KEY,
   runtime_type TEXT NOT NULL,
@@ -255,6 +261,50 @@ func (store *Store) GetEvents(taskID string) ([]messaging.Event, error) {
 		return nil, fmt.Errorf("iterate task events: %w", err)
 	}
 	return events, nil
+}
+
+func (store *Store) EnqueueEvent(envelope messaging.Envelope) error {
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		return fmt.Errorf("encode outbox envelope: %w", err)
+	}
+	_, err = store.db.Exec(`INSERT OR IGNORE INTO event_outbox(message_id, envelope_json, created_at) VALUES(?, ?, ?)`, envelope.MessageID, string(encoded), time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("enqueue event: %w", err)
+	}
+	return nil
+}
+
+func (store *Store) PendingEvents() ([]messaging.Envelope, error) {
+	rows, err := store.db.Query(`SELECT envelope_json FROM event_outbox WHERE published_at IS NULL ORDER BY created_at, message_id`)
+	if err != nil {
+		return nil, fmt.Errorf("query pending events: %w", err)
+	}
+	defer rows.Close()
+	var envelopes []messaging.Envelope
+	for rows.Next() {
+		var encoded string
+		if err := rows.Scan(&encoded); err != nil {
+			return nil, fmt.Errorf("scan pending event: %w", err)
+		}
+		var envelope messaging.Envelope
+		if err := json.Unmarshal([]byte(encoded), &envelope); err != nil {
+			return nil, fmt.Errorf("decode pending event: %w", err)
+		}
+		envelopes = append(envelopes, envelope)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate pending events: %w", err)
+	}
+	return envelopes, nil
+}
+
+func (store *Store) MarkEventPublished(messageID string) error {
+	_, err := store.db.Exec(`UPDATE event_outbox SET published_at = ? WHERE message_id = ?`, time.Now().UTC().Format(time.RFC3339Nano), messageID)
+	if err != nil {
+		return fmt.Errorf("mark event published: %w", err)
+	}
+	return nil
 }
 
 func nonNilBytes(value []byte) []byte {

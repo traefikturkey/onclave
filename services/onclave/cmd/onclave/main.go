@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"path/filepath"
@@ -36,6 +37,17 @@ func main() {
 		log.Fatal(err)
 	}
 	messagingService := messaging.NewServiceWithPublisherAndStore(time.Now, publisher, store)
+	if publisher != nil {
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				if err := messagingService.ReplayPendingEvents(context.Background()); err != nil {
+					log.Printf("event outbox replay failed: %v", err)
+				}
+			}
+		}()
+	}
 	server := api.NewApplicationServerWithBroker(api.Config{Address: serviceConfig.Address}, admissionService, messagingService, subscriber, func() error {
 		return nil
 	})

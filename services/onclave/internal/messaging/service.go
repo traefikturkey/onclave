@@ -97,6 +97,12 @@ type EventStore interface {
 	GetEvents(string) ([]Event, error)
 }
 
+type EventOutbox interface {
+	EnqueueEvent(Envelope) error
+	PendingEvents() ([]Envelope, error)
+	MarkEventPublished(string) error
+}
+
 func NewService(now func() time.Time) *Service {
 	return NewServiceWithPublisher(now, nil)
 }
@@ -355,9 +361,6 @@ func (s *Service) record(task *Task, event Event) {
 	if eventStore, ok := s.store.(EventStore); ok {
 		_ = eventStore.SaveEvent(task.TaskID, event)
 	}
-	if s.eventPublisher == nil {
-		return
-	}
 	payload, err := json.Marshal(map[string]any{
 		"eventType": string(event.Type), "state": string(task.State), "progress": event.Progress,
 		"note": event.Note, "payload": event.Payload,
@@ -365,14 +368,48 @@ func (s *Service) record(task *Task, event Event) {
 	if err != nil {
 		return
 	}
-	_ = s.eventPublisher.PublishEvent(context.Background(), Envelope{
+	envelope := Envelope{
 		RoutingKey: string(event.Type) + "." + task.TargetAgentID,
 		MessageID:  task.MessageID + ":" + string(event.Type) + ":" + event.At.UTC().Format(time.RFC3339Nano),
 		TaskID:     task.TaskID, CorrelationID: task.CorrelationID,
 		SourceAgentID: task.SourceAgentID, TargetAgentID: task.TargetAgentID,
 		MessageType: string(event.Type), IssuedAt: event.At.UTC().Format(time.RFC3339Nano),
 		ExpiresAt: task.ExpiresAt.UTC().Format(time.RFC3339Nano), Payload: payload, Persistent: true,
-	})
+	}
+	if outbox, ok := s.store.(EventOutbox); ok {
+		_ = outbox.EnqueueEvent(envelope)
+	}
+	if s.eventPublisher == nil {
+		return
+	}
+	if err := s.eventPublisher.PublishEvent(context.Background(), envelope); err == nil {
+		if outbox, ok := s.store.(EventOutbox); ok {
+			_ = outbox.MarkEventPublished(envelope.MessageID)
+		}
+	}
+}
+
+func (s *Service) ReplayPendingEvents(ctx context.Context) error {
+	if s.eventPublisher == nil {
+		return nil
+	}
+	outbox, ok := s.store.(EventOutbox)
+	if !ok {
+		return nil
+	}
+	pending, err := outbox.PendingEvents()
+	if err != nil {
+		return err
+	}
+	for _, envelope := range pending {
+		if err := s.eventPublisher.PublishEvent(ctx, envelope); err != nil {
+			return err
+		}
+		if err := outbox.MarkEventPublished(envelope.MessageID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func cloneTask(task *Task) Task {
