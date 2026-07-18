@@ -408,6 +408,8 @@ func (s *Service) record(task *Task, event Event) {
 }
 
 func (s *Service) ReplayPendingCommands(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.publisher == nil {
 		return nil
 	}
@@ -431,6 +433,8 @@ func (s *Service) ReplayPendingCommands(ctx context.Context) error {
 }
 
 func (s *Service) ReplayPendingEvents(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.eventPublisher == nil {
 		return nil
 	}
