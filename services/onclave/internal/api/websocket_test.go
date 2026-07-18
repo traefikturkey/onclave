@@ -13,6 +13,26 @@ import (
 	"github.com/traefikturkey/onclave/services/onclave/internal/messaging"
 )
 
+func TestEventSubscriptionPatternIsAgentScoped(t *testing.T) {
+	request := httptest.NewRequest("GET", "/v1/agents/agent-ws/session?events=task.completed.agent-ws", nil)
+	pattern, err := eventSubscriptionPattern(request, "agent-ws")
+	if err != nil || pattern != "task.completed.agent-ws" {
+		t.Fatalf("expected valid scoped pattern, got %q, %v", pattern, err)
+	}
+
+	for _, rawQuery := range []string{"events=task.completed.other-agent", "events=agent.#", "events=task.unknown.agent-ws"} {
+		request = httptest.NewRequest("GET", "/v1/agents/agent-ws/session?"+rawQuery, nil)
+		if _, err := eventSubscriptionPattern(request, "agent-ws"); err == nil {
+			t.Fatalf("expected pattern %q to be rejected", rawQuery)
+		}
+	}
+
+	request = httptest.NewRequest("GET", "/v1/agents/agent-ws/session", nil)
+	if pattern, err := eventSubscriptionPattern(request, "agent-ws"); err != nil || pattern != "task.*.agent-ws" {
+		t.Fatalf("unexpected default pattern: %q, %v", pattern, err)
+	}
+}
+
 func TestAuthenticatedWebSocketSessionSupportsHeartbeat(t *testing.T) {
 	admissionService := admission.NewService(admission.Policy{})
 	publicKey, privateKey, err := ed25519.GenerateKey(nil)

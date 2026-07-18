@@ -63,6 +63,11 @@ Connect to:
 wss://gateway.example/v1/agents/{agentID}/session
 ```
 
+The default event subscription is `task.*.{agentID}`. A session may request
+one narrower lifecycle pattern using the `events` query parameter, for example
+`?events=task.completed.agent-id`; the gateway only accepts patterns scoped to
+the authenticated agent.
+
 Send the bearer token in the WebSocket handshake `Authorization` header. The first server message is:
 
 ```json

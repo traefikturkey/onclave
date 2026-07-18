@@ -88,7 +88,12 @@ func (s *Server) agentSession(writer http.ResponseWriter, request *http.Request)
 		defer subscription.Close()
 	}
 	if s.events != nil {
-		eventSubscription, eventErr := s.events.SubscribeEvents(ctx, "agent-events-"+agentID, "task.*."+agentID, func(envelope messaging.Envelope) error {
+		pattern, patternErr := eventSubscriptionPattern(request, agentID)
+		if patternErr != nil {
+			_ = write(errMessage(patternErr, "event.subscription.invalid"))
+			return
+		}
+		eventSubscription, eventErr := s.events.SubscribeEvents(ctx, "agent-events-"+agentID, pattern, func(envelope messaging.Envelope) error {
 			return write(map[string]any{
 				"type":          "task.event",
 				"messageId":     envelope.MessageID,
@@ -233,4 +238,24 @@ func writeWebSocketJSON(ctx context.Context, connection *websocket.Conn, value a
 		return err
 	}
 	return connection.Write(ctx, websocket.MessageText, payload)
+}
+
+func eventSubscriptionPattern(request *http.Request, agentID string) (string, error) {
+	pattern := request.URL.Query().Get("events")
+	if pattern == "" {
+		return "task.*." + agentID, nil
+	}
+	if !strings.HasPrefix(pattern, "task.") || !strings.HasSuffix(pattern, "."+agentID) {
+		return "", errors.New("event pattern must target the authenticated agent")
+	}
+	eventName := strings.TrimSuffix(strings.TrimPrefix(pattern, "task."), "."+agentID)
+	if eventName == "*" {
+		return pattern, nil
+	}
+	switch eventName {
+	case "accepted", "acknowledged", "started", "progress", "completed", "failed", "cancelled", "expired":
+		return pattern, nil
+	default:
+		return "", errors.New("event pattern contains an unsupported task event")
+	}
 }
