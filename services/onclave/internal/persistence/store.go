@@ -117,6 +117,12 @@ CREATE TABLE IF NOT EXISTS subscriptions (
   created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS delivery_attempts (
+  message_id TEXT PRIMARY KEY,
+  attempts INTEGER NOT NULL,
+  last_error TEXT NOT NULL,
+  last_attempt_at TEXT NOT NULL
 );`
 	if _, err := store.db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate SQLite schema: %w", err)
@@ -365,6 +371,22 @@ func (store *Store) PendingEvents() ([]messaging.Envelope, error) {
 
 func (store *Store) MarkEventPublished(messageID string) error {
 	return store.markOutboxPublished("event_outbox", messageID)
+}
+
+func (store *Store) RecordDeliveryAttempt(messageID string, publishErr error) error {
+	errorText := ""
+	if publishErr != nil {
+		errorText = publishErr.Error()
+	}
+	_, err := store.db.Exec(`INSERT INTO delivery_attempts(message_id, attempts, last_error, last_attempt_at)
+VALUES(?, 1, ?, ?)
+ON CONFLICT(message_id) DO UPDATE SET attempts=delivery_attempts.attempts + 1,
+  last_error=excluded.last_error, last_attempt_at=excluded.last_attempt_at`,
+		messageID, errorText, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("record delivery attempt: %w", err)
+	}
+	return nil
 }
 
 func (store *Store) enqueueOutbox(table string, envelope messaging.Envelope) error {

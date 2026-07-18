@@ -3,7 +3,19 @@ package messaging
 import (
 	"testing"
 	"time"
+
+	amqp "github.com/rabbitmq/amqp091-go"
 )
+
+func TestDeliveryRedeliveryCountReadsRabbitDeathHeaders(t *testing.T) {
+	headers := amqp.Table{"x-death": []interface{}{
+		amqp.Table{"count": int64(2)},
+		amqp.Table{"count": int64(1)},
+	}}
+	if got := deliveryRedeliveryCount(headers); got != 3 {
+		t.Fatalf("expected three redeliveries, got %d", got)
+	}
+}
 
 func TestTaskFailureIsTerminalAndEmitsFailureEvent(t *testing.T) {
 	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)

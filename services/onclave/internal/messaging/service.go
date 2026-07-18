@@ -103,6 +103,10 @@ type EventOutbox interface {
 	MarkEventPublished(string) error
 }
 
+type DeliveryAttemptStore interface {
+	RecordDeliveryAttempt(string, error) error
+}
+
 type CommandOutbox interface {
 	EnqueueCommand(Envelope) error
 	PendingCommands() ([]Envelope, error)
@@ -168,7 +172,13 @@ func (s *Service) Submit(command Command) (Task, error) {
 		}
 	}
 	if s.publisher != nil {
-		if err := s.publisher.Publish(context.Background(), envelope); err != nil {
+		err := s.publisher.Publish(context.Background(), envelope)
+		if tracker, ok := s.store.(DeliveryAttemptStore); ok {
+			if recordErr := tracker.RecordDeliveryAttempt(envelope.MessageID, err); recordErr != nil {
+				return Task{}, fmt.Errorf("record command delivery attempt: %w", recordErr)
+			}
+		}
+		if err != nil {
 			return Task{}, fmt.Errorf("publish command: %w", err)
 		}
 		if outbox, ok := s.store.(CommandOutbox); ok {
@@ -433,14 +443,20 @@ func (s *Service) record(task *Task, event Event) error {
 		if s.eventPublisher == nil {
 			continue
 		}
-		if err := s.eventPublisher.PublishEvent(context.Background(), eventEnvelope); err == nil {
+		publishErr := s.eventPublisher.PublishEvent(context.Background(), eventEnvelope)
+		if tracker, ok := s.store.(DeliveryAttemptStore); ok {
+			if err := tracker.RecordDeliveryAttempt(eventEnvelope.MessageID, publishErr); err != nil {
+				return fmt.Errorf("record event delivery attempt: %w", err)
+			}
+		}
+		if publishErr == nil {
 			if outbox, ok := s.store.(EventOutbox); ok {
 				if err := outbox.MarkEventPublished(eventEnvelope.MessageID); err != nil {
 					return fmt.Errorf("mark task event published: %w", err)
 				}
 			}
 		} else if !hasOutbox {
-			return fmt.Errorf("publish task event: %w", err)
+			return fmt.Errorf("publish task event: %w", publishErr)
 		}
 	}
 	return nil
@@ -461,7 +477,13 @@ func (s *Service) ReplayPendingCommands(ctx context.Context) error {
 		return err
 	}
 	for _, envelope := range pending {
-		if err := s.publisher.Publish(ctx, envelope); err != nil {
+		err := s.publisher.Publish(ctx, envelope)
+		if tracker, ok := s.store.(DeliveryAttemptStore); ok {
+			if recordErr := tracker.RecordDeliveryAttempt(envelope.MessageID, err); recordErr != nil {
+				return recordErr
+			}
+		}
+		if err != nil {
 			return err
 		}
 		if err := outbox.MarkCommandPublished(envelope.MessageID); err != nil {
@@ -486,7 +508,13 @@ func (s *Service) ReplayPendingEvents(ctx context.Context) error {
 		return err
 	}
 	for _, envelope := range pending {
-		if err := s.eventPublisher.PublishEvent(ctx, envelope); err != nil {
+		err := s.eventPublisher.PublishEvent(ctx, envelope)
+		if tracker, ok := s.store.(DeliveryAttemptStore); ok {
+			if recordErr := tracker.RecordDeliveryAttempt(envelope.MessageID, err); recordErr != nil {
+				return recordErr
+			}
+		}
+		if err != nil {
 			return err
 		}
 		if err := outbox.MarkEventPublished(envelope.MessageID); err != nil {

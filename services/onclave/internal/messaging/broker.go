@@ -35,6 +35,8 @@ type EventPublisher interface {
 
 type DeliveryHandler func(Envelope) error
 
+const maxDeliveryRedeliveries = 3
+
 type subscriptionSetup func() (*amqp.Channel, string, <-chan amqp.Delivery, error)
 
 type Subscription struct {
@@ -83,7 +85,7 @@ func (subscription *Subscription) run(ctx context.Context, setup subscriptionSet
 					}
 					envelope.RoutingKey = delivery.RoutingKey
 					if err := handler(envelope); err != nil {
-						_ = delivery.Nack(false, true)
+						_ = delivery.Nack(false, deliveryRedeliveryCount(delivery.Headers) < maxDeliveryRedeliveries)
 						continue
 					}
 					_ = delivery.Ack(false)
@@ -360,7 +362,7 @@ func consumeDeliveries(ctx context.Context, subscription *Subscription, deliveri
 			}
 			envelope.RoutingKey = delivery.RoutingKey
 			if err := handler(envelope); err != nil {
-				_ = delivery.Nack(false, true)
+				_ = delivery.Nack(false, deliveryRedeliveryCount(delivery.Headers) < maxDeliveryRedeliveries)
 				continue
 			}
 			_ = delivery.Ack(false)
@@ -421,6 +423,31 @@ func messageExpiration(expiresAt string) string {
 		milliseconds = 1
 	}
 	return fmt.Sprintf("%d", milliseconds)
+}
+
+func deliveryRedeliveryCount(headers amqp.Table) int {
+	value, ok := headers["x-death"]
+	if !ok {
+		return 0
+	}
+	deaths, ok := value.([]interface{})
+	if !ok {
+		return 0
+	}
+	count := 0
+	for _, death := range deaths {
+		table, ok := death.(amqp.Table)
+		if !ok {
+			continue
+		}
+		switch value := table["count"].(type) {
+		case int64:
+			count += int(value)
+		case int:
+			count += value
+		}
+	}
+	return count
 }
 
 func queueSegment(agentID string) string {

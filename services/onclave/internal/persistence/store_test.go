@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -94,6 +95,28 @@ func TestSubscriptionRoundTripAndExpiryCleanup(t *testing.T) {
 	}
 	if _, err := store.GetSubscription(subscription.SubscriptionID); err != messaging.ErrSubscriptionNotFound {
 		t.Fatalf("expected expired subscription cleanup, got %v", err)
+	}
+}
+
+func TestDeliveryAttemptsAccumulateAndRetainLastError(t *testing.T) {
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.RecordDeliveryAttempt("message-1", errors.New("broker unavailable")); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordDeliveryAttempt("message-1", nil); err != nil {
+		t.Fatal(err)
+	}
+	var attempts int
+	var lastError string
+	if err := store.db.QueryRow(`SELECT attempts, last_error FROM delivery_attempts WHERE message_id = ?`, "message-1").Scan(&attempts, &lastError); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 2 || lastError != "" {
+		t.Fatalf("unexpected delivery attempt record: attempts=%d error=%q", attempts, lastError)
 	}
 }
 
