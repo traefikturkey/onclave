@@ -258,6 +258,32 @@ func (s *Service) AuthorizeSession(agentID, token string) error {
 	return nil
 }
 
+func (s *Service) RenewSession(agentID, token string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	agent, err := s.agent(agentID)
+	if err != nil {
+		return err
+	}
+	if agent.status == StatusRevoked {
+		return ErrRevoked
+	}
+	if agent.status != StatusAuthenticated && agent.status != StatusRegistered {
+		return ErrNotAuthenticated
+	}
+	if token == "" || token != agent.sessionToken {
+		return ErrInvalidSession
+	}
+	if !agent.sessionExpiresAt.IsZero() && !s.now().Before(agent.sessionExpiresAt) {
+		return ErrInvalidSession
+	}
+	if s.policy.SessionTTL <= 0 {
+		return nil
+	}
+	agent.sessionExpiresAt = s.now().Add(s.policy.SessionTTL)
+	return s.save(agent)
+}
+
 func (s *Service) AgentForSession(token string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/coder/websocket"
@@ -29,6 +30,7 @@ func (s *Server) agentSession(writer http.ResponseWriter, request *http.Request)
 
 	ctx, cancel := context.WithCancel(request.Context())
 	defer cancel()
+	sessionToken := strings.TrimPrefix(request.Header.Get("Authorization"), "Bearer ")
 	var writeMu sync.Mutex
 	write := func(value any) error {
 		writeMu.Lock()
@@ -88,6 +90,10 @@ func (s *Server) agentSession(writer http.ResponseWriter, request *http.Request)
 		}
 		switch message.Type {
 		case "heartbeat":
+			if err := s.admission.RenewSession(agentID, sessionToken); err != nil {
+				_ = write(errMessage(err, "session.renew.failed"))
+				return
+			}
 			if err := write(map[string]string{"type": "heartbeat.ack"}); err != nil {
 				return
 			}

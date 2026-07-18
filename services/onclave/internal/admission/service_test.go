@@ -142,7 +142,15 @@ func TestSessionLeaseExpires(t *testing.T) {
 	if err := service.AuthorizeSession("lease-agent", token); err != nil {
 		t.Fatal(err)
 	}
-	now = now.Add(time.Hour)
+	now = now.Add(30 * time.Minute)
+	if err := service.RenewSession("lease-agent", token); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(45 * time.Minute)
+	if err := service.AuthorizeSession("lease-agent", token); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(16 * time.Minute)
 	if err := service.AuthorizeSession("lease-agent", token); err != ErrInvalidSession {
 		t.Fatalf("expected expired session, got %v", err)
 	}
