@@ -18,4 +18,4 @@ docker run --rm \
   -w /src/services/onclave \
   -e "ONCLAVE_RABBITMQ_TEST_URL=amqp://onclave:${password}@127.0.0.1:5672/%2Fonclave" \
   golang:1.26-alpine \
-  go test ./... -count=1
+  go test ./... -count=1 -v
