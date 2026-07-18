@@ -66,6 +66,9 @@ class OnclaveGatewayClient:
     def complete(self, task_id: str, result: dict[str, Any]) -> None:
         self._empty_request("POST", f"/v1/tasks/{task_id}/complete", {"result": result})
 
+    def fail(self, task_id: str, result: dict[str, Any]) -> None:
+        self._empty_request("POST", f"/v1/tasks/{task_id}/fail", {"result": result})
+
     def cancel(self, task_id: str) -> None:
         self._empty_request("POST", f"/v1/tasks/{task_id}/cancel")
 

@@ -48,6 +48,22 @@ class HermesAdapterTests(unittest.TestCase):
             client.get_task("task-1")
         self.assertEqual(context.exception.status, 403)
 
+    def test_reports_failed_task_with_gateway_bearer_auth(self) -> None:
+        requests: list[Request] = []
+
+        def request(request: Request) -> FakeResponse:
+            requests.append(request)
+            return FakeResponse(204, None)
+
+        client = OnclaveGatewayClient(
+            OnclaveGatewayConfig("https://gateway.example", "session-token", "agent-hermes"),
+            request,
+        )
+        client.fail("task-1", {"error": "tool failed"})
+
+        self.assertEqual(requests[0].full_url, "https://gateway.example/v1/tasks/task-1/fail")
+        self.assertEqual(json.loads(requests[0].data.decode("utf-8")), {"result": {"error": "tool failed"}})
+
 
 if __name__ == "__main__":
     unittest.main()

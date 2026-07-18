@@ -35,6 +35,8 @@ client.acknowledge("task-1")
 client.start("task-1")
 client.progress("task-1", 50, "tests running")
 client.complete("task-1", {"passed": True})
+# Or report a terminal failure:
+client.fail("task-1", {"error": "tool failed"})
 ```
 
 All requests use the gateway bearer token. The adapter supports task submission, lookup, acknowledgement, start, progress, completion, and cancellation. Long-lived inbound delivery should use the gateway WebSocket contract described in `docs/agent-gateway.md`; RabbitMQ remains internal to Onclave.
