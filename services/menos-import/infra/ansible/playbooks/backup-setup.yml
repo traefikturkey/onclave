@@ -1,0 +1,61 @@
+---
+- name: Set up menos data backup infrastructure
+  hosts: menos
+  become: true
+
+  vars:
+    backup_path: /backups/menos
+    backup_script_dest: /apps/menos/scripts/backup.sh
+    backup_log: /var/log/menos-backup.log
+
+  tasks:
+    - name: Create backup directory
+      ansible.builtin.file:
+        path: "{{ backup_path }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+
+    - name: Create scripts directory
+      ansible.builtin.file:
+        path: "{{ deploy_path }}/scripts"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+
+    - name: Deploy backup script
+      ansible.builtin.copy:
+        src: "/project/infra/scripts/backup.sh"
+        dest: "{{ backup_script_dest }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Create backup log file
+      ansible.builtin.file:
+        path: "{{ backup_log }}"
+        state: touch
+        owner: root
+        group: root
+        mode: "0644"
+      changed_when: false
+
+    - name: Install daily backup cron job
+      ansible.builtin.cron:
+        name: "menos daily data backup"
+        minute: "0"
+        hour: "3"
+        job: "{{ backup_script_dest }} >> {{ backup_log }} 2>&1"
+        user: root
+
+    - name: Verify cron job is registered
+      ansible.builtin.command:
+        cmd: crontab -l
+      register: cron_contents
+      changed_when: false
+
+    - name: Display cron configuration
+      ansible.builtin.debug:
+        msg: "Backup cron job is {{ 'active' if backup_script_dest in cron_contents.stdout else 'NOT FOUND' }}"

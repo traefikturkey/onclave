@@ -1,0 +1,32 @@
+---
+- name: Quick update menos stack
+  hosts: menos
+  become: true
+
+  tasks:
+    - name: Pull latest images
+      ansible.builtin.command:
+        cmd: docker compose pull
+        chdir: "{{ deploy_path }}"
+      changed_when: true
+
+    - name: Restart services with new images
+      ansible.builtin.command:
+        cmd: docker compose up -d --remove-orphans
+        chdir: "{{ deploy_path }}"
+      changed_when: true
+
+    - name: Wait for services
+      ansible.builtin.pause:
+        seconds: 5
+
+    - name: Show service status
+      ansible.builtin.command:
+        cmd: docker compose ps
+        chdir: "{{ deploy_path }}"
+      register: compose_status
+      changed_when: false
+
+    - name: Display status
+      ansible.builtin.debug:
+        var: compose_status.stdout_lines

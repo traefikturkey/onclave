@@ -1,0 +1,112 @@
+---
+- name: Ensure Infisical deploy directory exists
+  ansible.builtin.file:
+    path: "{{ infisical_deploy_path }}"
+    state: directory
+    mode: "0750"
+
+- name: Assert Cloudflare token is present when DNS-01 is enabled
+  ansible.builtin.assert:
+    that:
+      - vault_infisical_cloudflare_api_token is defined
+      - vault_infisical_cloudflare_api_token | length > 0
+    fail_msg: "vault_infisical_cloudflare_api_token is required when infisical_caddy_dns01_enabled=true"
+  no_log: true
+  when: infisical_caddy_dns01_enabled | bool
+
+- name: Render Infisical compose file
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ infisical_deploy_path }}/docker-compose.yml"
+    mode: "0640"
+  notify: Restart infisical compose
+
+- name: Render Infisical environment file
+  ansible.builtin.template:
+    src: infisical-env.j2
+    dest: "{{ infisical_deploy_path }}/infisical.env"
+    mode: "0600"
+  no_log: true
+  diff: false
+  notify: Restart infisical compose
+
+- name: Render Caddy environment file
+  ansible.builtin.template:
+    src: caddy-env.j2
+    dest: "{{ infisical_deploy_path }}/caddy.env"
+    mode: "0600"
+  no_log: true
+  diff: false
+  notify: Restart infisical compose
+  when: infisical_caddy_dns01_enabled | bool
+
+- name: Render Caddyfile
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: "{{ infisical_deploy_path }}/Caddyfile"
+    mode: "0644"
+  notify: Restart infisical compose
+
+- name: Render Caddy Dockerfile
+  ansible.builtin.template:
+    src: Dockerfile.caddy.j2
+    dest: "{{ infisical_deploy_path }}/Dockerfile.caddy"
+    mode: "0644"
+  notify: Restart infisical compose
+  when: infisical_caddy_build_enabled | bool
+
+- name: Check HTTPS port availability
+  ansible.builtin.command:
+    cmd: ss -ltn sport = :443
+  register: infisical_https_port
+  changed_when: false
+  failed_when: false
+  when: infisical_caddy_bind_https | bool
+
+- name: Report HTTPS port preflight
+  ansible.builtin.debug:
+    msg: "Port 443 is {{ 'already listening; confirm this is expected before deploy' if infisical_https_port.stdout | length > 0 else 'available' }}"
+  when: infisical_caddy_bind_https | bool
+
+- name: Check HTTP port availability when enabled
+  ansible.builtin.command:
+    cmd: ss -ltn sport = :80
+  register: infisical_http_port
+  changed_when: false
+  failed_when: false
+  when: infisical_caddy_bind_http | bool
+
+- name: Report HTTP port preflight
+  ansible.builtin.debug:
+    msg: "Port 80 is {{ 'already listening; confirm this is expected before deploy' if infisical_http_port.stdout | length > 0 else 'available' }}"
+  when: infisical_caddy_bind_http | bool
+
+- name: Pull Infisical compose images
+  ansible.builtin.command:
+    cmd: docker compose -p {{ infisical_compose_project }} pull --ignore-buildable
+    chdir: "{{ infisical_deploy_path }}"
+  changed_when: true
+
+- name: Build Infisical Caddy image
+  ansible.builtin.command:
+    cmd: docker compose -p {{ infisical_compose_project }} build caddy
+    chdir: "{{ infisical_deploy_path }}"
+  changed_when: true
+  when: infisical_caddy_build_enabled | bool
+
+- name: Validate Caddy Cloudflare DNS module is present
+  ansible.builtin.command:
+    cmd: docker run --rm {{ infisical_caddy_image }} caddy list-modules
+  register: infisical_caddy_modules
+  changed_when: false
+  failed_when: "'dns.providers.cloudflare' not in infisical_caddy_modules.stdout"
+  when: infisical_caddy_dns01_enabled | bool
+
+- name: Start Infisical compose project
+  ansible.builtin.command:
+    cmd: docker compose -p {{ infisical_compose_project }} up -d
+    chdir: "{{ infisical_deploy_path }}"
+  changed_when: true
+
+- name: Configure Infisical backups
+  ansible.builtin.include_tasks: backup.yml

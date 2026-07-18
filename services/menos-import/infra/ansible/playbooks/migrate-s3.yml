@@ -1,0 +1,183 @@
+---
+# Offline migration from MinIO to Garage.
+#
+# Run from the Ansible container:
+#   docker compose run --rm ansible ansible-playbook \
+#     -i inventory/hosts.yml playbooks/migrate-s3.yml
+#
+# Prerequisites:
+#   - .env must define S3_ACCESS_KEY, S3_SECRET_KEY, GARAGE_RPC_SECRET, GARAGE_ADMIN_TOKEN
+#   - docker-compose.migration.yml must be present in files/menos/
+#
+- name: Migrate S3 data from MinIO to Garage
+  hosts: menos
+  become: true
+
+  tasks:
+    # ---- Stop API to prevent writes during migration ----
+    - name: Stop menos-api to enforce offline migration
+      ansible.builtin.command:
+        cmd: docker compose stop menos-api
+        chdir: "{{ deploy_path }}"
+      changed_when: true
+
+    # ---- Start Garage alongside MinIO ----
+    - name: Copy migration compose override
+      ansible.builtin.copy:
+        src: "../files/menos/docker-compose.migration.yml"
+        dest: "{{ deploy_path }}/docker-compose.migration.yml"
+        mode: "0644"
+
+    - name: Create Garage data directories
+      ansible.builtin.file:
+        path: "{{ data_path }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop:
+        - garage/meta
+        - garage/data
+
+    - name: Copy garage.toml configuration
+      ansible.builtin.copy:
+        src: "../files/menos/garage.toml"
+        dest: "{{ deploy_path }}/garage.toml"
+        mode: "0644"
+
+    - name: Start Garage via migration compose override
+      ansible.builtin.command:
+        cmd: docker compose -f docker-compose.yml -f docker-compose.migration.yml up -d garage
+        chdir: "{{ deploy_path }}"
+      changed_when: true
+
+    - name: Wait for Garage S3 API to be ready
+      ansible.builtin.uri:
+        url: "http://localhost:3903/health"
+        status_code: 200
+      register: garage_health
+      retries: 10
+      delay: 3
+      until: garage_health.status == 200
+
+    # ---- Initialize Garage cluster ----
+    - name: Get Garage node ID
+      ansible.builtin.command:
+        cmd: docker exec menos-garage /garage node id -q
+      register: garage_node_id
+      changed_when: false
+
+    - name: Display Garage node ID
+      ansible.builtin.debug:
+        msg: "Garage node ID: {{ garage_node_id.stdout }}"
+
+    - name: Assign Garage cluster layout
+      ansible.builtin.command:
+        cmd: >
+          docker exec menos-garage /garage layout assign
+          -z dc1 -c 1G {{ garage_node_id.stdout }}
+      register: garage_layout_assign
+      changed_when: "'already' not in garage_layout_assign.stderr"
+
+    - name: Apply Garage cluster layout
+      ansible.builtin.command:
+        cmd: docker exec menos-garage /garage layout apply --version 1
+      register: garage_layout_apply
+      changed_when: "'already' not in garage_layout_apply.stderr"
+      failed_when:
+        - garage_layout_apply.rc != 0
+        - "'already' not in garage_layout_apply.stderr"
+
+    # ---- Create bucket and provision credentials ----
+    - name: Create menos bucket in Garage
+      ansible.builtin.command:
+        cmd: docker exec menos-garage /garage bucket create menos
+      register: garage_bucket_create
+      changed_when: "'already' not in garage_bucket_create.stderr"
+      failed_when:
+        - garage_bucket_create.rc != 0
+        - "'already' not in garage_bucket_create.stderr"
+
+    - name: Import app credentials into Garage
+      ansible.builtin.command:
+        cmd: >
+          docker exec menos-garage /garage key import
+          -n app-key {{ s3_access_key }} {{ s3_secret_key }}
+      environment:
+        s3_access_key: "{{ lookup('env', 'S3_ACCESS_KEY') | default('minioadmin', true) }}"
+        s3_secret_key: "{{ lookup('env', 'S3_SECRET_KEY') | default('changeme', true) }}"
+      register: garage_key_import
+      changed_when: "'already' not in garage_key_import.stderr"
+      failed_when:
+        - garage_key_import.rc != 0
+        - "'already' not in garage_key_import.stderr"
+
+    - name: Grant bucket permissions to app key
+      ansible.builtin.command:
+        cmd: >
+          docker exec menos-garage /garage bucket allow
+          --read --write --owner menos
+          --key {{ s3_access_key }}
+      environment:
+        s3_access_key: "{{ lookup('env', 'S3_ACCESS_KEY') | default('minioadmin', true) }}"
+      changed_when: true
+
+    # ---- Run migration ----
+    - name: Copy migration script to server
+      ansible.builtin.copy:
+        src: "/project/api/scripts/migrate_s3_data.py"
+        dest: "{{ deploy_path }}/migrate_s3_data.py"
+        mode: "0755"
+
+    - name: Run S3 data migration
+      ansible.builtin.command:
+        cmd: >
+          docker exec menos-api python /app/scripts/migrate_s3_data.py
+          --source-endpoint minio:9000
+          --source-access-key minioadmin
+          --source-secret-key minioadmin
+          --dest-endpoint garage:3900
+          --dest-access-key {{ s3_access_key }}
+          --dest-secret-key {{ s3_secret_key }}
+          --dest-region garage
+          --bucket menos
+        chdir: "{{ deploy_path }}"
+      environment:
+        s3_access_key: "{{ lookup('env', 'S3_ACCESS_KEY') | default('minioadmin', true) }}"
+        s3_secret_key: "{{ lookup('env', 'S3_SECRET_KEY') | default('changeme', true) }}"
+      register: migration_result
+      changed_when: true
+
+    - name: Display migration output
+      ansible.builtin.debug:
+        var: migration_result.stdout_lines
+
+    # ---- Verify migration ----
+    - name: Verify Garage bucket has objects
+      ansible.builtin.command:
+        cmd: docker exec menos-garage /garage bucket info menos
+      register: garage_bucket_info
+      changed_when: false
+
+    - name: Display Garage bucket info
+      ansible.builtin.debug:
+        var: garage_bucket_info.stdout_lines
+
+    # ---- Cleanup ----
+    - name: Stop migration compose services
+      ansible.builtin.command:
+        cmd: docker compose -f docker-compose.yml -f docker-compose.migration.yml down
+        chdir: "{{ deploy_path }}"
+      changed_when: true
+
+    - name: Remove migration compose override
+      ansible.builtin.file:
+        path: "{{ deploy_path }}/docker-compose.migration.yml"
+        state: absent
+
+    - name: Migration complete
+      ansible.builtin.debug:
+        msg: >
+          Migration complete. Next steps:
+          1. Update .env to use S3_* variables pointing to Garage
+          2. Deploy with 'make deploy' to switch to Garage-only compose
+          3. Verify /ready endpoint shows "s3": "ok"
+          4. Remove old MinIO data once confirmed

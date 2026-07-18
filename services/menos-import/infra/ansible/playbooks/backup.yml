@@ -1,0 +1,41 @@
+---
+- name: Backup current server configuration
+  hosts: menos
+  become: true
+
+  tasks:
+    - name: Fetch docker-compose.yml
+      ansible.builtin.fetch:
+        src: "{{ deploy_path }}/docker-compose.yml"
+        dest: "../files/menos/docker-compose.yml.bak"
+        flat: true
+      ignore_errors: true
+
+    - name: Fetch .env (redacted)
+      ansible.builtin.shell:
+        cmd: "grep -v PASSWORD {{ deploy_path }}/.env | grep -v SECRET"
+        chdir: "{{ deploy_path }}"
+      register: env_content
+      changed_when: false
+      ignore_errors: true
+
+    - name: Save redacted .env locally
+      ansible.builtin.copy:
+        content: "{{ env_content.stdout }}"
+        dest: "../files/menos/.env.backup"
+        mode: "0644"
+      delegate_to: localhost
+      become: false
+      when: env_content.rc == 0
+
+    - name: Get current service status
+      ansible.builtin.command:
+        cmd: docker compose ps --format json
+        chdir: "{{ deploy_path }}"
+      register: services
+      changed_when: false
+      ignore_errors: true
+
+    - name: Display service info
+      ansible.builtin.debug:
+        var: services.stdout_lines

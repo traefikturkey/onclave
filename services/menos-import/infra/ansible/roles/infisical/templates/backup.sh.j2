@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+BACKUP_ROOT="{{ infisical_backup_path | default('/backups/menos/infisical') }}"
+DEPLOY_DIR="{{ infisical_deploy_path }}"
+COMPOSE_PROJECT="{{ infisical_compose_project }}"
+RETENTION_DAYS="14"
+WARN_PCT="80"
+AGE_RECIPIENT_FILE="{{ infisical_age_recipient_file | default('/apps/menos/backup-age-recipient.txt') }}"
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+WORKDIR="$(mktemp -d)"
+
+cleanup() {
+  rm -rf "$WORKDIR"
+}
+trap cleanup EXIT
+
+log() {
+  logger -t infisical-backup "$*"
+  printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"
+}
+
+mkdir -p "$BACKUP_ROOT"
+chmod 0750 "$BACKUP_ROOT"
+
+if [ ! -r "$AGE_RECIPIENT_FILE" ]; then
+  log "status=failure reason=missing_age_recipient file=$AGE_RECIPIENT_FILE"
+  exit 1
+fi
+
+cd "$DEPLOY_DIR"
+
+docker compose -p "$COMPOSE_PROJECT" exec -T infisical-postgres \
+  pg_dump -U "{{ infisical_postgres_user }}" "{{ infisical_postgres_db }}" > "$WORKDIR/infisical-postgres.sql"
+
+cp "$DEPLOY_DIR/infisical.env" "$WORKDIR/infisical.env"
+chmod 0600 "$WORKDIR/infisical.env"
+
+tar -C "$WORKDIR" -czf "$WORKDIR/infisical-backup-${STAMP}.tar.gz" \
+  infisical-postgres.sql \
+  infisical.env
+
+age -R "$AGE_RECIPIENT_FILE" \
+  -o "$BACKUP_ROOT/infisical-backup-${STAMP}.tar.gz.age" \
+  "$WORKDIR/infisical-backup-${STAMP}.tar.gz"
+
+find "$BACKUP_ROOT" -name 'infisical-backup-*.tar.gz.age' -type f -mtime +"$RETENTION_DAYS" -delete
+
+usage_pct="$(docker system df -v 2>/dev/null | awk '/infisical_postgres_data/ { gsub(/%/, "", $NF); print $NF; exit }' || true)"
+if [ -n "${usage_pct:-}" ] && [ "$usage_pct" -gt "$WARN_PCT" ] 2>/dev/null; then
+  log "status=warning check=df volume=infisical_postgres_data usage_pct=$usage_pct threshold_pct=$WARN_PCT"
+fi
+
+log "status=success artifact=$BACKUP_ROOT/infisical-backup-${STAMP}.tar.gz.age retention_days=$RETENTION_DAYS"

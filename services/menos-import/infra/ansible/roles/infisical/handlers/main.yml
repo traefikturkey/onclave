@@ -1,0 +1,6 @@
+---
+- name: Restart infisical compose
+  ansible.builtin.command:
+    cmd: docker compose -p {{ infisical_compose_project }} up -d
+    chdir: "{{ infisical_deploy_path }}"
+  changed_when: true

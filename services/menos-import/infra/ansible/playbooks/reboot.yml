@@ -1,0 +1,25 @@
+---
+- name: Reboot server
+  hosts: menos
+  become: true
+
+  tasks:
+    - name: Reboot the server
+      ansible.builtin.reboot:
+        reboot_timeout: 300
+        msg: "Rebooting to fix nvidia driver mismatch"
+
+    - name: Wait for server to come back
+      ansible.builtin.wait_for_connection:
+        delay: 10
+        timeout: 300
+
+    - name: Verify nvidia-smi works
+      ansible.builtin.command:
+        cmd: nvidia-smi
+      register: nvidia_result
+      changed_when: false
+
+    - name: Show nvidia status
+      ansible.builtin.debug:
+        var: nvidia_result.stdout_lines

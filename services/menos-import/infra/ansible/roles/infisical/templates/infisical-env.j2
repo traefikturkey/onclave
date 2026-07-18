@@ -1,0 +1,9 @@
+ENCRYPTION_KEY={{ vault_infisical_encryption_key }}
+AUTH_SECRET={{ vault_infisical_auth_secret }}
+SITE_URL=https://{{ infisical_domain }}
+DB_CONNECTION_URI=postgresql://{{ infisical_postgres_user }}:{{ vault_infisical_postgres_password | urlencode }}@infisical-postgres:5432/{{ infisical_postgres_db }}
+SMTP_HOST=
+SMTP_PORT=
+SMTP_USERNAME=
+SMTP_PASSWORD=
+SMTP_FROM_ADDRESS=

@@ -1,0 +1,48 @@
+---
+# Directory where Infisical compose files and env are rendered.
+infisical_deploy_path: "{{ deploy_path }}/infisical"
+
+# Public hostname for the Infisical UI and API, without scheme.
+infisical_domain: "infisical.ilude.com"
+
+# Email used by Caddy for ACME registration notices.
+infisical_caddy_email: "admin@example.com"
+
+# Infisical image tag. Pin deliberately; update through a planned upgrade.
+infisical_image: "infisical/infisical:v0.119.0-postgres"
+
+# Build a local Caddy image with the Cloudflare DNS provider module.
+infisical_caddy_build_enabled: true
+infisical_caddy_image: "infisical-caddy-cloudflare:2.8.4"
+infisical_caddy_version: "2.8.4"
+infisical_xcaddy_version: "v0.4.4"
+infisical_caddy_cloudflare_module: "github.com/caddy-dns/cloudflare"
+infisical_caddy_cloudflare_module_version: "v0.2.1"
+
+# DNS-01 certificate settings. Start on staging to avoid production rate limits.
+infisical_caddy_dns01_enabled: true
+infisical_caddy_acme_dns_provider: "cloudflare"
+infisical_caddy_dns_resolvers: []
+infisical_caddy_letsencrypt_staging: true
+
+# HTTP is optional for DNS-01. HTTPS remains bound for clients.
+infisical_caddy_bind_http: false
+infisical_caddy_bind_https: true
+
+# Dedicated Postgres image. Major/minor is pinned by design.
+infisical_postgres_image: "postgres:16.4-alpine"
+
+# Postgres database name for Infisical.
+infisical_postgres_db: "infisical"
+
+# Postgres user for Infisical.
+infisical_postgres_user: "infisical"
+
+# Docker compose project name.
+infisical_compose_project: "infisical"
+
+# Vault variables required by templates:
+# - vault_infisical_encryption_key: 32-byte or stronger Infisical encryption key from password manager.
+# - vault_infisical_auth_secret: strong random auth secret from password manager.
+# - vault_infisical_postgres_password: strong random password for the dedicated Postgres user.
+# - vault_infisical_cloudflare_api_token: Cloudflare API token scoped to ilude.com with Zone:Read and DNS:Edit.

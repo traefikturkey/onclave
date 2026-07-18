@@ -1,0 +1,19 @@
+{
+	email {{ infisical_caddy_email }}
+{% if infisical_caddy_letsencrypt_staging | bool %}
+	acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+{% endif %}
+}
+
+{{ infisical_domain | lower }} {
+	encode zstd gzip
+{% if infisical_caddy_dns01_enabled | bool %}
+	tls {
+		dns {{ infisical_caddy_acme_dns_provider }} {env.CLOUDFLARE_API_TOKEN}
+{% if infisical_caddy_dns_resolvers | default([]) | length > 0 %}
+		resolvers {{ infisical_caddy_dns_resolvers | join(' ') }}
+{% endif %}
+	}
+{% endif %}
+	reverse_proxy infisical:8080
+}

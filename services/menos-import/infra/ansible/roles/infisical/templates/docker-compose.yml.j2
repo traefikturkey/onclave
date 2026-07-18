@@ -1,0 +1,70 @@
+---
+services:
+  caddy:
+{% if infisical_caddy_build_enabled | bool %}
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+{% endif %}
+    image: "{{ infisical_caddy_image }}"
+    container_name: infisical-caddy
+    restart: unless-stopped
+    ports:
+{% if infisical_caddy_bind_http | bool %}
+      - "80:80"
+{% endif %}
+{% if infisical_caddy_bind_https | bool %}
+      - "443:443"
+{% endif %}
+    env_file:
+      - "./caddy.env"
+    labels:
+      - "coredns.host.name={{ infisical_domain | lower }}"
+    volumes:
+      - "./Caddyfile:/etc/caddy/Caddyfile:ro"
+      - "caddy_data:/data"
+      - "caddy_config:/config"
+    networks:
+      - infisical_public
+
+  infisical:
+    image: "{{ infisical_image }}"
+    container_name: infisical
+    restart: unless-stopped
+    env_file:
+      - "./infisical.env"
+    depends_on:
+      infisical-postgres:
+        condition: service_healthy
+    networks:
+      - infisical_public
+      - infisical_internal
+
+  infisical-postgres:
+    # Keep a literal pinned Postgres image here so review checks catch accidental unpinning.
+    image: postgres:16.4-alpine
+    container_name: infisical-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "{{ infisical_postgres_db }}"
+      POSTGRES_USER: "{{ infisical_postgres_user }}"
+      POSTGRES_PASSWORD: "{{ vault_infisical_postgres_password }}"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U {{ infisical_postgres_user }} -d {{ infisical_postgres_db }}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - "infisical_postgres_data:/var/lib/postgresql/data"
+    networks:
+      - infisical_internal
+
+networks:
+  infisical_public:
+  infisical_internal:
+    internal: true
+
+volumes:
+  caddy_data:
+  caddy_config:
+  infisical_postgres_data:

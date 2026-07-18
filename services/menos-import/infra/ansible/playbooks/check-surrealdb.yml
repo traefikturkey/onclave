@@ -1,0 +1,31 @@
+---
+- name: Check SurrealDB status
+  hosts: menos
+  become: true
+
+  tasks:
+    - name: Get SurrealDB container logs
+      ansible.builtin.command:
+        cmd: docker logs menos-surrealdb --tail 50
+      register: surrealdb_logs
+      changed_when: false
+      failed_when: false
+
+    - name: Show SurrealDB logs
+      ansible.builtin.debug:
+        var: surrealdb_logs.stdout_lines
+
+    - name: Show SurrealDB errors
+      ansible.builtin.debug:
+        var: surrealdb_logs.stderr_lines
+
+    - name: Get container inspect
+      ansible.builtin.command:
+        cmd: docker inspect menos-surrealdb --format '{{ "{{" }}.State.Status{{ "}}" }} - Exit:{{ "{{" }}.State.ExitCode{{ "}}" }} - {{ "{{" }}.State.Error{{ "}}" }}'
+      register: container_state
+      changed_when: false
+      failed_when: false
+
+    - name: Show container state
+      ansible.builtin.debug:
+        var: container_state.stdout

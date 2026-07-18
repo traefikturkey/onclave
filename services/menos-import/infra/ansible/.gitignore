@@ -1,0 +1,4 @@
+
+# Local secret/runtime settings
+infisical.secret
+.local/

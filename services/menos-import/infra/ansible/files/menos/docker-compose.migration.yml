@@ -1,0 +1,22 @@
+# Compose override for running Garage alongside MinIO during migration.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.migration.yml up -d
+#
+# This adds a temporary MinIO service alongside the existing Garage service
+# so the migration script can copy objects between them on the same Docker
+# network.
+
+services:
+  minio:
+    image: minio/minio:RELEASE.2024-06-13T22-53-53Z
+    container_name: menos-minio-migration
+    ports:
+      - "9000:9000"
+    volumes:
+      - ${DATA_PATH:-/apps/menos/data}/minio:/data
+    command: server /data
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    restart: "no"

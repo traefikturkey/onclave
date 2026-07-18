@@ -1,0 +1,7 @@
+---
+- name: Deploy Infisical stack
+  hosts: menos
+  become: true
+
+  roles:
+    - role: infisical

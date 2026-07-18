@@ -1,0 +1,28 @@
+---
+# Example menos deployment defaults. Copy to an inventory or vault-backed vars file as needed.
+ansible_host: 192.168.16.241
+deploy_path: /apps/menos
+data_path: /apps/menos/data
+
+# Infisical selectors. Runtime values may be overridden by inventory/group vars.
+menos_infisical_project: dotfiles
+menos_infisical_environment: prod
+menos_infisical_path: /menos
+menos_infisical_api_url: https://infisical.ilude.com
+menos_infisical_tmp_dir: /dev/shm/menos
+menos_infisical_runtime_env_out: "{{ deploy_path }}/.env"
+menos_infisical_runtime_env_mode: "0600"
+menos_infisical_required_keys:
+  - SURREALDB_PASSWORD
+  - SURREALDB_NAMESPACE
+  - SURREALDB_DATABASE
+  - S3_ACCESS_KEY
+  - S3_SECRET_KEY
+  - S3_BUCKET
+  - GARAGE_RPC_SECRET
+  - GARAGE_ADMIN_TOKEN
+  - SEARXNG_SECRET
+
+# Secret-bearing machine identity inputs must be supplied by Ansible vault.
+menos_infisical_machine_client_id: "{{ vault_menos_infisical_machine_client_id }}"
+menos_infisical_machine_client_secret: "{{ vault_menos_infisical_machine_client_secret }}"

@@ -1,0 +1,17 @@
+# syntax=docker/dockerfile:1
+ARG CADDY_VERSION={{ infisical_caddy_version }}
+ARG XCADDY_VERSION={{ infisical_xcaddy_version }}
+ARG CLOUDFLARE_MODULE={{ infisical_caddy_cloudflare_module }}
+ARG CLOUDFLARE_MODULE_VERSION={{ infisical_caddy_cloudflare_module_version }}
+
+FROM caddy:${CADDY_VERSION}-builder-alpine AS builder
+ARG XCADDY_VERSION
+ARG CLOUDFLARE_MODULE
+ARG CLOUDFLARE_MODULE_VERSION
+RUN go install github.com/caddyserver/xcaddy/cmd/xcaddy@${XCADDY_VERSION} \
+    && /root/go/bin/xcaddy build v${CADDY_VERSION} \
+      --with ${CLOUDFLARE_MODULE}@${CLOUDFLARE_MODULE_VERSION}
+
+FROM caddy:${CADDY_VERSION}-alpine
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+RUN caddy list-modules | grep -F 'dns.providers.cloudflare'

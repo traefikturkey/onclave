@@ -1,0 +1,20 @@
+---
+- name: Ensure Infisical backup script directory exists
+  ansible.builtin.file:
+    path: "{{ infisical_deploy_path }}/scripts"
+    state: directory
+    mode: "0750"
+
+- name: Render Infisical backup script
+  ansible.builtin.template:
+    src: backup.sh.j2
+    dest: "{{ infisical_deploy_path }}/scripts/backup.sh"
+    mode: "0750"
+
+- name: Install Infisical nightly backup cron
+  ansible.builtin.cron:
+    name: "infisical nightly encrypted backup"
+    minute: "30"
+    hour: "3"
+    job: "{{ infisical_deploy_path }}/scripts/backup.sh"
+    user: root

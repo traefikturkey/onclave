@@ -1,0 +1,121 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    env_file:
+      - .env
+    container_name: menos-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ${DATA_PATH:-/apps/menos/data}/ollama:/root/.ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  surrealdb:
+    image: surrealdb/surrealdb:v2.6.1
+    env_file:
+      - .env
+    container_name: menos-surrealdb
+    ports:
+      - "8080:8000"
+    volumes:
+      - ${DATA_PATH:-/apps/menos/data}/surrealdb:/data
+    command: start --user root --pass ${SURREALDB_PASSWORD} file:/data/database.db
+    environment:
+      - SURREALDB_PASSWORD=${SURREALDB_PASSWORD}
+    restart: unless-stopped
+
+  garage:
+    image: dxflrs/garage:v2.2.0
+    env_file:
+      - .env
+    container_name: menos-garage
+    ports:
+      - "3900:3900"
+      - "3903:3903"
+    volumes:
+      - ${DATA_PATH:-/apps/menos/data}/garage/meta:/var/lib/garage/meta
+      - ${DATA_PATH:-/apps/menos/data}/garage/data:/var/lib/garage/data
+      - ./garage.toml:/etc/garage.toml:ro
+    environment:
+      - GARAGE_RPC_SECRET=${GARAGE_RPC_SECRET}
+      - GARAGE_ADMIN_TOKEN=${GARAGE_ADMIN_TOKEN}
+    restart: unless-stopped
+
+  searxng:
+    image: searxng/searxng:latest
+    env_file:
+      - .env
+    container_name: menos-searxng
+    ports:
+      - "8888:8080"
+    volumes:
+      - ./searxng:/etc/searxng
+    environment:
+      - SEARXNG_SECRET=${SEARXNG_SECRET}
+      - GRANIAN_HOST=0.0.0.0
+    restart: unless-stopped
+
+  docling-serve:
+    image: quay.io/docling-project/docling-serve-cpu
+    container_name: menos-docling-serve
+    ports:
+      - "5001:5001"
+    environment:
+      - DOCLING_SERVE_ENABLE_UI=0
+    restart: unless-stopped
+
+  menos-api:
+    env_file:
+      - .env
+    build:
+      context: ./api
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+    container_name: menos-api
+    ports:
+      - "8000:8000"
+    depends_on:
+      - surrealdb
+      - garage
+      - ollama
+      - docling-serve
+    environment:
+      - SURREALDB_URL=http://surrealdb:8000
+      - SURREALDB_USER=root
+      - SURREALDB_PASSWORD=${SURREALDB_PASSWORD}
+      - SURREALDB_NAMESPACE=${SURREALDB_NAMESPACE}
+      - SURREALDB_DATABASE=${SURREALDB_DATABASE}
+      - S3_ENDPOINT_URL=garage:3900
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_REGION=garage
+      - OLLAMA_URL=http://ollama:11434
+      - SSH_PUBLIC_KEYS_PATH=/keys
+      - WEBSHARE_PROXY_USERNAME=${WEBSHARE_PROXY_USERNAME}
+      - WEBSHARE_PROXY_PASSWORD=${WEBSHARE_PROXY_PASSWORD}
+      - YOUTUBE_API_KEY=${YOUTUBE_API_KEY}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - UNIFIED_PIPELINE_ENABLED=${UNIFIED_PIPELINE_ENABLED:-true}
+      - UNIFIED_PIPELINE_PROVIDER=${UNIFIED_PIPELINE_PROVIDER:-openrouter}
+      - UNIFIED_PIPELINE_MODEL=${UNIFIED_PIPELINE_MODEL:-}
+      - UNIFIED_PIPELINE_MAX_CONCURRENCY=${UNIFIED_PIPELINE_MAX_CONCURRENCY:-4}
+      - CALLBACK_URL=${CALLBACK_URL:-}
+      - CALLBACK_SECRET=${CALLBACK_SECRET:-}
+    volumes:
+      - ${DATA_PATH:-/apps/menos/data}/keys:/keys:ro
+    restart: unless-stopped
+
+networks:
+  default:
+    name: menos-network
