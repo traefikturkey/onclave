@@ -1,4 +1,7 @@
 set shell := ["bash", "-uc"]
+# On Windows, plain "bash" resolves to the System32 WSL launcher when just is
+# invoked from PowerShell; "sh" resolves to Git Bash's sh with no collision.
+set windows-shell := ["sh", "-uc"]
 
 preflight:
     bash ./scripts/preflight.sh
