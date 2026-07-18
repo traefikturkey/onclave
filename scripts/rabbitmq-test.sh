@@ -3,6 +3,7 @@ set -euo pipefail
 
 compose_file="infrastructure/docker/onclave-compose.yml"
 password="${ONCLAVE_RABBITMQ_PASSWORD:-local-stack-password-change-me}"
+export ONCLAVE_RABBITMQ_PASSWORD="$password"
 
 docker compose -f "$compose_file" up -d rabbitmq
 rabbitmq_container="$(docker compose -f "$compose_file" ps -q rabbitmq)"
