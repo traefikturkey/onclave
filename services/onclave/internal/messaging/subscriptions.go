@@ -73,6 +73,9 @@ func (s *Service) CreateSubscription(agentID, pattern, correlationID, taskID str
 	if err := store.SaveSubscription(subscription); err != nil {
 		return StoredSubscription{}, fmt.Errorf("persist subscription: %w", err)
 	}
+	if err := s.audit(AuditEvent{Type: "subscription.created", ActorAgentID: agentID, SubscriptionID: subscription.SubscriptionID, Details: map[string]any{"pattern": pattern}}); err != nil {
+		return StoredSubscription{}, err
+	}
 	return subscription, nil
 }
 
@@ -119,6 +122,9 @@ func (s *Service) RenewSubscription(subscriptionID, agentID string, expiresAt ti
 	if err := store.SaveSubscription(subscription); err != nil {
 		return StoredSubscription{}, fmt.Errorf("persist subscription renewal: %w", err)
 	}
+	if err := s.audit(AuditEvent{Type: "subscription.renewed", ActorAgentID: agentID, SubscriptionID: subscription.SubscriptionID, Details: map[string]any{"expiresAt": subscription.ExpiresAt}}); err != nil {
+		return StoredSubscription{}, err
+	}
 	return subscription, nil
 }
 
@@ -147,6 +153,9 @@ func (s *Service) UpdateSubscriptionCursor(subscriptionID, agentID string, curso
 	if err := store.SaveSubscription(subscription); err != nil {
 		return StoredSubscription{}, fmt.Errorf("persist subscription cursor: %w", err)
 	}
+	if err := s.audit(AuditEvent{Type: "subscription.cursor.updated", ActorAgentID: agentID, SubscriptionID: subscription.SubscriptionID, Details: map[string]any{"cursor": cursor}}); err != nil {
+		return StoredSubscription{}, err
+	}
 	return subscription, nil
 }
 
@@ -166,6 +175,9 @@ func (s *Service) DeleteSubscription(subscriptionID, agentID string) error {
 	}
 	if err := store.DeleteSubscription(subscriptionID); err != nil {
 		return fmt.Errorf("delete subscription: %w", err)
+	}
+	if err := s.audit(AuditEvent{Type: "subscription.deleted", ActorAgentID: agentID, SubscriptionID: subscriptionID}); err != nil {
+		return err
 	}
 	return nil
 }

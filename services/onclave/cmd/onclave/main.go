@@ -27,6 +27,7 @@ func main() {
 	defer stop()
 	var publisher messaging.Publisher
 	var subscriber *messaging.RabbitMQPublisher
+	var auditStore messaging.AuditStore
 	if serviceConfig.RabbitMQURL != "" {
 		rabbitPublisher, err := messaging.NewRabbitMQPublisherWithTLS(serviceConfig.RabbitMQURL, serviceConfig.RabbitMQExchange, serviceConfig.RabbitMQCAFile)
 		if err != nil {
@@ -40,6 +41,11 @@ func main() {
 		eventPublisher, _ := publisher.(messaging.EventPublisher)
 		deadLetterSubscription, err := subscriber.SubscribeDeadLetters(runContext, "gateway-core", func(envelope messaging.Envelope) error {
 			log.Printf("dead-lettered delivery message=%s task=%s routing=%s", envelope.MessageID, envelope.TaskID, envelope.RoutingKey)
+			if auditStore != nil {
+				if err := auditStore.RecordAudit(messaging.AuditEvent{Type: "delivery.dead_lettered", MessageID: envelope.MessageID, TaskID: envelope.TaskID, Details: map[string]any{"routingKey": envelope.RoutingKey}}); err != nil {
+					log.Printf("dead-letter audit failed: %v", err)
+				}
+			}
 			if eventPublisher == nil || envelope.SourceAgentID == "" {
 				return nil
 			}
@@ -71,6 +77,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer store.Close()
+	auditStore = store
 	admissionService, err := admission.NewServiceWithStore(admission.Policy{SessionTTL: serviceConfig.SessionTTL, AllowedCapabilities: serviceConfig.AllowedCapabilities}, store)
 	if err != nil {
 		log.Fatal(err)
@@ -100,6 +107,9 @@ func main() {
 				}
 				if err := store.PruneDeliveryAttempts(time.Now().Add(-serviceConfig.EventRetention)); err != nil {
 					log.Printf("delivery attempt cleanup failed: %v", err)
+				}
+				if err := store.PruneAuditEvents(time.Now().Add(-serviceConfig.EventRetention)); err != nil {
+					log.Printf("audit retention cleanup failed: %v", err)
 				}
 				if err := messagingService.ExpireSubscriptions(); err != nil {
 					log.Printf("subscription cleanup failed: %v", err)

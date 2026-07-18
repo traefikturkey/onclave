@@ -123,6 +123,16 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
   attempts INTEGER NOT NULL,
   last_error TEXT NOT NULL,
   last_attempt_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS audit_events (
+  audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_type TEXT NOT NULL,
+  at TEXT NOT NULL,
+  actor_agent_id TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  subscription_id TEXT NOT NULL,
+  details_json TEXT NOT NULL
 );`
 	if _, err := store.db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate SQLite schema: %w", err)
@@ -386,6 +396,9 @@ ON CONFLICT(message_id) DO UPDATE SET attempts=delivery_attempts.attempts + 1,
 	if err != nil {
 		return fmt.Errorf("record delivery attempt: %w", err)
 	}
+	if err := store.RecordAudit(messaging.AuditEvent{Type: "delivery.attempt", MessageID: messageID, Details: map[string]any{"error": errorText}}); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -403,6 +416,27 @@ WHERE at < ? AND task_id IN (SELECT task_id FROM tasks WHERE state IN (?, ?, ?, 
 func (store *Store) PruneDeliveryAttempts(before time.Time) error {
 	if _, err := store.db.Exec(`DELETE FROM delivery_attempts WHERE last_attempt_at < ?`, before.UTC().Format(time.RFC3339Nano)); err != nil {
 		return fmt.Errorf("prune delivery attempts: %w", err)
+	}
+	return nil
+}
+
+func (store *Store) RecordAudit(event messaging.AuditEvent) error {
+	details, err := json.Marshal(event.Details)
+	if err != nil {
+		return fmt.Errorf("encode audit details: %w", err)
+	}
+	_, err = store.db.Exec(`INSERT INTO audit_events(event_type, at, actor_agent_id, message_id, task_id, subscription_id, details_json)
+VALUES(?, ?, ?, ?, ?, ?, ?)`, event.Type, event.At.UTC().Format(time.RFC3339Nano), event.ActorAgentID,
+		event.MessageID, event.TaskID, event.SubscriptionID, string(details))
+	if err != nil {
+		return fmt.Errorf("record audit event: %w", err)
+	}
+	return nil
+}
+
+func (store *Store) PruneAuditEvents(before time.Time) error {
+	if _, err := store.db.Exec(`DELETE FROM audit_events WHERE at < ?`, before.UTC().Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("prune audit events: %w", err)
 	}
 	return nil
 }

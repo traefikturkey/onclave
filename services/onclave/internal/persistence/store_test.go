@@ -145,6 +145,34 @@ func TestRetentionPrunesTerminalTaskEvents(t *testing.T) {
 	}
 }
 
+func TestAuditEventsPersistAndPrune(t *testing.T) {
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	if err := store.RecordAudit(messaging.AuditEvent{Type: "subscription.created", At: now, ActorAgentID: "agent-1", SubscriptionID: "sub-1", Details: map[string]any{"pattern": "task.*.agent-1"}}); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE event_type = ?`, "subscription.created").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one audit event, got %d", count)
+	}
+	if err := store.PruneAuditEvents(now.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT COUNT(*) FROM audit_events`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected audit event pruning, got %d rows", count)
+	}
+}
+
 func TestMessagingServiceReloadsTaskAfterRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "onclave.db")
 	store, err := Open(path)
