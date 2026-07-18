@@ -1,0 +1,1 @@
+Place deployment-specific CA/server certificates here for the opt-in TLS Compose override. Do not commit private keys or certificate material.

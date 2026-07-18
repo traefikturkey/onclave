@@ -91,6 +91,13 @@ bundle after reconnect. The local Compose profile intentionally uses private
 plain AMQP on the internal Docker network; do not publish RabbitMQ ports in a
 production deployment.
 
+An opt-in broker-side TLS override is provided at
+`infrastructure/docker/onclave-compose.tls.yml`. Place deployment-specific
+`ca.pem`, `server.pem`, and `server-key.pem` under
+`infrastructure/docker/rabbitmq/certs/` (never commit private keys), then start
+with both Compose files and `ONCLAVE_RABBITMQ_PASSWORD` set. The override moves
+RabbitMQ to port 5671, disables plain AMQP, and mounts the CA into Onclave.
+
 Send the bearer token in the WebSocket handshake `Authorization` header. The first server message is:
 
 ```json

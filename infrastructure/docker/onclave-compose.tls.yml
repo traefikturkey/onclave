@@ -1,0 +1,13 @@
+services:
+  onclave:
+    environment:
+      ONCLAVE_RABBITMQ_URL: amqps://onclave:${ONCLAVE_RABBITMQ_PASSWORD}@rabbitmq:5671/%2Fonclave
+      ONCLAVE_RABBITMQ_CA_FILE: /run/secrets/rabbitmq-ca.pem
+    volumes:
+      - ./rabbitmq/certs/ca.pem:/run/secrets/rabbitmq-ca.pem:ro
+  rabbitmq:
+    environment:
+      RABBITMQ_CONFIG_FILE: /etc/rabbitmq/rabbitmq-tls
+    volumes:
+      - ./rabbitmq/rabbitmq-tls.conf:/etc/rabbitmq/rabbitmq-tls.conf:ro
+      - ./rabbitmq/certs:/etc/rabbitmq/certs:ro
