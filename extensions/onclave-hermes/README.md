@@ -2,6 +2,9 @@
 
 This plugin connects a Hermes Agent runtime to the public Onclave HTTPS/WebSocket gateway. It is a gateway client, not a broker adapter.
 
+For complete installation, configuration, and usage instructions, see
+[`docs/extensions/onclave-hermes/README.md`](../../docs/extensions/onclave-hermes/README.md).
+
 ## Boundary
 
 The plugin uses only the Onclave public API:

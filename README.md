@@ -149,8 +149,10 @@ commands, subscriptions, lifecycle, replay, TLS, and operational endpoints.
   authentication, lifecycle, subscriptions, replay, metrics, and TLS
 - [Agent Extension Contract](./docs/agent-extension-contract.md) — extension
   placement, manifest, lifecycle, security, replay, and conformance requirements
-- [Pi Extension Guide](./docs/extensions/onclave-pi/README.md) — Pi configuration,
-  loading, tools, and gateway behavior
+- [Pi Extension Guide](./docs/extensions/onclave-pi/README.md) — Pi installation,
+  configuration, tools, and gateway behavior
+- [Hermes Extension Guide](./docs/extensions/onclave-hermes/README.md) — Hermes
+  installation, configuration, tools, subscriptions, and tests
 - [Pi Operator Guide](./docs/extensions/onclave-pi/operator-guide.md) — gateway
   setup, enrollment, troubleshooting, and task handling
 - [Pi Gateway Acceptance](./docs/extensions/onclave-pi/manual-acceptance.md) —

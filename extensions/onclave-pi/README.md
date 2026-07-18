@@ -17,6 +17,26 @@ The extension uses only the public gateway contract:
 It does not connect directly to RabbitMQ, read gateway SQLite state, or depend
 on gateway service internals.
 
+## Installation
+
+From a repository checkout:
+
+```bash
+just setup
+pi -e ./extensions/onclave-pi
+```
+
+For installation through Pi's Git package loader, install the repository root
+package so its `pi.extensions` metadata loads `extensions/onclave-pi`:
+
+```bash
+pi install git:https://github.com/traefikturkey/onclave.git
+```
+
+Use the repository-local `pi -e` form when developing or testing a checkout.
+The complete configuration and usage guide is
+[`docs/extensions/onclave-pi/README.md`](../../docs/extensions/onclave-pi/README.md).
+
 ## Configuration
 
 Configure the gateway URL and enrolled agent ID in the Pi environment:
