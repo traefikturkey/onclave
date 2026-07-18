@@ -91,6 +91,11 @@ type TaskStore interface {
 	GetTask(string) (Task, error)
 }
 
+type EventStore interface {
+	SaveEvent(string, Event) error
+	GetEvents(string) ([]Event, error)
+}
+
 func NewService(now func() time.Time) *Service {
 	return NewServiceWithPublisher(now, nil)
 }
@@ -294,6 +299,13 @@ func (s *Service) Status(taskID string) (Task, error) {
 func (s *Service) Events(taskID string) []Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if _, loaded := s.events[taskID]; !loaded {
+		if eventStore, ok := s.store.(EventStore); ok {
+			if events, err := eventStore.GetEvents(taskID); err == nil {
+				s.events[taskID] = events
+			}
+		}
+	}
 	events := append([]Event(nil), s.events[taskID]...)
 	return events
 }
@@ -323,6 +335,9 @@ func (s *Service) persist(task *Task) error {
 func (s *Service) record(task *Task, event Event) {
 	event.At = s.now()
 	s.events[task.TaskID] = append(s.events[task.TaskID], event)
+	if eventStore, ok := s.store.(EventStore); ok {
+		_ = eventStore.SaveEvent(task.TaskID, event)
+	}
 	if s.eventPublisher == nil {
 		return
 	}

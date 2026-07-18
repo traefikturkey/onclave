@@ -78,3 +78,39 @@ func TestMessagingServiceReloadsTaskAfterRestart(t *testing.T) {
 		t.Fatalf("unexpected restarted task: %+v", loaded)
 	}
 }
+
+func TestMessagingServiceReloadsTaskEventsAfterRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "onclave.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	service := messaging.NewServiceWithPublisherAndStore(func() time.Time { return now }, nil, store)
+	if _, err := service.Submit(messaging.Command{TaskID: "task-events", MessageID: "message-events", ExpiresAt: now.Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Acknowledge("task-events"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Start("task-events"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Fail("task-events", map[string]any{"error": "restart-test"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	restarted := messaging.NewServiceWithPublisherAndStore(func() time.Time { return now }, nil, store)
+	events := restarted.Events("task-events")
+	if len(events) != 4 || events[0].Type != messaging.EventAccepted || events[3].Type != messaging.EventFailed {
+		t.Fatalf("unexpected restarted events: %+v", events)
+	}
+}

@@ -60,6 +60,16 @@ CREATE TABLE IF NOT EXISTS tasks (
   result_json TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS task_events (
+  task_id TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  event_type TEXT NOT NULL,
+  at TEXT NOT NULL,
+  progress INTEGER NOT NULL,
+  note TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  PRIMARY KEY(task_id, sequence)
+);
 CREATE TABLE IF NOT EXISTS admission_agents (
   agent_id TEXT PRIMARY KEY,
   runtime_type TEXT NOT NULL,
@@ -184,6 +194,49 @@ func (store *Store) LoadAdmissionAgents() ([]admission.Snapshot, error) {
 		return nil, fmt.Errorf("iterate admission agents: %w", err)
 	}
 	return snapshots, nil
+}
+
+func (store *Store) SaveEvent(taskID string, event messaging.Event) error {
+	payload, err := json.Marshal(event.Payload)
+	if err != nil {
+		return fmt.Errorf("encode event payload: %w", err)
+	}
+	_, err = store.db.Exec(`INSERT INTO task_events(task_id, sequence, event_type, at, progress, note, payload_json)
+SELECT ?, COALESCE(MAX(sequence), 0) + 1, ?, ?, ?, ?, ? FROM task_events WHERE task_id = ?`,
+		taskID, event.Type, event.At.UTC().Format(time.RFC3339Nano), event.Progress, event.Note, string(payload), taskID)
+	if err != nil {
+		return fmt.Errorf("save task event: %w", err)
+	}
+	return nil
+}
+
+func (store *Store) GetEvents(taskID string) ([]messaging.Event, error) {
+	rows, err := store.db.Query(`SELECT event_type, at, progress, note, payload_json FROM task_events WHERE task_id = ? ORDER BY sequence`, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("query task events: %w", err)
+	}
+	defer rows.Close()
+	var events []messaging.Event
+	for rows.Next() {
+		var event messaging.Event
+		var at, payload string
+		if err := rows.Scan(&event.Type, &at, &event.Progress, &event.Note, &payload); err != nil {
+			return nil, fmt.Errorf("scan task event: %w", err)
+		}
+		event.TaskID = taskID
+		event.At, err = time.Parse(time.RFC3339Nano, at)
+		if err != nil {
+			return nil, fmt.Errorf("parse task event timestamp: %w", err)
+		}
+		if err := json.Unmarshal([]byte(payload), &event.Payload); err != nil {
+			return nil, fmt.Errorf("decode task event payload: %w", err)
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate task events: %w", err)
+	}
+	return events, nil
 }
 
 func nonNilBytes(value []byte) []byte {
