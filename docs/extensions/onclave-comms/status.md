@@ -5,35 +5,39 @@ source_prd: ./onclave-comms-PRD.md
 implementation_plan: ./implementation-plan.md
 ---
 
-# Status: Secure LAN Pi Agent Communication
+# Status: Onclave Core Gateway and Pi Communication
 
 ## Current State
 
-The `Onclave` implementation now covers the core secure LAN communication
-flow: local hub startup/reuse, local WSS registration and messaging, explicit
-Ed25519 trust, trusted remote WSS listing/send, metadata-only discovery, Pi tool
-surface, audit-safe runtime events, and physical two-host LAN acceptance.
+The repository's primary direction is the containerized, harness-independent
+Onclave agent gateway under `services/onclave`. The gateway authenticates and
+vets agents, negotiates capabilities, persists tasks/events/subscriptions in
+SQLite, and exposes authenticated HTTP/WebSocket APIs. RabbitMQ is an internal
+transport boundary rather than a public agent API.
+
+The gateway currently includes durable outboxes, delivery-attempt tracking,
+audit records, event retention, global event cursors, bounded redelivery,
+dead-letter observation, broker restart recovery, JSON/Prometheus metrics,
+SQLite readiness, and an opt-in AMQPS/TLS Compose deployment.
+
+The `onclave-comms` Pi extension remains an implemented client/runtime
+integration for secure LAN discovery, explicit trust, and trusted Pi-to-Pi
+communication. It is not the architectural boundary for future adapters.
 
 ## Verification
 
-Last verified commands:
+Current core verification includes:
 
-```bash
-pnpm test
-pnpm typecheck
-```
+- `go test ./...`;
+- `go vet ./...`;
+- `go build ./cmd/onclave`;
+- `pnpm run check`;
+- plain and TLS Compose configuration validation;
+- live RabbitMQ queue, reconnect, dead-letter, and event round-trip tests;
+- fresh-container normal, gateway-restart, broker-restart, and AMQPS acceptance.
 
-Manual verification:
-
-- 2026-05-22: two physical LAN hosts on the same subnet completed the manual
-  trust exchange, discovery, trusted remote agent listing, trusted remote
-  send/get, and audit scan checks.
-
-Result:
-
-- `pnpm test`: 142 passing tests
-- `pnpm typecheck`: passing
-- manual LAN acceptance: passed on two physical hosts
+The repository's canonical verification commands are documented in
+[the agent gateway contract](../../agent-gateway.md) and `AGENTS.md`.
 
 ## Phase Progress
 

@@ -1,7 +1,13 @@
 # Onclave
 
-`Onclave` is a Pi extension for secure LAN discovery, explicit trust, and
-prompt routing between Pi sessions on trusted machines.
+`Onclave` is a containerized, harness-independent agent gateway. It authenticates
+and vets agent runtimes, negotiates capabilities, persists task and event state,
+and exposes an HTTPS/WebSocket API for adapters and runtimes. RabbitMQ is an
+internal broker; agents and adapters do not connect to RabbitMQ directly.
+
+The repository also contains the `onclave-comms` Pi extension for secure LAN
+discovery and trusted local/remote Pi communication. That extension is one
+client/runtime integration, not the boundary of the Onclave product.
 
 > [!NOTE]
 > This project expands on IndyDevDan's Pi coding agent extension work for
@@ -10,7 +16,20 @@ prompt routing between Pi sessions on trusted machines.
 > Watch his video here:
 > [Pi coding agent extension with two-way agent communication](https://www.youtube.com/watch?v=PIdETjcXNIk)
 
-## What It Does
+## Current Core Architecture
+
+- Go gateway service under `services/onclave`;
+- authenticated enrollment, approval, capability negotiation, and sessions;
+- durable SQLite tasks, lifecycle events, subscriptions, cursors, outbox state,
+  delivery attempts, and audit records;
+- authenticated WebSocket command delivery and task-event replay/resumption;
+- RabbitMQ internal command/event transport with publisher confirms, reconnect,
+  bounded redelivery, dead-letter handling, and broker restart recovery;
+- `/healthz`, `/readyz`, JSON metrics, and Prometheus metrics endpoints;
+- plain internal AMQP Compose deployment plus an opt-in AMQPS/TLS profile;
+- adapters consume the gateway contract and must not depend on RabbitMQ topology.
+
+## Pi Extension Capabilities
 
 - starts or reuses one local machine hub per host;
 - discovers peer hubs on the LAN over UDP broadcast;
@@ -135,6 +154,8 @@ pnpm run onclave:acceptance-host -- --host-name host-a
 
 - [Development Environment](./docs/guides/development-environment.md) - repository-wide tool,
   package, dependency, and preflight standards for the monorepo
+- [Agent Gateway Contract](./docs/agent-gateway.md) - authenticated HTTP/WebSocket
+  API, durable subscriptions, replay, metrics, RabbitMQ boundary, and TLS deployment
 - [Usage Guide](./docs/extensions/onclave-comms/README.md) - quick starts, extension loading, flags,
   status dots, and tool examples
 - [Operator Guide](./docs/extensions/onclave-comms/operator-guide.md) - runtime state,

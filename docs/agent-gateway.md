@@ -78,11 +78,20 @@ Durable observers use the subscription API with the agent's bearer session:
   cursors are monotonic.
 - `DELETE /v1/subscriptions/{subscriptionId}` removes it.
 
-Connect a WebSocket with `subscriptionId` to replay retained task events after
-the stored cursor and continue receiving live events. Subscription ownership
+Connect a WebSocket with `subscriptionId` to replay retained events after the
+stored cursor and continue receiving live events. Task-scoped subscriptions use
+their task event offset; subscriptions without a `taskId` use the gateway-wide
+monotonic event sequence, allowing replay across tasks. Subscription ownership
 and `message.receive` capability are enforced for every operation. Optional
 `correlationId` and `taskId` query parameters further filter events without
 widening the agent scope.
+
+Operational endpoints:
+
+- `GET /healthz` reports process health;
+- `GET /readyz` checks SQLite and RabbitMQ-backed readiness;
+- `GET /metrics` returns JSON operational counters;
+- `GET /metrics/prometheus` returns Prometheus text-format counters.
 
 For RabbitMQ TLS deployments, set `ONCLAVE_RABBITMQ_URL` to an `amqps://` URL
 and set `ONCLAVE_RABBITMQ_CA_FILE` to a mounted PEM CA bundle. The gateway
@@ -189,3 +198,21 @@ This submits the command, restarts only the gateway, reconnects the source
 session, and then verifies delivery, lifecycle completion, and source event
 fan-out after the restart. RabbitMQ remains private; the runner uses only the
 gateway API and WebSocket boundary.
+
+To verify recovery after restarting RabbitMQ instead of Onclave:
+
+```bash
+ONCLAVE_ACCEPTANCE_BROKER_RESTART=1 \
+ONCLAVE_ACCEPTANCE_COMPOSE_PROJECT=<compose-project> \
+node ./scripts/gateway-acceptance.mjs
+```
+
+The repository also exposes this flow as:
+
+```bash
+just gateway-broker-restart-acceptance
+```
+
+The TLS Compose override can be exercised with ephemeral or deployment-issued
+certificates. It keeps the gateway HTTP listener unchanged while switching the
+internal broker connection to AMQPS on port 5671.
