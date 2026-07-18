@@ -337,6 +337,16 @@ func (store *Store) markOutboxPublished(table, messageID string) error {
 	return nil
 }
 
+func (store *Store) PrunePublishedOutbox(before time.Time) error {
+	cutoff := before.UTC().Format(time.RFC3339Nano)
+	for _, table := range []string{"command_outbox", "event_outbox"} {
+		if _, err := store.db.Exec(`DELETE FROM `+table+` WHERE published_at IS NOT NULL AND published_at < ?`, cutoff); err != nil {
+			return fmt.Errorf("prune %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
 func nonNilBytes(value []byte) []byte {
 	if value == nil {
 		return []byte{}

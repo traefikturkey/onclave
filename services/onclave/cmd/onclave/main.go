@@ -57,6 +57,9 @@ func main() {
 					if err := messagingService.ReplayPendingEvents(runContext); err != nil {
 						log.Printf("event outbox replay failed: %v", err)
 					}
+					if err := store.PrunePublishedOutbox(time.Now().Add(-7 * 24 * time.Hour)); err != nil {
+						log.Printf("outbox cleanup failed: %v", err)
+					}
 				}
 			}
 		}()

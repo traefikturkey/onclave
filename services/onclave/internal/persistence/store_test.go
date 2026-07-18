@@ -180,6 +180,19 @@ func TestEventOutboxSurvivesReopenAndMarksPublished(t *testing.T) {
 	if len(pending) != 0 {
 		t.Fatalf("expected no pending events after publish, got %+v", pending)
 	}
+	if err := store.PrunePublishedOutbox(time.Now().Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnqueueEvent(envelope); err != nil {
+		t.Fatal(err)
+	}
+	pending, err = store.PendingEvents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].MessageID != envelope.MessageID {
+		t.Fatalf("expected pruned event to be re-enqueueable, got %+v", pending)
+	}
 	_ = store.Close()
 }
 
