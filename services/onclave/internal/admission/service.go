@@ -43,6 +43,24 @@ type Policy struct {
 	AllowedCapabilities map[string]map[string]bool
 }
 
+type Snapshot struct {
+	AgentID             string
+	RuntimeType         string
+	PublicKey           []byte
+	Status              Status
+	Challenge           []byte
+	CapabilityRequestID string
+	CapabilityNonce     string
+	SessionToken        string
+	Declared            []string
+	Effective           []string
+}
+
+type Store interface {
+	LoadAdmissionAgents() ([]Snapshot, error)
+	SaveAdmissionAgent(Snapshot) error
+}
+
 type record struct {
 	agentID             string
 	runtimeType         string
@@ -61,10 +79,29 @@ type Service struct {
 	policy  Policy
 	agents  map[string]*record
 	counter uint64
+	store   Store
 }
 
 func NewService(policy Policy) *Service {
-	return &Service{policy: policy, agents: make(map[string]*record)}
+	service, err := NewServiceWithStore(policy, nil)
+	if err != nil {
+		panic(err)
+	}
+	return service
+}
+
+func NewServiceWithStore(policy Policy, store Store) (*Service, error) {
+	service := &Service{policy: policy, agents: make(map[string]*record), store: store}
+	if store != nil {
+		snapshots, err := store.LoadAdmissionAgents()
+		if err != nil {
+			return nil, fmt.Errorf("load admission state: %w", err)
+		}
+		for _, snapshot := range snapshots {
+			service.agents[snapshot.AgentID] = recordFromSnapshot(snapshot)
+		}
+	}
+	return service, nil
 }
 
 func (s *Service) Enroll(request EnrollmentRequest) error {
@@ -76,11 +113,16 @@ func (s *Service) Enroll(request EnrollmentRequest) error {
 	if _, exists := s.agents[request.AgentID]; exists {
 		return ErrAlreadyEnrolled
 	}
-	s.agents[request.AgentID] = &record{
+	agent := &record{
 		agentID:     request.AgentID,
 		runtimeType: request.RuntimeType,
 		publicKey:   append(ed25519.PublicKey(nil), request.PublicKey...),
 		status:      StatusEnrollmentPending,
+	}
+	s.agents[request.AgentID] = agent
+	if err := s.save(agent); err != nil {
+		delete(s.agents, request.AgentID)
+		return fmt.Errorf("persist enrollment: %w", err)
 	}
 	return nil
 }
@@ -96,7 +138,7 @@ func (s *Service) Approve(agentID string) error {
 		return ErrRevoked
 	}
 	agent.status = StatusApproved
-	return nil
+	return s.save(agent)
 }
 
 func (s *Service) Revoke(agentID string) error {
@@ -111,7 +153,7 @@ func (s *Service) Revoke(agentID string) error {
 	agent.capabilityRequestID = ""
 	agent.capabilityNonce = ""
 	agent.sessionToken = ""
-	return nil
+	return s.save(agent)
 }
 
 func (s *Service) IssueChallenge(agentID string) ([]byte, error) {
@@ -132,6 +174,10 @@ func (s *Service) IssueChallenge(agentID string) ([]byte, error) {
 		return nil, fmt.Errorf("generate authentication challenge: %w", err)
 	}
 	agent.challenge = nonce
+	if err := s.save(agent); err != nil {
+		agent.challenge = nil
+		return nil, fmt.Errorf("persist authentication challenge: %w", err)
+	}
 	return append([]byte(nil), nonce...), nil
 }
 
@@ -164,6 +210,10 @@ func (s *Service) AuthenticateSession(agentID string, signature []byte) (string,
 		return "", fmt.Errorf("generate session token: %w", err)
 	}
 	agent.sessionToken = base64.RawURLEncoding.EncodeToString(tokenBytes)
+	if err := s.save(agent); err != nil {
+		agent.sessionToken = ""
+		return "", fmt.Errorf("persist agent session: %w", err)
+	}
 	return agent.sessionToken, nil
 }
 
@@ -225,6 +275,11 @@ func (s *Service) RequestCapabilities(agentID string) (requestID, nonce string, 
 	nonce = fmt.Sprintf("%x", nonceBytes)
 	agent.capabilityRequestID = requestID
 	agent.capabilityNonce = nonce
+	if err := s.save(agent); err != nil {
+		agent.capabilityRequestID = ""
+		agent.capabilityNonce = ""
+		return "", "", fmt.Errorf("persist capability request: %w", err)
+	}
 	return requestID, nonce, nil
 }
 
@@ -253,7 +308,7 @@ func (s *Service) AcceptCapabilities(agentID, requestID, nonce string, capabilit
 	allowed := s.policy.AllowedCapabilities[agent.runtimeType]
 	agent.effective = agent.effectiveCapabilities(allowed)
 	agent.status = StatusRegistered
-	return nil
+	return s.save(agent)
 }
 
 func (s *Service) EffectiveCapabilities(agentID string) ([]string, error) {
@@ -274,6 +329,27 @@ func (s *Service) Status(agentID string) (Status, error) {
 		return "", err
 	}
 	return agent.status, nil
+}
+
+func (s *Service) save(agent *record) error {
+	if s.store == nil {
+		return nil
+	}
+	return s.store.SaveAdmissionAgent(Snapshot{
+		AgentID: agent.agentID, RuntimeType: agent.runtimeType, PublicKey: append([]byte(nil), agent.publicKey...),
+		Status: agent.status, Challenge: append([]byte(nil), agent.challenge...),
+		CapabilityRequestID: agent.capabilityRequestID, CapabilityNonce: agent.capabilityNonce,
+		SessionToken: agent.sessionToken, Declared: append([]string(nil), agent.declared...), Effective: append([]string(nil), agent.effective...),
+	})
+}
+
+func recordFromSnapshot(snapshot Snapshot) *record {
+	return &record{
+		agentID: snapshot.AgentID, runtimeType: snapshot.RuntimeType, publicKey: ed25519.PublicKey(append([]byte(nil), snapshot.PublicKey...)),
+		status: snapshot.Status, challenge: append([]byte(nil), snapshot.Challenge...), capabilityRequestID: snapshot.CapabilityRequestID,
+		capabilityNonce: snapshot.CapabilityNonce, sessionToken: snapshot.SessionToken, declared: append([]string(nil), snapshot.Declared...),
+		effective: append([]string(nil), snapshot.Effective...),
+	}
 }
 
 func (s *Service) agent(agentID string) (*record, error) {

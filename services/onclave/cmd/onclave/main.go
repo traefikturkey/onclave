@@ -15,7 +15,6 @@ import (
 
 func main() {
 	serviceConfig := config.FromEnvironment()
-	admissionService := admission.NewService(admission.Policy{})
 	var publisher messaging.Publisher
 	var subscriber *messaging.RabbitMQPublisher
 	if serviceConfig.RabbitMQURL != "" {
@@ -32,6 +31,10 @@ func main() {
 		log.Fatal(err)
 	}
 	defer store.Close()
+	admissionService, err := admission.NewServiceWithStore(admission.Policy{}, store)
+	if err != nil {
+		log.Fatal(err)
+	}
 	messagingService := messaging.NewServiceWithPublisherAndStore(time.Now, publisher, store)
 	server := api.NewApplicationServerWithBroker(api.Config{Address: serviceConfig.Address}, admissionService, messagingService, subscriber, func() error {
 		return nil

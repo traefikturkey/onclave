@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/traefikturkey/onclave/services/onclave/internal/admission"
 	"github.com/traefikturkey/onclave/services/onclave/internal/messaging"
 	_ "modernc.org/sqlite"
 )
@@ -57,6 +58,19 @@ CREATE TABLE IF NOT EXISTS tasks (
   progress_note TEXT NOT NULL,
   payload_json TEXT NOT NULL,
   result_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS admission_agents (
+  agent_id TEXT PRIMARY KEY,
+  runtime_type TEXT NOT NULL,
+  public_key BLOB NOT NULL,
+  status TEXT NOT NULL,
+  challenge BLOB NOT NULL,
+  capability_request_id TEXT NOT NULL,
+  capability_nonce TEXT NOT NULL,
+  session_token TEXT NOT NULL,
+  declared_json TEXT NOT NULL,
+  effective_json TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );`
 	if _, err := store.db.Exec(schema); err != nil {
@@ -120,4 +134,61 @@ func (store *Store) GetTask(taskID string) (messaging.Task, error) {
 		return messaging.Task{}, fmt.Errorf("decode task result: %w", err)
 	}
 	return task, nil
+}
+
+func (store *Store) SaveAdmissionAgent(snapshot admission.Snapshot) error {
+	declared, err := json.Marshal(snapshot.Declared)
+	if err != nil {
+		return fmt.Errorf("encode declared capabilities: %w", err)
+	}
+	effective, err := json.Marshal(snapshot.Effective)
+	if err != nil {
+		return fmt.Errorf("encode effective capabilities: %w", err)
+	}
+	_, err = store.db.Exec(`
+INSERT INTO admission_agents(agent_id, runtime_type, public_key, status, challenge, capability_request_id, capability_nonce, session_token, declared_json, effective_json, updated_at)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(agent_id) DO UPDATE SET runtime_type=excluded.runtime_type, public_key=excluded.public_key, status=excluded.status,
+  challenge=excluded.challenge, capability_request_id=excluded.capability_request_id, capability_nonce=excluded.capability_nonce,
+  session_token=excluded.session_token, declared_json=excluded.declared_json, effective_json=excluded.effective_json, updated_at=excluded.updated_at`,
+		snapshot.AgentID, snapshot.RuntimeType, nonNilBytes(snapshot.PublicKey), snapshot.Status, nonNilBytes(snapshot.Challenge),
+		snapshot.CapabilityRequestID, snapshot.CapabilityNonce, snapshot.SessionToken, string(declared), string(effective), time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("save admission agent: %w", err)
+	}
+	return nil
+}
+
+func (store *Store) LoadAdmissionAgents() ([]admission.Snapshot, error) {
+	rows, err := store.db.Query(`SELECT agent_id, runtime_type, public_key, status, challenge, capability_request_id, capability_nonce, session_token, declared_json, effective_json FROM admission_agents ORDER BY agent_id`)
+	if err != nil {
+		return nil, fmt.Errorf("query admission agents: %w", err)
+	}
+	defer rows.Close()
+	var snapshots []admission.Snapshot
+	for rows.Next() {
+		var snapshot admission.Snapshot
+		var declared, effective string
+		if err := rows.Scan(&snapshot.AgentID, &snapshot.RuntimeType, &snapshot.PublicKey, &snapshot.Status, &snapshot.Challenge, &snapshot.CapabilityRequestID, &snapshot.CapabilityNonce, &snapshot.SessionToken, &declared, &effective); err != nil {
+			return nil, fmt.Errorf("scan admission agent: %w", err)
+		}
+		if err := json.Unmarshal([]byte(declared), &snapshot.Declared); err != nil {
+			return nil, fmt.Errorf("decode declared capabilities: %w", err)
+		}
+		if err := json.Unmarshal([]byte(effective), &snapshot.Effective); err != nil {
+			return nil, fmt.Errorf("decode effective capabilities: %w", err)
+		}
+		snapshots = append(snapshots, snapshot)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate admission agents: %w", err)
+	}
+	return snapshots, nil
+}
+
+func nonNilBytes(value []byte) []byte {
+	if value == nil {
+		return []byte{}
+	}
+	return value
 }
