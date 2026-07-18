@@ -96,7 +96,10 @@ class TestAgenticSearchFilters:
             limit=10,
         )
 
-    def test_agentic_search_rejects_invalid_tier_min(self, authed_client):
+    def test_agentic_search_rejects_invalid_tier_min(self, authed_client, app_with_keys):
+        mock_agent_service = MagicMock(spec=AgentService)
+        app_with_keys.dependency_overrides[get_agent_service] = lambda: mock_agent_service
+
         response = authed_client.post(
             "/api/v1/search/agentic",
             json={"query": "test", "tier_min": "invalid"},
@@ -104,3 +107,4 @@ class TestAgenticSearchFilters:
 
         assert response.status_code == 422
         assert "tier_min must be one of S, A, B, C, D" in response.text
+        mock_agent_service.search.assert_not_called()

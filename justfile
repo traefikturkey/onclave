@@ -21,6 +21,12 @@ typecheck:
 check:
     pnpm typecheck && pnpm test
 
+menos-test:
+    cd services/menos && uv run pytest -v
+
+menos-lint:
+    cd services/menos && uv run ruff check .
+
 up:
     docker compose -f docker/compose.yaml up -d --build
 
