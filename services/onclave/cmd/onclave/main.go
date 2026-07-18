@@ -76,15 +76,15 @@ func main() {
 		log.Fatal(err)
 	}
 	messagingService := messaging.NewServiceWithPublisherAndStore(time.Now, publisher, store)
-	if publisher != nil {
-		go func() {
-			ticker := time.NewTicker(5 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-runContext.Done():
-					return
-				case <-ticker.C:
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-runContext.Done():
+				return
+			case <-ticker.C:
+				if publisher != nil {
 					if err := messagingService.ReplayPendingCommands(runContext); err != nil {
 						log.Printf("command outbox replay failed: %v", err)
 					}
@@ -95,9 +95,12 @@ func main() {
 						log.Printf("outbox cleanup failed: %v", err)
 					}
 				}
+				if err := messagingService.ExpireSubscriptions(); err != nil {
+					log.Printf("subscription cleanup failed: %v", err)
+				}
 			}
-		}()
-	}
+		}
+	}()
 	readiness := func() error {
 		if err := store.Ping(runContext); err != nil {
 			return err
