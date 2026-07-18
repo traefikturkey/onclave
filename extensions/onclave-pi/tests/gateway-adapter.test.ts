@@ -64,6 +64,27 @@ describe("OnclaveGatewayClient", () => {
     }));
   });
 
+  it("cancels a task and reads the resulting state", async () => {
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ taskId: "task-1", state: "cancelled" }), { status: 200 }));
+    const client = new OnclaveGatewayClient({ baseUrl: "https://gateway.example", fetchImpl });
+
+    await expect(client.cancelTask("session-token", "task-1", "No longer needed")).resolves.toMatchObject({
+      taskId: "task-1",
+      state: "cancelled",
+    });
+    expect(fetchImpl).toHaveBeenNthCalledWith(1, "https://gateway.example/v1/tasks/task-1/cancel", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ reason: "No longer needed" }),
+    }));
+  });
+
+  it("rejects non-HTTPS gateway URLs", () => {
+    expect(() => new OnclaveGatewayClient({ baseUrl: "http://gateway.example" })).toThrow("HTTPS");
+    expect(() => new OnclaveGatewayClient({ baseUrl: "https://user:pass@gateway.example" })).toThrow("credentials");
+  });
+
   it("supports an agent-scoped event subscription when opening a session", () => {
     class FakeWebSocket {
       static lastUrl = "";

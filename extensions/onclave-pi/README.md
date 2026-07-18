@@ -1,130 +1,121 @@
 # onclave-pi Pi Extension
 
 `onclave-pi` connects Pi to the public Onclave HTTPS/WebSocket gateway. It is a
-runtime extension, not a broker client or an independent gateway service.
-
-## Boundary
-
-The extension uses only the public gateway contract:
-
-- HTTPS challenge-response authentication;
-- capability negotiation;
-- asynchronous task submission;
-- task lookup and terminal-state waiting;
-- authenticated WSS inbound command delivery;
-- task lifecycle completion reporting.
-
-It does not connect directly to RabbitMQ, read gateway SQLite state, or depend
-on gateway service internals.
+runtime extension, not a broker client or gateway service.
 
 ## Installation
 
-From a repository checkout:
+Install dependencies from a repository checkout:
 
 ```bash
 just setup
+```
+
+Load the extension locally while developing:
+
+```bash
 pi -e ./extensions/onclave-pi
 ```
 
-For installation through Pi's Git package loader, install the repository root
-package so its `pi.extensions` metadata loads `extensions/onclave-pi`:
+Install the repository package through Pi's Git package loader:
 
 ```bash
 pi install git:https://github.com/traefikturkey/onclave.git
 ```
 
-Use the repository-local `pi -e` form when developing or testing a checkout.
-The complete configuration and usage guide is
-[`docs/extensions/onclave-pi/README.md`](../../docs/extensions/onclave-pi/README.md).
-
 ## Configuration
 
-Configure the gateway URL and enrolled agent ID in the Pi environment:
+Set the gateway URL and enrolled agent ID before starting Pi:
 
 ```text
 ONCLAVE_GATEWAY_URL=https://onclave.example
 ONCLAVE_AGENT_ID=agent-pi
 ```
 
-The matching Ed25519 private key is loaded from Pi's Onclave state directory.
-The product-level state root is:
+The matching Ed25519 private key must be stored at:
 
 ```text
-~/.pi/onclave/
+~/.pi/onclave/identity.key
 ```
 
-Enrollment and operator approval are performed through the gateway deployment.
-The extension does not expose enrollment credentials or session tokens.
+The extension authenticates with challenge-response during `session_start`.
+Enrollment and operator approval are gateway operations. Never store private
+keys or session tokens in source control or logs.
 
-## Local loading
+## Commands
 
-From the repository root:
+### `onclave_status`
 
-```bash
-just setup
-pi -e ./extensions/onclave-pi
+Reports local readiness without a network request:
+
+```text
+onclave_status
 ```
 
-The extension authenticates during `session_start`, requests only
-`message.send` and `message.receive`, and closes the authenticated session on
-shutdown.
-
-## Tools
+The result includes `configured`, `authenticated`, `connected`, `agent_id`,
+`gateway_url`, and negotiated capabilities when available.
 
 ### `onclave_send`
 
-Submit a task prompt to an enrolled target agent.
+Submits asynchronous work. The target must be enrolled and permitted by the
+gateway:
 
-Parameters:
+```text
+onclave_send target_agent_id="agent-executor" instruction="Run the test suite"
+```
 
-- `target_agent_id` — enrolled target agent ID;
-- `prompt` — task instruction.
+Optional parameters are `task_id`, `correlation_id`, and `expires_at`.
+The result includes `message_id`, `task_id`, and the gateway-accepted state.
 
-The tool returns the accepted task ID.
+### `onclave_task`
 
-### `onclave_get`
+Reads the current task state:
 
-Retrieve the current task state.
+```text
+onclave_task task_id="task_..."
+```
 
-Parameters:
+The normalized result may include `state`, `progress`, `note`, `result`,
+`created_at`, and `updated_at`.
 
-- `task_id` — task ID returned by `onclave_send`.
+### `onclave_cancel`
+
+Requests cancellation of an owned task. Cancellation is subject to gateway
+policy and does not guarantee that work has already stopped:
+
+```text
+onclave_cancel task_id="task_..." reason="No longer needed"
+```
+
+The result contains the task state after the cancellation request.
 
 ### `onclave_await`
 
-Wait until a task reaches a terminal state or the timeout expires.
+Waits for a task to reach `completed`, `failed`, `cancelled`, or `expired`:
 
-Parameters:
+```text
+onclave_await task_id="task_..." timeout_ms=30000
+```
 
-- `task_id` — task ID returned by `onclave_send`;
-- optional `timeout_ms`, capped by the extension's maximum wait duration.
+The timeout is capped by the extension and never leaves the host session
+unbounded.
 
-## Inbound delivery
+## Inbound tasks
 
-Commands delivered through the authenticated gateway session are injected into
-Pi as inbound messages. After Pi completes the corresponding agent turn, the
-extension reports `task.completed` or the applicable failure lifecycle state to
-the gateway.
+The authenticated WSS session delivers commands targeting the configured Pi
+agent. The extension injects each accepted command into Pi, acknowledges it
+only after host acceptance, and reports task lifecycle events. Duplicate
+`message_id` and `task_id` deliveries are ignored safely.
 
-## Security and lifecycle behavior
-
-- Only the configured HTTPS gateway is used.
-- Private keys and bearer tokens are not written to audit output.
-- Capability requests are limited to `message.send` and `message.receive`.
-- Gateway sessions close during Pi shutdown.
-- Gateway task state remains durable if Pi disconnects.
-- Gateway errors retain status context without exposing credentials.
+Pi shutdown closes the WebSocket, heartbeat timer, reconnect timer, and
+in-memory delivery state.
 
 ## Tests
 
-From the repository root:
-
 ```bash
-pnpm exec vitest run extensions/onclave-pi/tests/extension.test.ts
-pnpm run typecheck
-pnpm run test
+pnpm run check
+pnpm exec vitest run extensions/onclave-pi/tests
 ```
 
-The full TypeScript suite includes the Pi extension and the shared protocol
-package. Gateway-level live acceptance is documented in
-`docs/agent-gateway.md` and exposed through the root `justfile` targets.
+The extension uses only the public gateway API and never connects directly to
+RabbitMQ or reads gateway SQLite files.

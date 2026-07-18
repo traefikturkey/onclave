@@ -1,8 +1,11 @@
 export type DeliveredPrompt = {
-  msgId: string;
-  targetSessionId: string;
-  deliveryEndpoint: string;
-  prompt: string;
-  hops: number;
+  messageId: string;
+  taskId: string;
+  correlationId?: string;
+  sourceAgentId?: string;
+  targetAgentId?: string;
+  messageType: string;
+  payload: Record<string, unknown>;
+  instruction: string;
   receivedAt: string;
 };

@@ -23,10 +23,12 @@ boundary for future runtimes.
 - authenticated WSS session startup and shutdown;
 - inbound gateway command injection into Pi;
 - task completion reporting from the Pi `agent_end` lifecycle;
-- `onclave_send` task submission;
-- `onclave_get` task lookup;
+- `onclave_status` local readiness reporting;
+- `onclave_send` task submission using canonical `instruction` input;
+- `onclave_task` task lookup;
+- `onclave_cancel` owned-task cancellation requests;
 - `onclave_await` terminal-state waiting;
-- bounded prompt and wait-time inputs;
+- bounded instruction and wait-time inputs;
 - gateway error reporting without credential logging;
 - product-level state under `~/.pi/onclave/`.
 

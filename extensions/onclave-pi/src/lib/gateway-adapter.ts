@@ -12,13 +12,15 @@ export type GatewayCommand = {
   payload: Record<string, unknown>;
 };
 
-export type GatewayTask = GatewayCommand & {
+export type GatewayTask = {
+  taskId: string;
   state: string;
-  createdAt: string;
-  updatedAt: string;
-  progress: number;
+  progress?: number;
   note?: string;
-  result?: Record<string, unknown>;
+  result?: unknown;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: unknown;
 };
 
 export type GatewaySessionMessage = {
@@ -49,7 +51,7 @@ export type CapabilityRequest = {
 };
 
 export class OnclaveGatewayError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(readonly status: number, message: string, readonly code?: string) {
     super(message);
     this.name = "OnclaveGatewayError";
   }
@@ -61,6 +63,9 @@ export class OnclaveGatewayClient {
   private readonly baseUrl: string;
 
   constructor(options: GatewayClientOptions) {
+    const parsed = new URL(options.baseUrl);
+    if (parsed.protocol !== "https:") throw new Error("Onclave gateway URL must use HTTPS");
+    if (parsed.username || parsed.password) throw new Error("Onclave gateway URL must not contain credentials");
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.webSocketImpl = options.webSocketImpl ?? WebSocket;
     this.baseUrl = options.baseUrl.replace(/\/$/, "");
@@ -127,7 +132,7 @@ export class OnclaveGatewayClient {
       headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify(command),
     });
-    return (await response.json()) as GatewayTask;
+    return normalizeTask(await response.json());
   }
 
   async getTask(token: string, taskId: string): Promise<GatewayTask> {
@@ -135,7 +140,16 @@ export class OnclaveGatewayClient {
       method: "GET",
       headers: { Authorization: `Bearer ${token}` },
     });
-    return (await response.json()) as GatewayTask;
+    return normalizeTask(await response.json());
+  }
+
+  async cancelTask(token: string, taskId: string, reason?: string): Promise<GatewayTask> {
+    await this.request(`/v1/tasks/${encodeURIComponent(taskId)}/cancel`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify(reason ? { reason } : {}),
+    });
+    return this.getTask(token, taskId);
   }
 
   async failTask(token: string, taskId: string, result: Record<string, unknown> = {}): Promise<void> {
@@ -172,10 +186,29 @@ export class OnclaveGatewayClient {
       },
     });
     if (!response.ok) {
-      throw new OnclaveGatewayError(response.status, await response.text());
+      const body = await response.text();
+      let message = body || `gateway request failed with status ${response.status}`;
+      let code: string | undefined;
+      try {
+        const value = JSON.parse(body) as { error?: unknown; code?: unknown };
+        if (typeof value.error === "string") message = value.error;
+        if (typeof value.code === "string") code = value.code;
+      } catch {
+        // Preserve plain-text gateway diagnostics.
+      }
+      throw new OnclaveGatewayError(response.status, message, code);
     }
     return response;
   }
+}
+
+function normalizeTask(value: unknown): GatewayTask {
+  if (!value || typeof value !== "object") throw new Error("gateway response did not contain task metadata");
+  const task = value as Record<string, unknown>;
+  if (typeof task.taskId !== "string" || typeof task.state !== "string") {
+    throw new Error("gateway response did not contain task metadata");
+  }
+  return { ...task, taskId: task.taskId, state: task.state };
 }
 
 function hexToBytes(value: string): Uint8Array {

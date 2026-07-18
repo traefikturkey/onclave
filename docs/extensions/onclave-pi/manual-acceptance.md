@@ -65,15 +65,19 @@ Verify:
 3. The Pi runtime exposes:
 
    ```text
+   onclave_status
    onclave_send
-   onclave_get
+   onclave_task
+   onclave_cancel
    onclave_await
    ```
 
-4. `onclave_send` accepts a task for an enrolled target agent.
-5. `onclave_get` returns the submitted task state.
-6. `onclave_await` returns after the task reaches a terminal state.
-7. Pi shutdown closes the authenticated session.
+4. `onclave_status` reports local readiness without a network request.
+5. `onclave_send` accepts a task using `instruction` for an enrolled target.
+6. `onclave_task` returns the submitted task state.
+7. `onclave_cancel` requests cancellation and returns the resulting state.
+8. `onclave_await` returns after the task reaches a terminal state.
+9. Pi shutdown closes the authenticated session.
 
 ## Negative checks
 

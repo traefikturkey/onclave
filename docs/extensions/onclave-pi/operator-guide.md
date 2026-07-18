@@ -72,18 +72,22 @@ just pi-local
 A successful session exposes the `onclave` status indicator and registers:
 
 ```text
+onclave_status
 onclave_send
-onclave_get
+onclave_task
+onclave_cancel
 onclave_await
 ```
 
 ## Task workflow
 
-1. Use `onclave_send` with an enrolled target agent ID and prompt.
-2. Record the returned task ID.
-3. Use `onclave_get` for an immediate task-state read.
-4. Use `onclave_await` when waiting for a terminal state.
-5. The target runtime reports lifecycle events through the gateway.
+1. Run `onclave_status` to inspect local readiness.
+2. Use `onclave_send` with `target_agent_id` and `instruction`.
+3. Record the returned `task_id`.
+4. Use `onclave_task` for an immediate task-state read.
+5. Use `onclave_cancel` when cancellation is required and permitted.
+6. Use `onclave_await` when waiting for a terminal state.
+7. The target runtime reports lifecycle events through the gateway.
 
 The gateway task record remains durable across Pi disconnects. Reconnecting Pi
 does not require direct broker access or local gateway database access.
@@ -117,7 +121,7 @@ permitted to request them.
 - Confirm the source agent has `message.send`.
 - Confirm the target agent has the capabilities required by the task.
 - Inspect the gateway HTTP status and error code.
-- Use `onclave_get` only with the returned task ID.
+- Use `onclave_task` only with the returned task ID.
 
 ### Inbound tasks are not delivered
 

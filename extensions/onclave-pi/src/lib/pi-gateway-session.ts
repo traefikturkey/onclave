@@ -15,6 +15,7 @@ export class PiGatewaySession {
   private closed = false;
   private readonly processing = new Set<string>();
   private readonly accepted = new Set<string>();
+  private connected = false;
 
   constructor(
     private readonly client: OnclaveGatewayClient,
@@ -34,7 +35,11 @@ export class PiGatewaySession {
 
   private connectWithToken(token: string): void {
     this.socket = this.client.connectSession(this.agentId, token, (message) => {
-      if (message.type === "heartbeat.ack" || message.type === "session.ready") return;
+      if (message.type === "session.ready") {
+        this.connected = true;
+        return;
+      }
+      if (message.type === "heartbeat.ack") return;
       if (message.type !== "command.delivery" || typeof message.messageId !== "string" || typeof message.taskId !== "string") return;
       const command = message as PiGatewayCommand;
       const key = `${command.messageId}:${command.taskId}`;
@@ -42,7 +47,10 @@ export class PiGatewaySession {
       this.processing.add(key);
       void this.process(command, key);
     });
-    this.socket.on("close", () => this.scheduleReconnect());
+    this.socket.on("close", () => {
+      this.connected = false;
+      this.scheduleReconnect();
+    });
     this.socket.on("error", () => undefined);
     if (!this.heartbeatTimer) {
       this.heartbeatTimer = setInterval(() => {
@@ -76,6 +84,7 @@ export class PiGatewaySession {
     this.reconnectTimer = null;
     this.socket?.close();
     this.socket = null;
+    this.connected = false;
     this.processing.clear();
     this.accepted.clear();
   }
@@ -117,8 +126,12 @@ export class PiGatewaySession {
     }
   }
 
+  isConnected(): boolean {
+    return this.connected;
+  }
+
   private send(message: Record<string, unknown>): void {
-    if (!this.socket) throw new Error("Pi gateway session is not connected");
+    if (!this.socket) return;
     this.socket.send(JSON.stringify(message));
   }
 }
