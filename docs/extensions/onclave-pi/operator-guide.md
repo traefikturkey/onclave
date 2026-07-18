@@ -1,7 +1,7 @@
 ---
 created: 2026-05-21
 status: active
-source_prd: ./onclave-comms-PRD.md
+source_prd: ./onclave-pi-PRD.md
 ---
 
 # Onclave Operator Guide
@@ -84,7 +84,7 @@ pnpm run onclave:acceptance-host -- --audit-scan
 This repository includes a host-side acceptance helper script at:
 
 ```text
-extensions/onclave-comms/scripts/onclave-acceptance-host.ts
+extensions/onclave-pi/scripts/onclave-acceptance-host.ts
 ```
 
 Use it to reduce manual copy/paste during LAN acceptance runs. The helper can:
@@ -103,7 +103,7 @@ Recommended order:
 
 ## First Run
 
-Start Pi with the `extensions/onclave-comms` extension enabled.
+Start Pi with the `extensions/onclave-pi` extension enabled.
 
 The first local Pi session starts the machine hub. Later local Pi sessions reuse
 that live hub and register as local agents.

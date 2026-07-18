@@ -1,7 +1,7 @@
 ---
 created: 2026-05-21
 status: active
-source_prd: ./onclave-comms-PRD.md
+source_prd: ./onclave-pi-PRD.md
 ---
 
 # Implementation Plan: Secure LAN Pi Agent Communication
@@ -124,7 +124,7 @@ tests/
     project-label.test.ts
 ```
 
-Planning bias: start with `extensions/onclave-comms` plus small `extensions/onclave-comms/src/lib/*`
+Planning bias: start with `extensions/onclave-pi` plus small `extensions/onclave-pi/src/lib/*`
 modules. Add `scripts/onclave-hub.ts` only if process lifecycle or Bun server
 startup is cleaner outside the extension.
 

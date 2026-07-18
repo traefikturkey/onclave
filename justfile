@@ -31,10 +31,10 @@ go-rabbitmq-test:
     bash ./scripts/rabbitmq-test.sh
 
 pi-local:
-    pi -e ./extensions/onclave-comms
+    pi -e ./extensions/onclave-pi
 
 pi-local-no-extensions:
     pi --no-extensions
 
 pi-smoke:
-    pnpm exec vitest run extensions/onclave-comms/tests/extension.test.ts
+    pnpm exec vitest run extensions/onclave-pi/tests/extension.test.ts

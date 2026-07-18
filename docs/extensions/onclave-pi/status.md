@@ -1,7 +1,7 @@
 ---
 created: 2026-05-21
 status: active
-source_prd: ./onclave-comms-PRD.md
+source_prd: ./onclave-pi-PRD.md
 implementation_plan: ./implementation-plan.md
 ---
 
@@ -20,7 +20,7 @@ audit records, event retention, global event cursors, bounded redelivery,
 dead-letter observation, broker restart recovery, JSON/Prometheus metrics,
 SQLite readiness, and an opt-in AMQPS/TLS Compose deployment.
 
-The `onclave-comms` Pi extension remains an implemented client/runtime
+The `onclave-pi` Pi extension remains an implemented client/runtime
 integration for secure LAN discovery, explicit trust, and trusted Pi-to-Pi
 communication. It is not the architectural boundary for future adapters.
 
@@ -55,63 +55,63 @@ The repository's canonical verification commands are documented in
 
 Extension:
 
-- `extensions/onclave-comms`
+- `extensions/onclave-pi`
 
 Runtime modules:
 
-- `extensions/onclave-comms/src/lib/audit.ts`
-- `extensions/onclave-comms/src/lib/audited-runtime.ts`
-- `extensions/onclave-comms/src/lib/authorized-keys.ts`
-- `extensions/onclave-comms/src/lib/bootstrap.ts`
-- `extensions/onclave-comms/src/lib/config.ts`
-- `extensions/onclave-comms/src/lib/canonical-json.ts`
-- `extensions/onclave-comms/src/lib/discovery.ts`
-- `extensions/onclave-comms/src/lib/extension-helpers.ts`
-- `extensions/onclave-comms/src/lib/handshake.ts`
-- `extensions/onclave-comms/src/lib/hub-runtime.ts`
-- `extensions/onclave-comms/src/lib/identity.ts`
-- `extensions/onclave-comms/src/lib/local-hub.ts`
-- `extensions/onclave-comms/src/lib/local-registry.ts`
-- `extensions/onclave-comms/src/lib/local-service.ts`
-- `extensions/onclave-comms/src/lib/messages.ts`
-- `extensions/onclave-comms/src/lib/project-label.ts`
-- `extensions/onclave-comms/src/lib/remote-client.ts`
-- `extensions/onclave-comms/src/lib/state.ts`
-- `extensions/onclave-comms/src/lib/tls.ts`
-- `extensions/onclave-comms/src/lib/transport.ts`
-- `extensions/onclave-comms/src/lib/trust.ts`
-- `extensions/onclave-comms/src/lib/wss-transport.ts`
+- `extensions/onclave-pi/src/lib/audit.ts`
+- `extensions/onclave-pi/src/lib/audited-runtime.ts`
+- `extensions/onclave-pi/src/lib/authorized-keys.ts`
+- `extensions/onclave-pi/src/lib/bootstrap.ts`
+- `extensions/onclave-pi/src/lib/config.ts`
+- `extensions/onclave-pi/src/lib/canonical-json.ts`
+- `extensions/onclave-pi/src/lib/discovery.ts`
+- `extensions/onclave-pi/src/lib/extension-helpers.ts`
+- `extensions/onclave-pi/src/lib/handshake.ts`
+- `extensions/onclave-pi/src/lib/hub-runtime.ts`
+- `extensions/onclave-pi/src/lib/identity.ts`
+- `extensions/onclave-pi/src/lib/local-hub.ts`
+- `extensions/onclave-pi/src/lib/local-registry.ts`
+- `extensions/onclave-pi/src/lib/local-service.ts`
+- `extensions/onclave-pi/src/lib/messages.ts`
+- `extensions/onclave-pi/src/lib/project-label.ts`
+- `extensions/onclave-pi/src/lib/remote-client.ts`
+- `extensions/onclave-pi/src/lib/state.ts`
+- `extensions/onclave-pi/src/lib/tls.ts`
+- `extensions/onclave-pi/src/lib/transport.ts`
+- `extensions/onclave-pi/src/lib/trust.ts`
+- `extensions/onclave-pi/src/lib/wss-transport.ts`
 
 Tests:
 
-- `extensions/onclave-comms/tests/acceptance-host-script.test.ts`
-- `extensions/onclave-comms/tests/acceptance.test.ts`
-- `extensions/onclave-comms/tests/audit.test.ts`
-- `extensions/onclave-comms/tests/audited-runtime.test.ts`
-- `extensions/onclave-comms/tests/authorized-keys.test.ts`
-- `extensions/onclave-comms/tests/bootstrap.test.ts`
-- `extensions/onclave-comms/tests/canonical-json.test.ts`
-- `extensions/onclave-comms/tests/config.test.ts`
-- `extensions/onclave-comms/tests/discovery-service.test.ts`
-- `extensions/onclave-comms/tests/discovery.test.ts`
-- `extensions/onclave-comms/tests/extension-helpers.test.ts`
-- `extensions/onclave-comms/tests/extension.test.ts`
-- `extensions/onclave-comms/tests/handshake.test.ts`
-- `extensions/onclave-comms/tests/hub-runtime.test.ts`
-- `extensions/onclave-comms/tests/identity-key.test.ts`
-- `extensions/onclave-comms/tests/identity.test.ts`
-- `extensions/onclave-comms/tests/local-hub.test.ts`
-- `extensions/onclave-comms/tests/local-registry.test.ts`
-- `extensions/onclave-comms/tests/local-service.test.ts`
-- `extensions/onclave-comms/tests/messages.test.ts`
-- `extensions/onclave-comms/tests/project-label.test.ts`
-- `extensions/onclave-comms/tests/remote-client.test.ts`
-- `extensions/onclave-comms/tests/state.test.ts`
-- `extensions/onclave-comms/tests/tls.test.ts`
-- `extensions/onclave-comms/tests/transport-frame.test.ts`
-- `extensions/onclave-comms/tests/trust.test.ts`
-- `extensions/onclave-comms/tests/transport.test.ts`
-- `extensions/onclave-comms/tests/wss-transport.test.ts`
+- `extensions/onclave-pi/tests/acceptance-host-script.test.ts`
+- `extensions/onclave-pi/tests/acceptance.test.ts`
+- `extensions/onclave-pi/tests/audit.test.ts`
+- `extensions/onclave-pi/tests/audited-runtime.test.ts`
+- `extensions/onclave-pi/tests/authorized-keys.test.ts`
+- `extensions/onclave-pi/tests/bootstrap.test.ts`
+- `extensions/onclave-pi/tests/canonical-json.test.ts`
+- `extensions/onclave-pi/tests/config.test.ts`
+- `extensions/onclave-pi/tests/discovery-service.test.ts`
+- `extensions/onclave-pi/tests/discovery.test.ts`
+- `extensions/onclave-pi/tests/extension-helpers.test.ts`
+- `extensions/onclave-pi/tests/extension.test.ts`
+- `extensions/onclave-pi/tests/handshake.test.ts`
+- `extensions/onclave-pi/tests/hub-runtime.test.ts`
+- `extensions/onclave-pi/tests/identity-key.test.ts`
+- `extensions/onclave-pi/tests/identity.test.ts`
+- `extensions/onclave-pi/tests/local-hub.test.ts`
+- `extensions/onclave-pi/tests/local-registry.test.ts`
+- `extensions/onclave-pi/tests/local-service.test.ts`
+- `extensions/onclave-pi/tests/messages.test.ts`
+- `extensions/onclave-pi/tests/project-label.test.ts`
+- `extensions/onclave-pi/tests/remote-client.test.ts`
+- `extensions/onclave-pi/tests/state.test.ts`
+- `extensions/onclave-pi/tests/tls.test.ts`
+- `extensions/onclave-pi/tests/transport-frame.test.ts`
+- `extensions/onclave-pi/tests/trust.test.ts`
+- `extensions/onclave-pi/tests/transport.test.ts`
+- `extensions/onclave-pi/tests/wss-transport.test.ts`
 
 Documentation:
 
@@ -119,12 +119,12 @@ Documentation:
 - `./manual-acceptance.md`
 - `./operator-guide.md`
 - `./implementation-plan.md`
-- `./onclave-comms-PRD.md`
+- `./onclave-pi-PRD.md`
 - `./status.md`
 
 Scripts:
 
-- `extensions/onclave-comms/scripts/onclave-acceptance-host.ts`
+- `extensions/onclave-pi/scripts/onclave-acceptance-host.ts`
 
 Project/config files:
 
@@ -208,7 +208,7 @@ Project/config files:
 - Manual multi-host LAN acceptance runbook is documented in
   `./manual-acceptance.md`.
 - Host-side acceptance helper script at
-  `extensions/onclave-comms/scripts/onclave-acceptance-host.ts` initializes
+  `extensions/onclave-pi/scripts/onclave-acceptance-host.ts` initializes
   local identity when needed,
   prints local public key/endpoint metadata, writes optional static peers, and
   scans audit logs for obvious secret markers.

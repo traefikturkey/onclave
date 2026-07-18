@@ -1,7 +1,7 @@
 ---
 created: 2026-05-22
 status: draft
-parent: ../extensions/onclave-comms/onclave-comms-PRD.md
+parent: ../extensions/onclave-pi/onclave-pi-PRD.md
 ---
 
 # PRD: OpenClaw/Hermes Integration for Tailnet Pi Agent Comms

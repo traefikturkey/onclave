@@ -2,7 +2,7 @@
 created: 2026-05-25
 status: draft
 parents:
-  - ../extensions/onclave-comms/onclave-comms-PRD.md
+  - ../extensions/onclave-pi/onclave-pi-PRD.md
   - observer-subscriptions-PRD.md
   - tailscale-aperture-guardrails-PRD.md
   - openclaw-hermes-integration-PRD.md
@@ -24,7 +24,7 @@ coordination gaps and inconsistent security boundaries.
 The goal is to define Onclave as an agentic software factory where specialized
 agents plan, implement, test, review, document, and release software through a
 shared task and event model. The current Pi communication plugin should become
-`onclave-comms`: the trusted communication fabric between agents, hubs,
+`onclave-pi`: the trusted communication fabric between agents, hubs,
 runtimes, guardrails, workspace services, and operator clients.
 
 ## Users / Jobs To Be Done
@@ -48,10 +48,10 @@ runtimes, guardrails, workspace services, and operator clients.
 ## Goals
 
 1. Define Onclave as the secure multi-agent software factory product.
-2. Rename the current communication plugin concept to `onclave-comms` so Onclave
+2. Rename the current communication plugin concept to `onclave-pi` so Onclave
    can encompass orchestration, workspaces, guardrails, mobile UX, and runtime
    integrations.
-3. Use `onclave-comms` hubs as the only network communication path between
+3. Use `onclave-pi` hubs as the only network communication path between
    factory agents and runtimes.
 4. Support task decomposition, assignment, status tracking, review loops, test
    execution, and release handoff.
@@ -62,7 +62,7 @@ runtimes, guardrails, workspace services, and operator clients.
 7. Route model traffic through Aperture where configured and enforce Pi-side tool
    authorization before tool execution.
 8. Integrate external runtimes such as OpenClaw and Hermes through adapters
-   rather than bypassing `onclave-comms`.
+   rather than bypassing `onclave-pi`.
 9. Provide mobile-first operator controls for notifications, approvals, task
    monitoring, workspace lifecycle, and audit review.
 10. Preserve local-first and tailnet-first deployment without requiring
@@ -71,18 +71,18 @@ runtimes, guardrails, workspace services, and operator clients.
 ## Naming and Package Boundaries
 
 - `Onclave` is the overall agentic software factory product and system.
-- `onclave-comms` is the Pi plugin and protocol component responsible for hub
+- `onclave-pi` is the Pi plugin and protocol component responsible for hub
   discovery, registration, trusted messaging, and observer subscriptions.
 - Factory-level orchestration, workspace provisioning, guardrails, mobile
   clients, and runtime adapters are Onclave subsystems that communicate through
-  `onclave-comms` but are not themselves the comms plugin.
+  `onclave-pi` but are not themselves the comms plugin.
 - Existing references to the early `onclave` Pi plugin should be treated as
-  legacy naming and migrated to `onclave-comms` during implementation planning.
+  legacy naming and migrated to `onclave-pi` during implementation planning.
 
 The naming policy is locked for the current stage:
 
 - Product, repo, and architecture language should use `Onclave`.
-- Internal extension/package/directory names should use `onclave-comms` when
+- Internal extension/package/directory names should use `onclave-pi` when
   referring specifically to the communication subsystem.
 - User-facing tool names should remain on the current `onclave_*` and
   `/onclave-*` surface for now.
@@ -99,25 +99,25 @@ substantial implementation is still the communication subsystem.
 
 Near-term repository guidance:
 
-- Keep `onclave-comms` consolidated under a single extension subtree for now.
+- Keep `onclave-pi` consolidated under a single extension subtree for now.
 - Prefer one clear home for comms entrypoints, internal implementation, tests,
   and helper scripts instead of splitting early across many top-level packages.
 - Keep factory-wide docs, root scripts, and workspace configuration at the repo
   root.
 - Defer `services/`, `apps/`, and additional `packages/` directories until real
   code exists for those subsystems.
-- Preserve light internal boundaries inside the `onclave-comms` subtree so later
+- Preserve light internal boundaries inside the `onclave-pi` subtree so later
   extraction remains straightforward.
 
 Recommended near-term layout:
 
 ```text
 extensions/
-  onclave-comms/
+  onclave-pi/
     package.json
     README.md
     src/
-      onclave-comms.ts
+      onclave-pi.ts
       lib/
       ui/
       protocol/
@@ -136,12 +136,12 @@ The repository migration should happen in small, low-surprise steps.
 ### Phase 1: Rename and Consolidate the Existing Comms Subsystem
 
 - Create a working branch before moving files.
-- Rename `extensions/pi-onclave/` to `extensions/onclave-comms/`.
+- Rename `extensions/pi-onclave/` to `extensions/onclave-pi/`.
 - Move code from `packages/core/src/onclave/` into
-  `extensions/onclave-comms/src/lib/`.
-- Move tests from `tests/onclave/` into `extensions/onclave-comms/tests/`.
+  `extensions/onclave-pi/src/lib/`.
+- Move tests from `tests/onclave/` into `extensions/onclave-pi/tests/`.
 - Move `scripts/onclave-acceptance-host.ts` into
-  `extensions/onclave-comms/scripts/`.
+  `extensions/onclave-pi/scripts/`.
 - Update root `package.json`, `justfile`, test commands, and import paths.
 - Preserve behavior while changing names and locations.
 
@@ -149,10 +149,10 @@ Illustrative path mapping:
 
 | Current path | Near-term path |
 |--------------|----------------|
-| `extensions/pi-onclave/src/onclave.ts` | `extensions/onclave-comms/src/onclave-comms.ts` |
-| `packages/core/src/onclave/*` | `extensions/onclave-comms/src/lib/*` |
-| `tests/onclave/*` | `extensions/onclave-comms/tests/*` |
-| `scripts/onclave-acceptance-host.ts` | `extensions/onclave-comms/scripts/onclave-acceptance-host.ts` |
+| `extensions/pi-onclave/src/onclave.ts` | `extensions/onclave-pi/src/onclave-pi.ts` |
+| `packages/core/src/onclave/*` | `extensions/onclave-pi/src/lib/*` |
+| `tests/onclave/*` | `extensions/onclave-pi/tests/*` |
+| `scripts/onclave-acceptance-host.ts` | `extensions/onclave-pi/scripts/onclave-acceptance-host.ts` |
 
 ### Phase 2: Add Factory-Specific Areas Only When Real Code Exists
 
@@ -166,7 +166,7 @@ Add new top-level areas only when they have concrete implementation value:
 
 ### Phase 3: Split Further Only When Pressure Is Real
 
-A later split from the single `onclave-comms` subtree is justified when one or
+A later split from the single `onclave-pi` subtree is justified when one or
 more of these become true:
 
 - a non-Pi service needs the comms library without extension wiring
@@ -183,11 +183,11 @@ before.
 
 - No autonomous production deployment without explicit policy and approval
   support.
-- No direct agent-to-agent network sockets outside `onclave-comms`.
+- No direct agent-to-agent network sockets outside `onclave-pi`.
 - No direct mobile-to-agent or mobile-to-Proxmox privileged control.
 - No public multi-tenant cloud control plane in v1.
 - No global Internet-scale queue, DHT, or gossip mesh in v1.
-- No replacement for Pi itself, and no assumption that `onclave-comms` alone is
+- No replacement for Pi itself, and no assumption that `onclave-pi` alone is
   the whole Onclave product.
 - No assumption that every repository, runtime, or tool is safe to automate.
 - No storage of provider API keys, Proxmox credentials, private keys, or raw
@@ -220,7 +220,7 @@ Operator / Mobile App
   |
   | tailnet HTTPS/WSS
   v
-onclave-comms Hub Network  <==== authenticated WSS ====>  onclave-comms Hub Network
+onclave-pi Hub Network  <==== authenticated WSS ====>  onclave-pi Hub Network
   |                                                   |
   +--> Pi agents                                     +--> OpenClaw/Hermes adapter
   +--> Observer subscriptions                        +--> Runtime agents
@@ -233,19 +233,19 @@ onclave-comms Hub Network  <==== authenticated WSS ====>  onclave-comms Hub Netw
 ```
 
 All network-visible factory communication must pass through authenticated
-`onclave-comms` hubs. Local process communication may use loopback or
+`onclave-pi` hubs. Local process communication may use loopback or
 platform-local channels, but local agents must still register with the local
-`onclave-comms` hub before participating in factory workflows.
+`onclave-pi` hub before participating in factory workflows.
 
 ## Onclave Comms Requirements
 
 ### Hub and Trust Model
 
-- The factory must use one `onclave-comms` hub per machine.
+- The factory must use one `onclave-pi` hub per machine.
 - Multiple local Pi instances and runtime adapters must register with the local
   hub.
-- Hubs must discover or start through `onclave-comms` state under
-  `~/.pi/onclave-comms/`.
+- Hubs must discover or start through `onclave-pi` state under
+  `~/.pi/onclave-pi/`.
 - Implementations should provide a migration path from legacy `~/.pi/onclave/`
   state created before the communication plugin rename.
 - Hub-to-hub communication must use authenticated WSS with Ed25519
@@ -331,7 +331,7 @@ Factory messages must preserve:
 
 ## Observer Subscription Requirements
 
-- The factory must use `onclave-comms` observer subscriptions for event-driven
+- The factory must use `onclave-pi` observer subscriptions for event-driven
   coordination.
 - Subscriptions must include stable subscription IDs, event types, filters, lease
   duration, and optional resume cursor.
@@ -382,7 +382,7 @@ hub trust, and mobile notification categories.
 
 - Risky, untrusted, or parallel work must be eligible to run in isolated
   Proxmox/LXC workspaces.
-- Workspace requests must be routed through the `onclave-comms` hub to a
+- Workspace requests must be routed through the `onclave-pi` hub to a
   Workspace Provisioner service.
 - Mobile clients and agents must never call the Proxmox API directly.
 - Workspace provisioning requests must include repository, ref, template, CPU,
@@ -427,7 +427,7 @@ hub trust, and mobile notification categories.
 ## Runtime Integration Requirements
 
 - OpenClaw and Hermes must integrate through an adapter or sidecar that registers
-  as an `onclave-comms` participant.
+  as an `onclave-pi` participant.
 - The adapter must expose runtime agents with stable identities, capabilities,
   project/workspace labels, supported messages, and supported event types.
 - Pi agents and external runtime agents must exchange tasks, prompts, responses,
@@ -459,7 +459,7 @@ hub trust, and mobile notification categories.
 
 ## Storage and Audit Requirements
 
-- `onclave-comms` hub state must use SQLite for agents, tasks, subscriptions,
+- `onclave-pi` hub state must use SQLite for agents, tasks, subscriptions,
   pending deliveries, workflow state, and durable cursors.
 - Audit logs must be append-only JSONL by default.
 - Audit records must include service name, event type, timestamp, correlation ID,
@@ -477,7 +477,7 @@ hub trust, and mobile notification categories.
 
 The repository structure should stay aligned with the implementation stack:
 
-- TypeScript remains the default language inside `extensions/onclave-comms/`
+- TypeScript remains the default language inside `extensions/onclave-pi/`
   for the current communication subsystem work.
 - Root workspace tooling should continue to support a single monorepo developer
   workflow through `pnpm`, `just`, and repo-level test/typecheck commands.
@@ -505,7 +505,7 @@ The repository structure should stay aligned with the implementation stack:
 - The factory must be secure by default: discovered peers, new agents, and new
   workspaces have no privileges until authorized.
 - Tailscale ACLs, tags, or `tsnet` identities should govern service reachability.
-- `onclave-comms` trusted-key authentication must govern hub-to-hub messaging.
+- `onclave-pi` trusted-key authentication must govern hub-to-hub messaging.
 - Hub authorization must govern task routing, event subscriptions, mobile
   actions, workspace requests, and runtime adapter operations.
 - Workspace isolation must prevent agent workspaces from receiving infrastructure
@@ -526,11 +526,11 @@ The repository structure should stay aligned with the implementation stack:
      `factory.workflow.created`.
    - Fail: Work starts without durable identity or correlation metadata.
 
-2. [ ] Agents coordinate through `onclave-comms` only.
+2. [ ] Agents coordinate through `onclave-pi` only.
    - Verify: Run planner, implementer, tester, and reviewer agents on two trusted
      hubs.
    - Pass: All task, response, and event traffic flows through authenticated
-     `onclave-comms` hubs.
+     `onclave-pi` hubs.
    - Fail: Agents use direct network sockets or unauthenticated side channels.
 
 3. [ ] Observer subscriptions drive dependent work without polling.
@@ -558,7 +558,7 @@ The repository structure should stay aligned with the implementation stack:
      agents.
    - Pass: The runtime agent is visible with capabilities, receives the task,
      returns status and response events, and preserves correlation IDs.
-   - Fail: The integration bypasses `onclave-comms` or loses task identity.
+   - Fail: The integration bypasses `onclave-pi` or loses task identity.
 
 7. [ ] Mobile operator workflows are pointer-notification safe.
    - Verify: Trigger task completion, approval required, guardrail block, and
@@ -588,12 +588,12 @@ The repository structure should stay aligned with the implementation stack:
 | Option | Pros | Cons | Decision |
 |--------|------|------|----------|
 | Manual multi-agent terminals | Simple and flexible | Weak coordination, audit, and policy consistency | Rejected as factory model |
-| Central external broker | Mature queue semantics | Adds operational dependency and duplicates `onclave-comms` observer routing | Rejected for v1 |
+| Central external broker | Mature queue semantics | Adds operational dependency and duplicates `onclave-pi` observer routing | Rejected for v1 |
 | Direct runtime-to-runtime calls | Low overhead | Bypasses hub trust, subscriptions, and audit | Rejected |
 | Public cloud control plane | Easy remote access | Conflicts with private tailnet-first deployment | Rejected for v1 |
 | All work in local checkouts | Fast for trusted tasks | Weak isolation for risky or parallel work | Allowed only by policy |
 | Proxmox/LXC workspaces | Strong local isolation and lifecycle control | Requires provisioner and approvals | Accepted |
-| `onclave-comms` hub fabric | Matches existing secure comms model | Requires hub lifecycle and trust setup | Accepted |
+| `onclave-pi` hub fabric | Matches existing secure comms model | Requires hub lifecycle and trust setup | Accepted |
 
 ## Risks
 
@@ -606,14 +606,14 @@ The repository structure should stay aligned with the implementation stack:
 | Runtime adapters map state incorrectly | Lost progress or duplicate execution | Capability manifests, conformance tests, and explicit failure modes |
 | Mobile approval lacks context | Unsafe human approvals | Include policy reason, diff/test/workspace context, and risk flags |
 | Audit logs leak sensitive data | Credential exposure | Redaction, hashing, safe summaries, and secret fixtures in tests |
-| Too much stack complexity | Slow delivery | Keep v1 to Onclave plus `onclave-comms`, SQLite, JSONL, Go services, TypeScript adapters, and one mobile stack |
+| Too much stack complexity | Slow delivery | Keep v1 to Onclave plus `onclave-pi`, SQLite, JSONL, Go services, TypeScript adapters, and one mobile stack |
 
 ## Open Questions
 
 - What is the smallest useful v1 workflow: plan/implement/test/review, or
   intake/implement/review only?
-- Should factory task state live primarily inside the `onclave-comms` hub or in
-  a separate factory coordinator service registered with `onclave-comms`?
+- Should factory task state live primarily inside the `onclave-pi` hub or in
+  a separate factory coordinator service registered with `onclave-pi`?
 - Which roles require dedicated agents in v1, and which can be capabilities on a
   smaller set of agents?
 - What default policies should require human approval for workspace provisioning,
@@ -632,7 +632,7 @@ The repository structure should stay aligned with the implementation stack:
 Recommended next commands:
 
 ```bash
-git checkout docs/onclave-comms-monorepo-plan
+git checkout docs/onclave-pi-monorepo-plan
 /plan-it docs/PRDS/agentic-software-factory-PRD.md
 ```
 
@@ -644,10 +644,10 @@ Review command:
 
 Notes for planner:
 
-- Treat Onclave as the factory and `onclave-comms` as its communication fabric.
+- Treat Onclave as the factory and `onclave-pi` as its communication fabric.
 - Reuse the parent PRD trust model and observer subscription semantics while
   updating implementation names from legacy `onclave` plugin references to
-  `onclave-comms`.
+  `onclave-pi`.
 - Keep privileged infrastructure, model routing, tool authorization, and mobile
   actions hub-mediated and auditable.
 - Define the narrowest v1 factory workflow before implementing broad role

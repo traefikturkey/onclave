@@ -35,7 +35,7 @@ services/
   onclave/                        # gateway implementation; extensions do not import it
 ```
 
-`extensions/onclave-comms` is the first-party Pi extension and follows the
+`extensions/onclave-pi` is the first-party Pi extension and follows the
 extension layout. `extensions/onclave-hermes` is the first-party Hermes
 extension and is the canonical Hermes integration for the public gateway.
 Runtime-specific gateway clients belong inside their corresponding extension

@@ -1,7 +1,7 @@
 ---
 created: 2026-05-21
 status: active
-source_prd: ./onclave-comms-PRD.md
+source_prd: ./onclave-pi-PRD.md
 ---
 
 # Onclave Manual LAN Acceptance
@@ -18,7 +18,7 @@ Manual status:
 ## Prerequisites
 
 - Two machines on the same LAN, referred to as **Host A** and **Host B**.
-- Pi installed with the `extensions/onclave-comms` extension available on both
+- Pi installed with the `extensions/onclave-pi` extension available on both
   machines.
 - Firewalls allow UDP broadcast on the discovery port and inbound TCP for the
   selected WSS hub port.

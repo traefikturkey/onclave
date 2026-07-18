@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import onclaveExtension from "../src/onclave-comms";
+import onclaveExtension from "../src/onclave-pi";
 
 type RegisteredTool = { name: string; parameters?: unknown; execute?: (...args: any[]) => unknown };
 type RegisteredCommand = { name: string; handler?: (...args: any[]) => unknown };

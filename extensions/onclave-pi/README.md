@@ -1,4 +1,4 @@
-# onclave-comms Pi Extension
+# onclave-pi Pi Extension
 
 This package connects Pi to the public Onclave HTTPS/WebSocket gateway.
 It does not connect to RabbitMQ, SQLite, or local hub transports.
@@ -20,7 +20,7 @@ From the repository root:
 
 ```bash
 just setup
-pi -e ./extensions/onclave-comms
+pi -e ./extensions/onclave-pi
 ```
 
 The extension authenticates on `session_start`, requests only

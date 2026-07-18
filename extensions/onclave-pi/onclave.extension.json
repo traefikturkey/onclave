@@ -1,10 +1,10 @@
 {
   "manifestVersion": 1,
-  "id": "org.onclave.comms",
-  "name": "onclave-comms",
+  "id": "org.onclave.pi",
+  "name": "onclave-pi",
   "version": "0.1.0",
   "runtime": "pi",
-  "entrypoint": "./src/onclave-comms.ts",
+  "entrypoint": "./src/onclave-pi.ts",
   "protocolVersion": "v1",
   "gateway": {
     "requiredCapabilities": ["message.send", "message.receive"],

@@ -7,7 +7,7 @@
     "preflight:repo": "node ./scripts/preflight.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "onclave:acceptance-host": "tsx extensions/onclave-comms/scripts/onclave-acceptance-host.ts",
+    "onclave:acceptance-host": "tsx extensions/onclave-pi/scripts/onclave-acceptance-host.ts",
     "setup": "pnpm install",
     "check": "pnpm typecheck && pnpm test"
   },
@@ -30,7 +30,7 @@
   "packageManager": "pnpm@10.0.0",
   "pi": {
     "extensions": [
-      "./extensions/onclave-comms/src/onclave-comms.ts"
+      "./extensions/onclave-pi/src/onclave-pi.ts"
     ]
   }
 }

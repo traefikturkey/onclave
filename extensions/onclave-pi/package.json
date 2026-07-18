@@ -1,5 +1,5 @@
 {
-  "name": "onclave-comms",
+  "name": "onclave-pi",
   "version": "0.1.0",
   "type": "module",
   "keywords": ["pi-package"],
@@ -15,7 +15,7 @@
   },
   "pi": {
     "extensions": [
-      "./src/onclave-comms.ts"
+      "./src/onclave-pi.ts"
     ]
   }
 }

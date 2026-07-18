@@ -5,7 +5,7 @@ and vets agent runtimes, negotiates capabilities, persists task and event state,
 and exposes an HTTPS/WebSocket API for adapters and runtimes. RabbitMQ is an
 internal broker; agents and adapters do not connect to RabbitMQ directly.
 
-The repository also contains the `onclave-comms` Pi extension for secure LAN
+The repository also contains the `onclave-pi` Pi extension for secure LAN
 discovery and trusted local/remote Pi communication. That extension is one
 client/runtime integration, not the boundary of the Onclave product.
 
@@ -83,12 +83,12 @@ just pi-local
 - `bash ./scripts/preflight.sh` checks bootstrap tool and workspace readiness.
 - `just setup` installs dependencies with pnpm.
 - `just check` runs typecheck and tests.
-- `just pi-local` starts Pi with `./extensions/onclave-comms` loaded.
+- `just pi-local` starts Pi with `./extensions/onclave-pi` loaded.
 
 For a named local session, run Pi directly:
 
 ```bash
-pi -e ./extensions/onclave-comms --name host-a
+pi -e ./extensions/onclave-pi --name host-a
 ```
 
 ## Install the Pi Extension
@@ -108,7 +108,7 @@ just pi-local
 Equivalent direct Pi command:
 
 ```bash
-pi -e ./extensions/onclave-comms
+pi -e ./extensions/onclave-pi
 ```
 
 ### Local package install
@@ -133,7 +133,7 @@ After installing from a local path or Git URL, start Pi normally and run:
 onclave_status
 ```
 
-Loading `extensions/onclave-comms` directly is supported when the directory
+Loading `extensions/onclave-pi` directly is supported when the directory
 remains inside this repo checkout.
 
 Then inside Pi:
@@ -158,20 +158,20 @@ pnpm run onclave:acceptance-host -- --host-name host-a
   API, durable subscriptions, replay, metrics, RabbitMQ boundary, and TLS deployment
 - [Agent Extension Contract](./docs/agent-extension-contract.md) - extension
   placement, manifest, lifecycle, security, replay, and conformance requirements
-- [Usage Guide](./docs/extensions/onclave-comms/README.md) - quick starts, extension loading, flags,
+- [Usage Guide](./docs/extensions/onclave-pi/README.md) - quick starts, extension loading, flags,
   status dots, and tool examples
-- [Operator Guide](./docs/extensions/onclave-comms/operator-guide.md) - runtime state,
+- [Operator Guide](./docs/extensions/onclave-pi/operator-guide.md) - runtime state,
   trust exchange, discovery, messaging, and troubleshooting
-- [Manual Acceptance](./docs/extensions/onclave-comms/manual-acceptance.md) - step-by-step
+- [Manual Acceptance](./docs/extensions/onclave-pi/manual-acceptance.md) - step-by-step
   host-to-host validation flow
-- [Status](./docs/extensions/onclave-comms/status.md) - implementation progress and delivered scope
-- [Design Decisions](./docs/extensions/onclave-comms/decisions.md) - key v1 design choices
-- [onclave-comms Requirements](./docs/extensions/onclave-comms/onclave-comms-PRD.md) - original communication extension requirements and success
+- [Status](./docs/extensions/onclave-pi/status.md) - implementation progress and delivered scope
+- [Design Decisions](./docs/extensions/onclave-pi/decisions.md) - key v1 design choices
+- [onclave-pi Requirements](./docs/extensions/onclave-pi/onclave-pi-PRD.md) - original communication extension requirements and success
   criteria
 
 ## Current Usage Model
 
-1. Start Pi with `extensions/onclave-comms` loaded from inside this repo checkout.
+1. Start Pi with `extensions/onclave-pi` loaded from inside this repo checkout.
 2. Run `onclave_status` to initialize or reuse the local hub.
 3. Exchange `ssh-ed25519` public key lines with trusted peers.
 4. Use `onclave_peers` and `onclave_remote_agents` to find reachable remote
@@ -179,4 +179,4 @@ pnpm run onclave:acceptance-host -- --host-name host-a
 5. Use `onclave_send` or `onclave_remote_send` to route prompts.
 
 For the full tool reference and examples, start with
-[docs/extensions/onclave-comms/README.md](./docs/extensions/onclave-comms/README.md).
+[docs/extensions/onclave-pi/README.md](./docs/extensions/onclave-pi/README.md).

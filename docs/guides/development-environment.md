@@ -222,7 +222,7 @@ that package README.
 
 ## Onclave-Specific Runtime Requirements
 
-For `extensions/onclave-comms`, additional runtime prerequisites apply when you
+For `extensions/onclave-pi`, additional runtime prerequisites apply when you
 run local Pi sessions or multi-host acceptance:
 
 - `pi` must be installed locally;
@@ -232,9 +232,9 @@ run local Pi sessions or multi-host acceptance:
 
 See these documents for the Onclave runtime flow:
 
-- `docs/extensions/onclave-comms/README.md`
-- `docs/extensions/onclave-comms/operator-guide.md`
-- `docs/extensions/onclave-comms/manual-acceptance.md`
+- `docs/extensions/onclave-pi/README.md`
+- `docs/extensions/onclave-pi/operator-guide.md`
+- `docs/extensions/onclave-pi/manual-acceptance.md`
 
 ## Recommended Fresh-Machine Flow
 

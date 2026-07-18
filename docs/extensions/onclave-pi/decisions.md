@@ -1,7 +1,7 @@
 ---
 created: 2026-05-21
 status: active
-source_prd: ./onclave-comms-PRD.md
+source_prd: ./onclave-pi-PRD.md
 ---
 
 # Onclave v1 Decisions
@@ -92,11 +92,11 @@ project.
 The naming policy is:
 
 - `Onclave` is the overall product, factory vision, and repository identity.
-- `onclave-comms` is the internal extension/package/directory name for the
+- `onclave-pi` is the internal extension/package/directory name for the
   current communication subsystem.
 - User-facing tool and command names remain on the existing `onclave_*` and
   `/onclave-*` surface for now.
-- Runtime state paths remain under `~/.pi/onclave/` for now.
+- Runtime state remains under the product-level `~/.pi/onclave/` root.
 
 ### Rationale
 
@@ -106,13 +106,13 @@ The naming policy is:
   `onclave` plugin concept.
 - Keeping the current user-facing command names avoids unnecessary operator
   churn and preserves the existing manual acceptance, usage, and test flows.
-- Keeping `~/.pi/onclave/` avoids a second migration while the factory design is
-  still settling.
+- Keeping `~/.pi/onclave/` keeps runtime state product-oriented rather than tying
+  it to one host integration name.
 
 ### Consequences
 
 - Internal paths, package names, and repo structure should prefer
-  `onclave-comms` where they refer specifically to the communication subsystem.
+  `onclave-pi` where they refer specifically to the communication subsystem.
 - User docs may still say "run the Onclave tools" when referring to commands
   such as `onclave_status`, `onclave_peers`, and `onclave_remote_send`.
 - A future rename of the tool surface or state root requires an explicit
@@ -123,8 +123,8 @@ The naming policy is:
 - Decide later whether the user-facing tools should stay on the `onclave_*`
   surface permanently or move to a factory-oriented surface with compatibility
   aliases.
-- Decide later whether `~/.pi/onclave/` should remain the long-term state root
-  or migrate to `~/.pi/onclave-comms/` with an explicit compatibility plan.
+- Keep `~/.pi/onclave/` as the product-level state root; host extension renames
+  do not create alternate legacy state paths.
 
 ## Decision 4: Trust Import UX
 

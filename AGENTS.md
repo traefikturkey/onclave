@@ -20,18 +20,18 @@ under `adapters/`, and shared wire contracts live under `packages/`.
   Each distributable extension contains package metadata, an
   `onclave.extension.json` manifest, source, tests, fixtures, and scripts.
 
-- `extensions/onclave-comms/` contains the Pi extension package metadata,
+- `extensions/onclave-pi/` contains the Pi extension package metadata,
   runtime entrypoint, reusable TypeScript communication logic, colocated tests,
   and helper scripts.
-- `extensions/onclave-comms/onclave.extension.json` is the language-neutral
+- `extensions/onclave-pi/onclave.extension.json` is the language-neutral
   manifest for the first-party Pi extension.
-- `extensions/onclave-comms/src/onclave-comms.ts` is the extension entry
+- `extensions/onclave-pi/src/onclave-pi.ts` is the extension entry
   registered by package `pi` metadata.
-- `extensions/onclave-comms/src/lib/` contains Onclave communication source for
+- `extensions/onclave-pi/src/lib/` contains Onclave communication source for
   identity, transport, discovery, hub runtime, trust, and status behavior.
-- `extensions/onclave-comms/tests/` validates the current behavior through Vitest
+- `extensions/onclave-pi/tests/` validates the current behavior through Vitest
   tests.
-- `extensions/onclave-comms/scripts/` contains repo-local acceptance helpers for
+- `extensions/onclave-pi/scripts/` contains repo-local acceptance helpers for
   the communication subsystem.
 - `justfile` is the standard command surface for setup, typecheck, test, and
   local Pi loading.
@@ -50,7 +50,7 @@ just pi-local
 - Run `just setup` to install dependencies.
 - Run `just check` before handing off changes; it runs typecheck and Vitest tests.
 - Run `just typecheck` or `just test` when you need a narrower check.
-- Run `just pi-local` to start Pi with `./extensions/onclave-comms` loaded.
+- Run `just pi-local` to start Pi with `./extensions/onclave-pi` loaded.
 - Package scripts (`pnpm typecheck`, `pnpm test`) must remain runnable without
   `just` so root npm/Pi git installs stay compatible.
 
@@ -58,12 +58,12 @@ just pi-local
 
 - Root `package.json` exposes Onclave through `pi.extensions` for
   `pi install git:...` and local root installs.
-- `extensions/onclave-comms/package.json` exposes
-  `./src/onclave-comms.ts` for repo-local package loading.
-- Loading `extensions/onclave-comms` directly is supported inside this repo
+- `extensions/onclave-pi/package.json` exposes
+  `./src/onclave-pi.ts` for repo-local package loading.
+- Loading `extensions/onclave-pi` directly is supported inside this repo
   checkout and contains its current implementation under the same subtree.
 - Keep vocabulary standardized on `Onclave` for the product and
-  `onclave-comms` for the communication extension.
+  `onclave-pi` for the communication extension.
 
 ## Future locations
 
