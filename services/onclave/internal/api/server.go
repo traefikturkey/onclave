@@ -51,6 +51,14 @@ func (s *Server) ready(writer http.ResponseWriter, _ *http.Request) {
 	writeStatus(writer, http.StatusOK, map[string]string{"status": "ready"})
 }
 
+func (s *Server) metrics(writer http.ResponseWriter, _ *http.Request) {
+	if s.messaging == nil {
+		writeJSON(writer, http.StatusOK, map[string]int64{})
+		return
+	}
+	writeJSON(writer, http.StatusOK, s.messaging.Metrics())
+}
+
 func writeStatus(writer http.ResponseWriter, status int, payload map[string]string) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(status)
