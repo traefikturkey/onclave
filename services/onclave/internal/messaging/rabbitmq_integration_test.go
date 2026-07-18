@@ -17,14 +17,23 @@ func TestRabbitMQPublisherReconnectsAfterChannelClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer publisher.Close()
+	if err := publisher.Ready(); err != nil {
+		t.Fatalf("new publisher should be ready: %v", err)
+	}
 	if err := publisher.channel.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if err := publisher.Ready(); err == nil {
+		t.Fatal("closed publisher channel should make readiness fail")
 	}
 	if err := publisher.Publish(context.Background(), Envelope{
 		RoutingKey: "task.reconnect.agent", MessageID: "message-reconnect", TaskID: "task-reconnect",
 		MessageType: "task.assign", Payload: []byte(`{"instruction":"reconnect"}`), Persistent: true,
 	}); err != nil {
 		t.Fatalf("publish after channel close: %v", err)
+	}
+	if err := publisher.Ready(); err != nil {
+		t.Fatalf("publisher should recover readiness after republish: %v", err)
 	}
 }
 

@@ -152,6 +152,22 @@ type RabbitMQPublisher struct {
 	connectionMu  sync.Mutex
 }
 
+// Ready reports whether the publisher has a live connection and confirmed
+// channel. A closed channel is intentionally not considered ready: the next
+// publish will reconnect, but readiness should stop the gateway from claiming
+// broker-backed service availability during that recovery window.
+func (publisher *RabbitMQPublisher) Ready() error {
+	publisher.connectionMu.Lock()
+	defer publisher.connectionMu.Unlock()
+	if publisher.connection == nil || publisher.connection.IsClosed() {
+		return fmt.Errorf("RabbitMQ connection is closed")
+	}
+	if publisher.channel == nil || publisher.channel.IsClosed() {
+		return fmt.Errorf("RabbitMQ publisher channel is closed")
+	}
+	return nil
+}
+
 func NewRabbitMQPublisher(url, exchange string) (*RabbitMQPublisher, error) {
 	connection, err := amqp.Dial(url)
 	if err != nil {

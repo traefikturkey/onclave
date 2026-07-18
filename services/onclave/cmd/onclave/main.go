@@ -98,9 +98,13 @@ func main() {
 			}
 		}()
 	}
-	server := api.NewApplicationServerWithBroker(api.Config{Address: serviceConfig.Address}, admissionService, messagingService, subscriber, func() error {
-		return nil
-	})
+	readiness := func() error {
+		if subscriber == nil {
+			return nil
+		}
+		return subscriber.Ready()
+	}
+	server := api.NewApplicationServerWithBroker(api.Config{Address: serviceConfig.Address}, admissionService, messagingService, subscriber, readiness)
 
 	protocol := "http"
 	if serviceConfig.TLSCertFile != "" {
