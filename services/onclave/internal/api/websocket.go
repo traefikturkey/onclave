@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -93,7 +94,18 @@ func (s *Server) agentSession(writer http.ResponseWriter, request *http.Request)
 			_ = write(errMessage(patternErr, "event.subscription.invalid"))
 			return
 		}
+		filters, filterErr := eventSubscriptionFilters(request)
+		if filterErr != nil {
+			_ = write(errMessage(filterErr, "event.subscription.invalid"))
+			return
+		}
 		eventSubscription, eventErr := s.events.SubscribeEvents(ctx, "agent-events-"+agentID, pattern, func(envelope messaging.Envelope) error {
+			if filters.correlationID != "" && envelope.CorrelationID != filters.correlationID {
+				return nil
+			}
+			if filters.taskID != "" && envelope.TaskID != filters.taskID {
+				return nil
+			}
 			return write(map[string]any{
 				"type":          "task.event",
 				"messageId":     envelope.MessageID,
@@ -258,4 +270,25 @@ func eventSubscriptionPattern(request *http.Request, agentID string) (string, er
 	default:
 		return "", errors.New("event pattern contains an unsupported task event")
 	}
+}
+
+type eventSubscriptionFilter struct {
+	correlationID string
+	taskID        string
+}
+
+func eventSubscriptionFilters(request *http.Request) (eventSubscriptionFilter, error) {
+	filters := eventSubscriptionFilter{
+		correlationID: request.URL.Query().Get("correlationId"),
+		taskID:        request.URL.Query().Get("taskId"),
+	}
+	for name, value := range map[string]string{"correlationId": filters.correlationID, "taskId": filters.taskID} {
+		if value == "" {
+			continue
+		}
+		if strings.TrimSpace(value) != value || strings.ContainsAny(value, "\r\n") {
+			return eventSubscriptionFilter{}, fmt.Errorf("event filter %s is invalid", name)
+		}
+	}
+	return filters, nil
 }

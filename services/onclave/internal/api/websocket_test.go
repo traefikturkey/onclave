@@ -33,6 +33,19 @@ func TestEventSubscriptionPatternIsAgentScoped(t *testing.T) {
 	}
 }
 
+func TestEventSubscriptionFiltersValidateStructuredValues(t *testing.T) {
+	request := httptest.NewRequest("GET", "/session?correlationId=workflow-1&taskId=task-1", nil)
+	filters, err := eventSubscriptionFilters(request)
+	if err != nil || filters.correlationID != "workflow-1" || filters.taskID != "task-1" {
+		t.Fatalf("unexpected event filters: %+v, %v", filters, err)
+	}
+
+	request = httptest.NewRequest("GET", "/session?taskId=%20task-1", nil)
+	if _, err := eventSubscriptionFilters(request); err == nil {
+		t.Fatal("expected whitespace-padded task filter to be rejected")
+	}
+}
+
 func TestAuthenticatedWebSocketSessionSupportsHeartbeat(t *testing.T) {
 	admissionService := admission.NewService(admission.Policy{})
 	publicKey, privateKey, err := ed25519.GenerateKey(nil)
