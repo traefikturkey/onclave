@@ -1,12 +1,16 @@
 package config
 
-import "os"
+import (
+	"os"
+	"time"
+)
 
 type Config struct {
 	Address          string
 	StateDir         string
 	RabbitMQURL      string
 	RabbitMQExchange string
+	SessionTTL       time.Duration
 }
 
 func FromEnvironment() Config {
@@ -22,8 +26,15 @@ func FromEnvironment() Config {
 	if exchange == "" {
 		exchange = "onclave.commands"
 	}
+	sessionTTL := 24 * time.Hour
+	if value := os.Getenv("ONCLAVE_SESSION_TTL"); value != "" {
+		if parsed, err := time.ParseDuration(value); err == nil && parsed > 0 {
+			sessionTTL = parsed
+		}
+	}
 	return Config{
 		Address: address, StateDir: stateDir,
 		RabbitMQURL: os.Getenv("ONCLAVE_RABBITMQ_URL"), RabbitMQExchange: exchange,
+		SessionTTL: sessionTTL,
 	}
 }

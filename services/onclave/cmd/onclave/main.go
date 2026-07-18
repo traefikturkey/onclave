@@ -37,7 +37,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer store.Close()
-	admissionService, err := admission.NewServiceWithStore(admission.Policy{}, store)
+	admissionService, err := admission.NewServiceWithStore(admission.Policy{SessionTTL: serviceConfig.SessionTTL}, store)
 	if err != nil {
 		log.Fatal(err)
 	}
