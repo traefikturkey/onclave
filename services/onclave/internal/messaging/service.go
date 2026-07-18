@@ -39,6 +39,7 @@ const (
 	EventCompleted    EventType = "task.completed"
 	EventFailed       EventType = "task.failed"
 	EventCancelled    EventType = "task.cancelled"
+	EventExpired      EventType = "task.expired"
 )
 
 type Command struct {
@@ -317,12 +318,28 @@ func (s *Service) task(taskID string) (*Task, error) {
 			loaded, err := s.store.GetTask(taskID)
 			if err == nil {
 				s.tasks[taskID] = &loaded
-				return &loaded, nil
+				task = &loaded
+				ok = true
+			} else {
+				return nil, ErrTaskNotFound
 			}
 		}
+	}
+	if !ok {
 		return nil, ErrTaskNotFound
 	}
+	if !task.ExpiresAt.IsZero() && !s.now().Before(task.ExpiresAt) && !isTerminal(task.State) {
+		task.State = StateExpired
+		if err := s.persist(task); err != nil {
+			return nil, err
+		}
+		s.record(task, Event{Type: EventExpired, TaskID: task.TaskID})
+	}
 	return task, nil
+}
+
+func isTerminal(state State) bool {
+	return state == StateCompleted || state == StateFailed || state == StateCancelled || state == StateExpired
 }
 
 func (s *Service) persist(task *Task) error {

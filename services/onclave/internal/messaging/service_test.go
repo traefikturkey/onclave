@@ -74,6 +74,27 @@ func TestExpiredCommandIsRejected(t *testing.T) {
 	}
 }
 
+func TestAcceptedTaskTransitionsToExpiredAtDeadline(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	service := NewService(func() time.Time { return now })
+	mustSubmit(t, service, now)
+	now = now.Add(time.Hour)
+	task, err := service.Status("task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != StateExpired {
+		t.Fatalf("expected expired state, got %s", task.State)
+	}
+	events := service.Events("task-1")
+	if len(events) != 2 || events[1].Type != EventExpired {
+		t.Fatalf("unexpected expiry events: %+v", events)
+	}
+	if err := service.Acknowledge("task-1"); err != ErrInvalidTransition {
+		t.Fatalf("expected expired task to reject acknowledgement, got %v", err)
+	}
+}
+
 func TestCancellationIsExplicitAndIdempotent(t *testing.T) {
 	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
 	service := NewService(func() time.Time { return now })
