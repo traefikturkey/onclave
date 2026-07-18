@@ -38,6 +38,9 @@ test-integration:
 pi-local:
     pi -e ./extensions/onclave-comms
 
+pi-local-v2:
+    pi -e ./extensions/onclave-pi
+
 pi-local-no-extensions:
     pi --no-extensions
 
