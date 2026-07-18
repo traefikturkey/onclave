@@ -156,6 +156,8 @@ pnpm run onclave:acceptance-host -- --host-name host-a
   package, dependency, and preflight standards for the monorepo
 - [Agent Gateway Contract](./docs/agent-gateway.md) - authenticated HTTP/WebSocket
   API, durable subscriptions, replay, metrics, RabbitMQ boundary, and TLS deployment
+- [Agent Extension Contract](./docs/agent-extension-contract.md) - extension
+  placement, manifest, lifecycle, security, replay, and conformance requirements
 - [Usage Guide](./docs/extensions/onclave-comms/README.md) - quick starts, extension loading, flags,
   status dots, and tool examples
 - [Operator Guide](./docs/extensions/onclave-comms/operator-guide.md) - runtime state,

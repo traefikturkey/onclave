@@ -1,14 +1,30 @@
 # Onclave Repository Guidance
 
-This repo is organized as a monolithic Onclave repository. For the current
-stage, the implemented communication subsystem lives under a single extension
-subtree instead of being split across multiple top-level packages.
+This repo is organized as a monolithic Onclave repository. The primary product
+boundary is the containerized gateway under `services/onclave`; host/harness
+extensions live under `extensions/`, runtime-specific gateway adapters live
+under `adapters/`, and shared wire contracts live under `packages/`.
 
 ## Current structure
+
+- `services/onclave/` contains the harness-independent Go gateway, durable
+  SQLite state, RabbitMQ integration, container entrypoint, and core tests.
+- `adapters/<runtime>/` contains runtime-specific clients of the public gateway
+  contract. Adapters must not depend on RabbitMQ topology or gateway internals.
+- `packages/onclave-comms-protocol/` contains shared schemas, validators, and
+  protocol fixtures.
+- `docs/agent-gateway.md` documents the public gateway contract.
+- `docs/agent-extension-contract.md` defines how new host/harness extensions
+  are authored and tested.
+- `extensions/<extension-name>/` is the location for host/harness extensions.
+  Each distributable extension contains package metadata, an
+  `onclave.extension.json` manifest, source, tests, fixtures, and scripts.
 
 - `extensions/onclave-comms/` contains the Pi extension package metadata,
   runtime entrypoint, reusable TypeScript communication logic, colocated tests,
   and helper scripts.
+- `extensions/onclave-comms/onclave.extension.json` is the language-neutral
+  manifest for the first-party Pi extension.
 - `extensions/onclave-comms/src/onclave-comms.ts` is the extension entry
   registered by package `pi` metadata.
 - `extensions/onclave-comms/src/lib/` contains Onclave communication source for
@@ -57,3 +73,12 @@ just pi-local
   provisioning components under `services/` when implemented.
 - Put mobile client code under `mobile/` when implemented.
 - Do not create empty future packages just to reserve names.
+
+## Extension and adapter boundaries
+
+- Add a new host/harness extension under `extensions/<extension-name>/` and
+  follow `docs/agent-extension-contract.md`.
+- Add a runtime bridge under `adapters/<runtime>/` when the work is a gateway
+  client rather than a host package.
+- Use `packages/onclave-comms-protocol/` for shared wire-format changes; do not
+  duplicate schemas inside an extension or adapter.
