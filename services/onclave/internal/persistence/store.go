@@ -106,6 +106,17 @@ CREATE TABLE IF NOT EXISTS admission_agents (
 CREATE TABLE IF NOT EXISTS admission_session_leases (
   agent_id TEXT PRIMARY KEY,
   expires_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS subscriptions (
+  subscription_id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL,
+  pattern TEXT NOT NULL,
+  correlation_id TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  cursor INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );`
 	if _, err := store.db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate SQLite schema: %w", err)
@@ -275,6 +286,61 @@ func (store *Store) GetEvents(taskID string) ([]messaging.Event, error) {
 		return nil, fmt.Errorf("iterate task events: %w", err)
 	}
 	return events, nil
+}
+
+func (store *Store) SaveSubscription(subscription messaging.StoredSubscription) error {
+	_, err := store.db.Exec(`INSERT INTO subscriptions(subscription_id, agent_id, pattern, correlation_id, task_id, cursor, created_at, expires_at, updated_at)
+VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(subscription_id) DO UPDATE SET agent_id=excluded.agent_id, pattern=excluded.pattern,
+  correlation_id=excluded.correlation_id, task_id=excluded.task_id, cursor=excluded.cursor,
+  created_at=excluded.created_at, expires_at=excluded.expires_at, updated_at=excluded.updated_at`,
+		subscription.SubscriptionID, subscription.AgentID, subscription.Pattern, subscription.CorrelationID,
+		subscription.TaskID, subscription.Cursor, subscription.CreatedAt.UTC().Format(time.RFC3339Nano),
+		subscription.ExpiresAt.UTC().Format(time.RFC3339Nano), subscription.UpdatedAt.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("save subscription: %w", err)
+	}
+	return nil
+}
+
+func (store *Store) GetSubscription(subscriptionID string) (messaging.StoredSubscription, error) {
+	var subscription messaging.StoredSubscription
+	var createdAt, expiresAt, updatedAt string
+	err := store.db.QueryRow(`SELECT subscription_id, agent_id, pattern, correlation_id, task_id, cursor, created_at, expires_at, updated_at
+FROM subscriptions WHERE subscription_id = ?`, subscriptionID).Scan(
+		&subscription.SubscriptionID, &subscription.AgentID, &subscription.Pattern, &subscription.CorrelationID,
+		&subscription.TaskID, &subscription.Cursor, &createdAt, &expiresAt, &updatedAt)
+	if err == sql.ErrNoRows {
+		return messaging.StoredSubscription{}, messaging.ErrSubscriptionNotFound
+	}
+	if err != nil {
+		return messaging.StoredSubscription{}, fmt.Errorf("load subscription: %w", err)
+	}
+	var parseErr error
+	if subscription.CreatedAt, parseErr = time.Parse(time.RFC3339Nano, createdAt); parseErr != nil {
+		return messaging.StoredSubscription{}, fmt.Errorf("parse subscription creation time: %w", parseErr)
+	}
+	if subscription.ExpiresAt, parseErr = time.Parse(time.RFC3339Nano, expiresAt); parseErr != nil {
+		return messaging.StoredSubscription{}, fmt.Errorf("parse subscription expiry: %w", parseErr)
+	}
+	if subscription.UpdatedAt, parseErr = time.Parse(time.RFC3339Nano, updatedAt); parseErr != nil {
+		return messaging.StoredSubscription{}, fmt.Errorf("parse subscription update time: %w", parseErr)
+	}
+	return subscription, nil
+}
+
+func (store *Store) DeleteSubscription(subscriptionID string) error {
+	if _, err := store.db.Exec(`DELETE FROM subscriptions WHERE subscription_id = ?`, subscriptionID); err != nil {
+		return fmt.Errorf("delete subscription: %w", err)
+	}
+	return nil
+}
+
+func (store *Store) DeleteExpiredSubscriptions(now time.Time) error {
+	if _, err := store.db.Exec(`DELETE FROM subscriptions WHERE expires_at <= ?`, now.UTC().Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("delete expired subscriptions: %w", err)
+	}
+	return nil
 }
 
 func (store *Store) EnqueueCommand(envelope messaging.Envelope) error {

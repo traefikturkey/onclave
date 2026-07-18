@@ -67,6 +67,36 @@ func TestStorePingChecksSQLiteAvailability(t *testing.T) {
 	}
 }
 
+func TestSubscriptionRoundTripAndExpiryCleanup(t *testing.T) {
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	subscription := messaging.StoredSubscription{
+		SubscriptionID: "sub-1", AgentID: "agent-1", Pattern: "task.*.agent-1",
+		CorrelationID: "correlation-1", TaskID: "task-1", Cursor: 4,
+		CreatedAt: now, ExpiresAt: now.Add(time.Hour), UpdatedAt: now,
+	}
+	if err := store.SaveSubscription(subscription); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.GetSubscription(subscription.SubscriptionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded != subscription {
+		t.Fatalf("subscription round trip mismatch: got %+v want %+v", loaded, subscription)
+	}
+	if err := store.DeleteExpiredSubscriptions(now.Add(2 * time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.GetSubscription(subscription.SubscriptionID); err != messaging.ErrSubscriptionNotFound {
+		t.Fatalf("expected expired subscription cleanup, got %v", err)
+	}
+}
+
 func TestMessagingServiceReloadsTaskAfterRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "onclave.db")
 	store, err := Open(path)

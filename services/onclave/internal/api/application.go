@@ -41,6 +41,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/agents/{agentID}/capabilities/request", s.requestCapabilities)
 	mux.HandleFunc("POST /v1/agents/{agentID}/capabilities", s.acceptCapabilities)
 	mux.HandleFunc("GET /v1/agents/{agentID}/session", s.agentSession)
+	mux.HandleFunc("POST /v1/subscriptions", s.createSubscription)
+	mux.HandleFunc("GET /v1/subscriptions/{subscriptionID}", s.getSubscription)
+	mux.HandleFunc("POST /v1/subscriptions/{subscriptionID}/renew", s.renewSubscription)
+	mux.HandleFunc("POST /v1/subscriptions/{subscriptionID}/cursor", s.updateSubscriptionCursor)
+	mux.HandleFunc("DELETE /v1/subscriptions/{subscriptionID}", s.deleteSubscription)
 	mux.HandleFunc("POST /v1/commands", s.submitCommand)
 	mux.HandleFunc("GET /v1/tasks/{taskID}", s.taskStatus)
 	mux.HandleFunc("GET /v1/tasks/{taskID}/events", s.taskEvents)
@@ -189,6 +194,140 @@ type submitCommandRequest struct {
 	Type          string         `json:"type"`
 	ExpiresAt     time.Time      `json:"expiresAt"`
 	Payload       map[string]any `json:"payload"`
+}
+
+type subscriptionRequest struct {
+	Pattern       string    `json:"pattern"`
+	CorrelationID string    `json:"correlationId"`
+	TaskID        string    `json:"taskId"`
+	ExpiresAt     time.Time `json:"expiresAt"`
+}
+
+func (s *Server) createSubscription(writer http.ResponseWriter, request *http.Request) {
+	if s.messaging == nil {
+		writeError(writer, http.StatusServiceUnavailable, "messaging service unavailable")
+		return
+	}
+	agentID, ok := s.authenticatedAgent(writer, request)
+	if !ok || !s.requireCapability(writer, agentID, "message.receive") {
+		return
+	}
+	var body subscriptionRequest
+	if !decodeJSON(writer, request, &body) {
+		return
+	}
+	if body.ExpiresAt.IsZero() {
+		body.ExpiresAt = time.Now().Add(time.Hour)
+	}
+	subscription, err := s.messaging.CreateSubscription(agentID, body.Pattern, body.CorrelationID, body.TaskID, body.ExpiresAt)
+	if err != nil {
+		writeDomainError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusCreated, subscription)
+}
+
+func (s *Server) getSubscription(writer http.ResponseWriter, request *http.Request) {
+	agentID, ok := s.authenticatedAgent(writer, request)
+	if !ok || !s.messagingAvailable(writer) {
+		return
+	}
+	subscription, err := s.messaging.GetSubscription(request.PathValue("subscriptionID"))
+	if err != nil {
+		writeDomainError(writer, err)
+		return
+	}
+	if subscription.AgentID != agentID {
+		writeError(writer, http.StatusForbidden, "agent is not authorized for this subscription")
+		return
+	}
+	writeJSON(writer, http.StatusOK, subscription)
+}
+
+func (s *Server) renewSubscription(writer http.ResponseWriter, request *http.Request) {
+	agentID, ok := s.authenticatedAgent(writer, request)
+	if !ok || !s.messagingAvailable(writer) {
+		return
+	}
+	if !s.requireCapability(writer, agentID, "message.receive") {
+		return
+	}
+	var body struct {
+		ExpiresAt time.Time `json:"expiresAt"`
+	}
+	if !decodeJSON(writer, request, &body) {
+		return
+	}
+	subscription, err := s.messaging.RenewSubscription(request.PathValue("subscriptionID"), agentID, body.ExpiresAt)
+	if err != nil {
+		writeDomainError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, subscription)
+}
+
+func (s *Server) updateSubscriptionCursor(writer http.ResponseWriter, request *http.Request) {
+	agentID, ok := s.authenticatedAgent(writer, request)
+	if !ok || !s.messagingAvailable(writer) {
+		return
+	}
+	if !s.requireCapability(writer, agentID, "message.receive") {
+		return
+	}
+	var body struct {
+		Cursor int `json:"cursor"`
+	}
+	if !decodeJSON(writer, request, &body) {
+		return
+	}
+	subscription, err := s.messaging.UpdateSubscriptionCursor(request.PathValue("subscriptionID"), agentID, body.Cursor)
+	if err != nil {
+		writeDomainError(writer, err)
+		return
+	}
+	writeJSON(writer, http.StatusOK, subscription)
+}
+
+func (s *Server) deleteSubscription(writer http.ResponseWriter, request *http.Request) {
+	agentID, ok := s.authenticatedAgent(writer, request)
+	if !ok || !s.messagingAvailable(writer) {
+		return
+	}
+	if !s.requireCapability(writer, agentID, "message.receive") {
+		return
+	}
+	if err := s.messaging.DeleteSubscription(request.PathValue("subscriptionID"), agentID); err != nil {
+		writeDomainError(writer, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) messagingAvailable(writer http.ResponseWriter) bool {
+	if s.messaging == nil {
+		writeError(writer, http.StatusServiceUnavailable, "messaging service unavailable")
+		return false
+	}
+	return true
+}
+
+func (s *Server) authenticatedAgent(writer http.ResponseWriter, request *http.Request) (string, bool) {
+	if s.admission == nil {
+		writeError(writer, http.StatusServiceUnavailable, "admission service unavailable")
+		return "", false
+	}
+	const prefix = "Bearer "
+	authorization := request.Header.Get("Authorization")
+	if len(authorization) <= len(prefix) || authorization[:len(prefix)] != prefix {
+		writeError(writer, http.StatusUnauthorized, "Bearer session token required")
+		return "", false
+	}
+	agentID, err := s.admission.AgentForSession(authorization[len(prefix):])
+	if err != nil {
+		writeDomainError(writer, err)
+		return "", false
+	}
+	return agentID, true
 }
 
 func (s *Server) submitCommand(writer http.ResponseWriter, request *http.Request) {
@@ -481,6 +620,14 @@ func writeDomainError(writer http.ResponseWriter, err error) {
 		status = http.StatusConflict
 	case errors.Is(err, messaging.ErrExpired):
 		status = http.StatusUnprocessableEntity
+	case errors.Is(err, messaging.ErrSubscriptionNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, messaging.ErrSubscriptionUnauthorized):
+		status = http.StatusForbidden
+	case errors.Is(err, messaging.ErrSubscriptionStoreUnavailable):
+		status = http.StatusServiceUnavailable
+	case errors.Is(err, messaging.ErrSubscriptionExpired):
+		status = http.StatusGone
 	}
 	writeError(writer, status, err.Error())
 }
