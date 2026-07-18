@@ -177,7 +177,9 @@ func (s *Service) Submit(command Command) (Task, error) {
 			}
 		}
 	}
-	s.record(task, Event{Type: EventAccepted, TaskID: task.TaskID})
+	if err := s.record(task, Event{Type: EventAccepted, TaskID: task.TaskID}); err != nil {
+		return Task{}, err
+	}
 	return cloneTask(task), nil
 }
 
@@ -198,8 +200,7 @@ func (s *Service) Acknowledge(taskID string) error {
 	if err := s.persist(task); err != nil {
 		return err
 	}
-	s.record(task, Event{Type: EventAcknowledged, TaskID: taskID})
-	return nil
+	return s.record(task, Event{Type: EventAcknowledged, TaskID: taskID})
 }
 
 func (s *Service) Start(taskID string) error {
@@ -219,8 +220,7 @@ func (s *Service) Start(taskID string) error {
 	if err := s.persist(task); err != nil {
 		return err
 	}
-	s.record(task, Event{Type: EventStarted, TaskID: taskID})
-	return nil
+	return s.record(task, Event{Type: EventStarted, TaskID: taskID})
 }
 
 func (s *Service) Progress(taskID string, progress int, note string) error {
@@ -241,8 +241,7 @@ func (s *Service) Progress(taskID string, progress int, note string) error {
 	if err := s.persist(task); err != nil {
 		return err
 	}
-	s.record(task, Event{Type: EventProgress, TaskID: taskID, Progress: progress, Note: note})
-	return nil
+	return s.record(task, Event{Type: EventProgress, TaskID: taskID, Progress: progress, Note: note})
 }
 
 func (s *Service) Complete(taskID string, result map[string]any) error {
@@ -264,8 +263,7 @@ func (s *Service) Complete(taskID string, result map[string]any) error {
 	if err := s.persist(task); err != nil {
 		return err
 	}
-	s.record(task, Event{Type: EventCompleted, TaskID: taskID, Progress: 100, Payload: cloneMap(result)})
-	return nil
+	return s.record(task, Event{Type: EventCompleted, TaskID: taskID, Progress: 100, Payload: cloneMap(result)})
 }
 
 func (s *Service) Fail(taskID string, result map[string]any) error {
@@ -286,8 +284,7 @@ func (s *Service) Fail(taskID string, result map[string]any) error {
 	if err := s.persist(task); err != nil {
 		return err
 	}
-	s.record(task, Event{Type: EventFailed, TaskID: taskID, Payload: cloneMap(result)})
-	return nil
+	return s.record(task, Event{Type: EventFailed, TaskID: taskID, Payload: cloneMap(result)})
 }
 
 func (s *Service) Cancel(taskID string) error {
@@ -307,8 +304,7 @@ func (s *Service) Cancel(taskID string) error {
 	if err := s.persist(task); err != nil {
 		return err
 	}
-	s.record(task, Event{Type: EventCancelled, TaskID: taskID})
-	return nil
+	return s.record(task, Event{Type: EventCancelled, TaskID: taskID})
 }
 
 func (s *Service) Status(taskID string) (Task, error) {
@@ -357,7 +353,9 @@ func (s *Service) task(taskID string) (*Task, error) {
 		if err := s.persist(task); err != nil {
 			return nil, err
 		}
-		s.record(task, Event{Type: EventExpired, TaskID: task.TaskID})
+		if err := s.record(task, Event{Type: EventExpired, TaskID: task.TaskID}); err != nil {
+			return nil, err
+		}
 	}
 	return task, nil
 }
@@ -373,18 +371,20 @@ func (s *Service) persist(task *Task) error {
 	return s.store.SaveTask(*task)
 }
 
-func (s *Service) record(task *Task, event Event) {
+func (s *Service) record(task *Task, event Event) error {
 	event.At = s.now()
-	s.events[task.TaskID] = append(s.events[task.TaskID], event)
 	if eventStore, ok := s.store.(EventStore); ok {
-		_ = eventStore.SaveEvent(task.TaskID, event)
+		if err := eventStore.SaveEvent(task.TaskID, event); err != nil {
+			return fmt.Errorf("persist task event: %w", err)
+		}
 	}
+	s.events[task.TaskID] = append(s.events[task.TaskID], event)
 	payload, err := json.Marshal(map[string]any{
 		"eventType": string(event.Type), "state": string(task.State), "progress": event.Progress,
 		"note": event.Note, "payload": event.Payload,
 	})
 	if err != nil {
-		return
+		return fmt.Errorf("encode task event: %w", err)
 	}
 	envelope := Envelope{
 		RoutingKey: string(event.Type) + "." + task.TargetAgentID,
@@ -403,18 +403,27 @@ func (s *Service) record(task *Task, event Event) {
 		envelopes = append(envelopes, sourceEnvelope)
 	}
 	for _, eventEnvelope := range envelopes {
+		hasOutbox := false
 		if outbox, ok := s.store.(EventOutbox); ok {
-			_ = outbox.EnqueueEvent(eventEnvelope)
+			hasOutbox = true
+			if err := outbox.EnqueueEvent(eventEnvelope); err != nil {
+				return fmt.Errorf("enqueue task event: %w", err)
+			}
 		}
 		if s.eventPublisher == nil {
 			continue
 		}
 		if err := s.eventPublisher.PublishEvent(context.Background(), eventEnvelope); err == nil {
 			if outbox, ok := s.store.(EventOutbox); ok {
-				_ = outbox.MarkEventPublished(eventEnvelope.MessageID)
+				if err := outbox.MarkEventPublished(eventEnvelope.MessageID); err != nil {
+					return fmt.Errorf("mark task event published: %w", err)
+				}
 			}
+		} else if !hasOutbox {
+			return fmt.Errorf("publish task event: %w", err)
 		}
 	}
+	return nil
 }
 
 func (s *Service) ReplayPendingCommands(ctx context.Context) error {

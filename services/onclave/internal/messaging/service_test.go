@@ -1,9 +1,34 @@
 package messaging
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 )
+
+type failingEventPublisher struct {
+	err error
+}
+
+func (publisher failingEventPublisher) PublishEvent(context.Context, Envelope) error {
+	return publisher.err
+}
+
+func TestLifecycleReturnsEventPublicationFailure(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	service := NewService(func() time.Time { return now })
+	mustSubmit(t, service, now)
+	publicationErr := errors.New("event publisher unavailable")
+	service.eventPublisher = failingEventPublisher{err: publicationErr}
+
+	if err := service.Acknowledge("task-1"); err == nil || !errors.Is(err, publicationErr) {
+		t.Fatalf("expected event publication error, got %v", err)
+	}
+	if events := service.Events("task-1"); len(events) != 2 || events[1].Type != EventAcknowledged {
+		t.Fatalf("expected persisted acknowledgement event, got %+v", events)
+	}
+}
 
 func TestSubmitReturnsImmediatelyAcceptedTask(t *testing.T) {
 	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
