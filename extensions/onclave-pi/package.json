@@ -1,0 +1,23 @@
+{
+  "name": "onclave-pi",
+  "version": "0.1.0",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "dependencies": {
+    "@onclave/envelope": "workspace:*",
+    "amqplib": "^0.10.5"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.6"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./src/onclave-pi.ts"
+    ]
+  }
+}

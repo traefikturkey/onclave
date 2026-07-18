@@ -1,3 +1,4 @@
+import { ENVELOPE_VERSION } from "@onclave/envelope";
 import { loadCoreConfig, redactAmqpUrl } from "./config";
 import { startBroker } from "./broker";
 import { startHealthServer } from "./health";
@@ -8,6 +9,7 @@ const config = loadCoreConfig();
 log("info", "core.starting", {
   amqpUrl: redactAmqpUrl(config.amqpUrl),
   httpPort: config.httpPort,
+  envelopeVersion: ENVELOPE_VERSION,
 });
 
 const broker = startBroker({

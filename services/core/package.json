@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@onclave/envelope": "workspace:*",
     "amqplib": "^0.10.5",
     "tsx": "^4.20.6"
   },
