@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -365,8 +366,15 @@ func (s *Server) taskMutation(writer http.ResponseWriter, request *http.Request,
 }
 
 func decodeJSON(writer http.ResponseWriter, request *http.Request, target any) bool {
-	if err := json.NewDecoder(request.Body).Decode(target); err != nil {
+	request.Body = http.MaxBytesReader(writer, request.Body, 1<<20)
+	decoder := json.NewDecoder(request.Body)
+	if err := decoder.Decode(target); err != nil {
 		writeError(writer, http.StatusBadRequest, "invalid JSON request")
+		return false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		writeError(writer, http.StatusBadRequest, "request must contain one JSON value")
 		return false
 	}
 	return true

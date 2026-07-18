@@ -110,6 +110,27 @@ func TestAgentAdmissionAndTaskSubmissionFlow(t *testing.T) {
 	getWithAuth(t, server.Handler(), "/v1/tasks/task-api-1/events?limit=0", auth.SessionToken, http.StatusBadRequest)
 }
 
+func TestDecodeJSONRejectsTrailingAndOversizedBodies(t *testing.T) {
+	trailingRequest := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"ok":true} {"extra":true}`))
+	trailingResponse := httptest.NewRecorder()
+	if decodeJSON(trailingResponse, trailingRequest, &map[string]any{}) {
+		t.Fatal("expected trailing JSON to be rejected")
+	}
+	if trailingResponse.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad request for trailing JSON, got %d", trailingResponse.Code)
+	}
+
+	oversizedBody := bytes.NewBuffer(append([]byte(`{"value":"`), append(bytes.Repeat([]byte("a"), 1<<20), []byte(`"}`)...)...))
+	oversizedRequest := httptest.NewRequest(http.MethodPost, "/", oversizedBody)
+	overSizedResponse := httptest.NewRecorder()
+	if decodeJSON(overSizedResponse, oversizedRequest, &map[string]any{}) {
+		t.Fatal("expected oversized JSON to be rejected")
+	}
+	if overSizedResponse.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad request for oversized JSON, got %d", overSizedResponse.Code)
+	}
+}
+
 func postJSON(t *testing.T, handler http.Handler, path string, body any, expectedStatus int) *httptest.ResponseRecorder {
 	return postJSONWithAuth(t, handler, path, body, "", expectedStatus)
 }
