@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -47,6 +48,22 @@ func TestOpenMigratesAndPersistsTaskMetadata(t *testing.T) {
 	}
 	if loaded.TaskID != "task-1" {
 		t.Fatalf("task was not preserved across reopen: %+v", loaded)
+	}
+}
+
+func TestStorePingChecksSQLiteAvailability(t *testing.T) {
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Ping(context.Background()); err != nil {
+		t.Fatalf("expected SQLite ping to succeed: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Ping(context.Background()); err == nil {
+		t.Fatal("expected SQLite ping to fail after close")
 	}
 }
 

@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -37,6 +38,13 @@ func Open(path string) (*Store, error) {
 
 func (store *Store) Close() error {
 	return store.db.Close()
+}
+
+func (store *Store) Ping(ctx context.Context) error {
+	if err := store.db.PingContext(ctx); err != nil {
+		return fmt.Errorf("ping SQLite database: %w", err)
+	}
+	return nil
 }
 
 func (store *Store) migrate() error {

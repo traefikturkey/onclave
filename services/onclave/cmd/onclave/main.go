@@ -99,6 +99,9 @@ func main() {
 		}()
 	}
 	readiness := func() error {
+		if err := store.Ping(runContext); err != nil {
+			return err
+		}
 		if subscriber == nil {
 			return nil
 		}
