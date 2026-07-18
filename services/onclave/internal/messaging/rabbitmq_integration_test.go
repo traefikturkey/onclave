@@ -87,7 +87,7 @@ func TestRabbitMQAgentQueueRoundTrip(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	received := make(chan Envelope, 1)
+	received := make(chan Envelope, 2)
 	subscription, err := publisher.SubscribeAgent(ctx, "agent-roundtrip", func(envelope Envelope) error {
 		received <- envelope
 		return nil
@@ -115,6 +115,27 @@ func TestRabbitMQAgentQueueRoundTrip(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for RabbitMQ delivery")
+	}
+
+	subscription.mu.Lock()
+	consumerChannel := subscription.channel
+	subscription.mu.Unlock()
+	if err := consumerChannel.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := publisher.Publish(ctx, Envelope{
+		RoutingKey: "task.assign.agent-roundtrip", MessageID: "message-roundtrip-reconnect", TaskID: "task-roundtrip-reconnect",
+		MessageType: "task.assign", Payload: []byte(`{"instruction":"reconnected"}`), Persistent: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case envelope := <-received:
+		if envelope.TaskID != "task-roundtrip-reconnect" {
+			t.Fatalf("unexpected reconnected envelope: %+v", envelope)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for recovered RabbitMQ subscription")
 	}
 
 	eventReceived := make(chan Envelope, 1)

@@ -35,23 +35,109 @@ type EventPublisher interface {
 
 type DeliveryHandler func(Envelope) error
 
+type subscriptionSetup func() (*amqp.Channel, string, <-chan amqp.Delivery, error)
+
 type Subscription struct {
+	mu          sync.Mutex
 	channel     *amqp.Channel
 	consumerTag string
+	stop        chan struct{}
+	done        chan struct{}
 	once        sync.Once
 }
 
-func (subscription *Subscription) Close() error {
-	var err error
-	subscription.once.Do(func() {
-		if subscription.channel != nil {
-			if cancelErr := subscription.channel.Cancel(subscription.consumerTag, false); cancelErr != nil {
-				err = cancelErr
+func newResilientSubscription(ctx context.Context, setup subscriptionSetup, handler DeliveryHandler) (*Subscription, error) {
+	channel, consumerTag, deliveries, err := setup()
+	if err != nil {
+		return nil, err
+	}
+	subscription := &Subscription{
+		channel: channel, consumerTag: consumerTag,
+		stop: make(chan struct{}), done: make(chan struct{}),
+	}
+	go subscription.run(ctx, setup, handler, deliveries)
+	return subscription, nil
+}
+
+func (subscription *Subscription) run(ctx context.Context, setup subscriptionSetup, handler DeliveryHandler, deliveries <-chan amqp.Delivery) {
+	defer close(subscription.done)
+	backoff := 100 * time.Millisecond
+	for {
+		closed := false
+		for {
+			select {
+			case <-ctx.Done():
+				subscription.closeCurrent()
+				return
+			case <-subscription.stop:
+				subscription.closeCurrent()
+				return
+			case delivery, ok := <-deliveries:
+				if !ok {
+					closed = true
+				} else {
+					var envelope Envelope
+					if err := json.Unmarshal(delivery.Body, &envelope); err != nil {
+						_ = delivery.Nack(false, false)
+						continue
+					}
+					envelope.RoutingKey = delivery.RoutingKey
+					if err := handler(envelope); err != nil {
+						_ = delivery.Nack(false, true)
+						continue
+					}
+					_ = delivery.Ack(false)
+					continue
+				}
 			}
-			err = subscription.channel.Close()
+			if closed {
+				break
+			}
 		}
+		subscription.closeCurrent()
+		select {
+		case <-ctx.Done():
+			return
+		case <-subscription.stop:
+			return
+		case <-time.After(backoff):
+		}
+		channel, consumerTag, nextDeliveries, err := setup()
+		if err != nil {
+			if backoff < 2*time.Second {
+				backoff *= 2
+			}
+			continue
+		}
+		subscription.mu.Lock()
+		subscription.channel = channel
+		subscription.consumerTag = consumerTag
+		subscription.mu.Unlock()
+		deliveries = nextDeliveries
+		backoff = 100 * time.Millisecond
+	}
+}
+
+func (subscription *Subscription) closeCurrent() {
+	subscription.mu.Lock()
+	channel := subscription.channel
+	consumerTag := subscription.consumerTag
+	subscription.channel = nil
+	subscription.consumerTag = ""
+	subscription.mu.Unlock()
+	if channel != nil {
+		_ = channel.Cancel(consumerTag, false)
+		_ = channel.Close()
+	}
+}
+
+func (subscription *Subscription) Close() error {
+	subscription.once.Do(func() {
+		close(subscription.stop)
+		subscription.closeCurrent()
 	})
-	return err
+	<-subscription.done
+	return nil
 }
 
 type RabbitMQPublisher struct {
@@ -152,8 +238,17 @@ func (publisher *RabbitMQPublisher) PublishEvent(ctx context.Context, envelope E
 	return publisher.publish(ctx, publisher.eventExchange, envelope)
 }
 
+func (publisher *RabbitMQPublisher) openChannel() (*amqp.Channel, error) {
+	publisher.connectionMu.Lock()
+	defer publisher.connectionMu.Unlock()
+	if publisher.connection == nil {
+		return nil, fmt.Errorf("RabbitMQ connection is closed")
+	}
+	return publisher.connection.Channel()
+}
+
 func (publisher *RabbitMQPublisher) DeclareAgentQueue(agentID string) error {
-	channel, err := publisher.connection.Channel()
+	channel, err := publisher.openChannel()
 	if err != nil {
 		return fmt.Errorf("open RabbitMQ queue channel: %w", err)
 	}
@@ -179,55 +274,55 @@ func (publisher *RabbitMQPublisher) declareAgentQueue(channel *amqp.Channel, age
 }
 
 func (publisher *RabbitMQPublisher) SubscribeAgent(ctx context.Context, agentID string, handler DeliveryHandler) (*Subscription, error) {
-	channel, err := publisher.connection.Channel()
-	if err != nil {
-		return nil, fmt.Errorf("open RabbitMQ consumer channel: %w", err)
-	}
-	queue, err := publisher.declareAgentQueue(channel, agentID)
-	if err != nil {
-		_ = channel.Close()
-		return nil, err
-	}
-	consumerTag := fmt.Sprintf("onclave-%s-%d", queueSegment(agentID), time.Now().UnixNano())
-	deliveries, err := channel.Consume(queue.Name, consumerTag, false, false, false, false, nil)
-	if err != nil {
-		_ = channel.Close()
-		return nil, fmt.Errorf("consume agent queue: %w", err)
-	}
-	subscription := &Subscription{channel: channel, consumerTag: consumerTag}
-	go consumeDeliveries(ctx, subscription, deliveries, handler)
-	return subscription, nil
+	return newResilientSubscription(ctx, func() (*amqp.Channel, string, <-chan amqp.Delivery, error) {
+		channel, err := publisher.openChannel()
+		if err != nil {
+			return nil, "", nil, fmt.Errorf("open RabbitMQ consumer channel: %w", err)
+		}
+		queue, err := publisher.declareAgentQueue(channel, agentID)
+		if err != nil {
+			_ = channel.Close()
+			return nil, "", nil, err
+		}
+		consumerTag := fmt.Sprintf("onclave-%s-%d", queueSegment(agentID), time.Now().UnixNano())
+		deliveries, err := channel.Consume(queue.Name, consumerTag, false, false, false, false, nil)
+		if err != nil {
+			_ = channel.Close()
+			return nil, "", nil, fmt.Errorf("consume agent queue: %w", err)
+		}
+		return channel, consumerTag, deliveries, nil
+	}, handler)
 }
 
 func (publisher *RabbitMQPublisher) SubscribeEvents(ctx context.Context, subscriberID, pattern string, handler DeliveryHandler) (*Subscription, error) {
-	channel, err := publisher.connection.Channel()
-	if err != nil {
-		return nil, fmt.Errorf("open RabbitMQ event channel: %w", err)
-	}
-	queueName := "agent.event." + queueSegment(subscriberID) + "." + queueSegment(pattern)
-	deadRoutingKey := "dead.event." + queueSegment(subscriberID) + "." + queueSegment(pattern)
-	if err := publisher.declareDeadQueue(channel, "agent.event.dead."+queueSegment(subscriberID)+"."+queueSegment(pattern), deadRoutingKey); err != nil {
-		_ = channel.Close()
-		return nil, err
-	}
-	queue, err := channel.QueueDeclare(queueName, true, false, false, false, deadLetterArgs(publisher.deadExchange, deadRoutingKey))
-	if err != nil {
-		_ = channel.Close()
-		return nil, fmt.Errorf("declare event queue: %w", err)
-	}
-	if err := channel.QueueBind(queue.Name, pattern, publisher.eventExchange, false, nil); err != nil {
-		_ = channel.Close()
-		return nil, fmt.Errorf("bind event queue: %w", err)
-	}
-	consumerTag := fmt.Sprintf("onclave-event-%s-%d", queueSegment(subscriberID), time.Now().UnixNano())
-	deliveries, err := channel.Consume(queue.Name, consumerTag, false, false, false, false, nil)
-	if err != nil {
-		_ = channel.Close()
-		return nil, fmt.Errorf("consume event queue: %w", err)
-	}
-	subscription := &Subscription{channel: channel, consumerTag: consumerTag}
-	go consumeDeliveries(ctx, subscription, deliveries, handler)
-	return subscription, nil
+	return newResilientSubscription(ctx, func() (*amqp.Channel, string, <-chan amqp.Delivery, error) {
+		channel, err := publisher.openChannel()
+		if err != nil {
+			return nil, "", nil, fmt.Errorf("open RabbitMQ event channel: %w", err)
+		}
+		queueName := "agent.event." + queueSegment(subscriberID) + "." + queueSegment(pattern)
+		deadRoutingKey := "dead.event." + queueSegment(subscriberID) + "." + queueSegment(pattern)
+		if err := publisher.declareDeadQueue(channel, "agent.event.dead."+queueSegment(subscriberID)+"."+queueSegment(pattern), deadRoutingKey); err != nil {
+			_ = channel.Close()
+			return nil, "", nil, err
+		}
+		queue, err := channel.QueueDeclare(queueName, true, false, false, false, deadLetterArgs(publisher.deadExchange, deadRoutingKey))
+		if err != nil {
+			_ = channel.Close()
+			return nil, "", nil, fmt.Errorf("declare event queue: %w", err)
+		}
+		if err := channel.QueueBind(queue.Name, pattern, publisher.eventExchange, false, nil); err != nil {
+			_ = channel.Close()
+			return nil, "", nil, fmt.Errorf("bind event queue: %w", err)
+		}
+		consumerTag := fmt.Sprintf("onclave-event-%s-%d", queueSegment(subscriberID), time.Now().UnixNano())
+		deliveries, err := channel.Consume(queue.Name, consumerTag, false, false, false, false, nil)
+		if err != nil {
+			_ = channel.Close()
+			return nil, "", nil, fmt.Errorf("consume event queue: %w", err)
+		}
+		return channel, consumerTag, deliveries, nil
+	}, handler)
 }
 
 func consumeDeliveries(ctx context.Context, subscription *Subscription, deliveries <-chan amqp.Delivery, handler DeliveryHandler) {
@@ -256,28 +351,28 @@ func consumeDeliveries(ctx context.Context, subscription *Subscription, deliveri
 }
 
 func (publisher *RabbitMQPublisher) SubscribeDeadLetters(ctx context.Context, handler DeliveryHandler) (*Subscription, error) {
-	channel, err := publisher.connection.Channel()
-	if err != nil {
-		return nil, fmt.Errorf("open RabbitMQ dead-letter channel: %w", err)
-	}
-	queue, err := channel.QueueDeclare("onclave.dead-letter", true, false, false, false, nil)
-	if err != nil {
-		_ = channel.Close()
-		return nil, fmt.Errorf("declare dead-letter observer queue: %w", err)
-	}
-	if err := channel.QueueBind(queue.Name, "#", publisher.deadExchange, false, nil); err != nil {
-		_ = channel.Close()
-		return nil, fmt.Errorf("bind dead-letter observer queue: %w", err)
-	}
-	consumerTag := fmt.Sprintf("onclave-dead-letter-%d", time.Now().UnixNano())
-	deliveries, err := channel.Consume(queue.Name, consumerTag, false, false, false, false, nil)
-	if err != nil {
-		_ = channel.Close()
-		return nil, fmt.Errorf("consume dead-letter observer queue: %w", err)
-	}
-	subscription := &Subscription{channel: channel, consumerTag: consumerTag}
-	go consumeDeliveries(ctx, subscription, deliveries, handler)
-	return subscription, nil
+	return newResilientSubscription(ctx, func() (*amqp.Channel, string, <-chan amqp.Delivery, error) {
+		channel, err := publisher.openChannel()
+		if err != nil {
+			return nil, "", nil, fmt.Errorf("open RabbitMQ dead-letter channel: %w", err)
+		}
+		queue, err := channel.QueueDeclare("onclave.dead-letter", true, false, false, false, nil)
+		if err != nil {
+			_ = channel.Close()
+			return nil, "", nil, fmt.Errorf("declare dead-letter observer queue: %w", err)
+		}
+		if err := channel.QueueBind(queue.Name, "#", publisher.deadExchange, false, nil); err != nil {
+			_ = channel.Close()
+			return nil, "", nil, fmt.Errorf("bind dead-letter observer queue: %w", err)
+		}
+		consumerTag := fmt.Sprintf("onclave-dead-letter-%d", time.Now().UnixNano())
+		deliveries, err := channel.Consume(queue.Name, consumerTag, false, false, false, false, nil)
+		if err != nil {
+			_ = channel.Close()
+			return nil, "", nil, fmt.Errorf("consume dead-letter observer queue: %w", err)
+		}
+		return channel, consumerTag, deliveries, nil
+	}, handler)
 }
 
 func (publisher *RabbitMQPublisher) declareDeadQueue(channel *amqp.Channel, queueName, routingKey string) error {
