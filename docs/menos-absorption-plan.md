@@ -55,6 +55,15 @@ scripts/
   onclave-bws-env.py   # generalized: per-stack required-key sets
 ```
 
+## Execution
+
+This plan is executed with Pi sessions working in the
+`~/.dotfiles/onclave` submodule checkout (branch
+`feature/v2-broker-core`). Work commits and pushes from the submodule as
+a normal git checkout; bump the dotfiles submodule pin after each phase
+gate passes. Phase M0 step 1 (`git subtree add`) must run with the repo
+root as cwd. Validation commands per phase are listed in the gates.
+
 ## Phases
 
 ### Phase M0: Source import
