@@ -176,6 +176,33 @@ func TestAuditEventsPersistAndPrune(t *testing.T) {
 	}
 }
 
+func TestGlobalEventSequenceOrdersEventsAcrossTasks(t *testing.T) {
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	first, err := store.AppendEvent("task-a", messaging.Event{Type: messaging.EventAccepted, TaskID: "task-a", At: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.AppendEvent("task-b", messaging.Event{Type: messaging.EventStarted, TaskID: "task-b", At: now.Add(time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second <= first {
+		t.Fatalf("expected global sequence to increase, got %d then %d", first, second)
+	}
+	events, err := store.GetGlobalEvents(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].TaskID != "task-b" || events[0].Sequence != second {
+		t.Fatalf("unexpected global replay: %+v", events)
+	}
+}
+
 func TestMessagingServiceReloadsTaskAfterRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "onclave.db")
 	store, err := Open(path)

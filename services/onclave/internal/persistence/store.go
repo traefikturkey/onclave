@@ -124,6 +124,15 @@ CREATE TABLE IF NOT EXISTS delivery_attempts (
   last_error TEXT NOT NULL,
   last_attempt_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS global_event_sequence (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  at TEXT NOT NULL,
+  progress INTEGER NOT NULL,
+  note TEXT NOT NULL,
+  payload_json TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit_events (
   audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_type TEXT NOT NULL,
@@ -261,18 +270,66 @@ FROM admission_agents a LEFT JOIN admission_session_leases l ON l.agent_id = a.a
 	return snapshots, nil
 }
 
-func (store *Store) SaveEvent(taskID string, event messaging.Event) error {
+func (store *Store) AppendEvent(taskID string, event messaging.Event) (int64, error) {
 	payload, err := json.Marshal(event.Payload)
 	if err != nil {
-		return fmt.Errorf("encode event payload: %w", err)
+		return 0, fmt.Errorf("encode event payload: %w", err)
 	}
-	_, err = store.db.Exec(`INSERT INTO task_events(task_id, sequence, event_type, at, progress, note, payload_json)
-SELECT ?, COALESCE(MAX(sequence), 0) + 1, ?, ?, ?, ?, ? FROM task_events WHERE task_id = ?`,
-		taskID, event.Type, event.At.UTC().Format(time.RFC3339Nano), event.Progress, event.Note, string(payload), taskID)
+	tx, err := store.db.Begin()
 	if err != nil {
-		return fmt.Errorf("save task event: %w", err)
+		return 0, fmt.Errorf("begin event transaction: %w", err)
 	}
-	return nil
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO task_events(task_id, sequence, event_type, at, progress, note, payload_json)
+SELECT ?, COALESCE(MAX(sequence), 0) + 1, ?, ?, ?, ?, ? FROM task_events WHERE task_id = ?`,
+		taskID, event.Type, event.At.UTC().Format(time.RFC3339Nano), event.Progress, event.Note, string(payload), taskID); err != nil {
+		return 0, fmt.Errorf("save task event: %w", err)
+	}
+	result, err := tx.Exec(`INSERT INTO global_event_sequence(task_id, event_type, at, progress, note, payload_json) VALUES(?, ?, ?, ?, ?, ?)`,
+		taskID, event.Type, event.At.UTC().Format(time.RFC3339Nano), event.Progress, event.Note, string(payload))
+	if err != nil {
+		return 0, fmt.Errorf("save global event sequence: %w", err)
+	}
+	sequence, err := result.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("read global event sequence: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit event transaction: %w", err)
+	}
+	return sequence, nil
+}
+
+func (store *Store) SaveEvent(taskID string, event messaging.Event) error {
+	_, err := store.AppendEvent(taskID, event)
+	return err
+}
+
+func (store *Store) GetGlobalEvents(cursor int64) ([]messaging.Event, error) {
+	rows, err := store.db.Query(`SELECT sequence, task_id, event_type, at, progress, note, payload_json FROM global_event_sequence WHERE sequence > ? ORDER BY sequence`, cursor)
+	if err != nil {
+		return nil, fmt.Errorf("query global events: %w", err)
+	}
+	defer rows.Close()
+	var events []messaging.Event
+	for rows.Next() {
+		var event messaging.Event
+		var at, payload string
+		if err := rows.Scan(&event.Sequence, &event.TaskID, &event.Type, &at, &event.Progress, &event.Note, &payload); err != nil {
+			return nil, fmt.Errorf("scan global event: %w", err)
+		}
+		if event.At, err = time.Parse(time.RFC3339Nano, at); err != nil {
+			return nil, fmt.Errorf("parse global event timestamp: %w", err)
+		}
+		if err := json.Unmarshal([]byte(payload), &event.Payload); err != nil {
+			return nil, fmt.Errorf("decode global event payload: %w", err)
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate global events: %w", err)
+	}
+	return events, nil
 }
 
 func (store *Store) GetEvents(taskID string) ([]messaging.Event, error) {

@@ -69,6 +69,7 @@ type Task struct {
 }
 
 type Event struct {
+	Sequence int64          `json:"sequence,omitempty"`
 	Type     EventType      `json:"type"`
 	TaskID   string         `json:"taskId"`
 	At       time.Time      `json:"at"`
@@ -95,6 +96,11 @@ type TaskStore interface {
 type EventStore interface {
 	SaveEvent(string, Event) error
 	GetEvents(string) ([]Event, error)
+}
+
+type SequencedEventStore interface {
+	AppendEvent(string, Event) (int64, error)
+	GetGlobalEvents(int64) ([]Event, error)
 }
 
 type EventOutbox interface {
@@ -361,6 +367,26 @@ func (s *Service) EventsAfter(taskID string, cursor int) []Event {
 	return append([]Event(nil), events[cursor:]...)
 }
 
+func (s *Service) GlobalEventsAfter(cursor int64) []Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if eventStore, ok := s.store.(SequencedEventStore); ok {
+		if events, err := eventStore.GetGlobalEvents(cursor); err == nil {
+			return events
+		}
+	}
+	var events []Event
+	for _, taskEvents := range s.events {
+		for _, event := range taskEvents {
+			if event.Sequence > cursor {
+				events = append(events, event)
+			}
+		}
+	}
+	sort.Slice(events, func(i, j int) bool { return events[i].Sequence < events[j].Sequence })
+	return events
+}
+
 func (s *Service) task(taskID string) (*Task, error) {
 	task, ok := s.tasks[taskID]
 	if !ok {
@@ -403,14 +429,20 @@ func (s *Service) persist(task *Task) error {
 
 func (s *Service) record(task *Task, event Event) error {
 	event.At = s.now()
-	if eventStore, ok := s.store.(EventStore); ok {
+	if eventStore, ok := s.store.(SequencedEventStore); ok {
+		sequence, err := eventStore.AppendEvent(task.TaskID, event)
+		if err != nil {
+			return fmt.Errorf("persist task event: %w", err)
+		}
+		event.Sequence = sequence
+	} else if eventStore, ok := s.store.(EventStore); ok {
 		if err := eventStore.SaveEvent(task.TaskID, event); err != nil {
 			return fmt.Errorf("persist task event: %w", err)
 		}
 	}
 	s.events[task.TaskID] = append(s.events[task.TaskID], event)
 	payload, err := json.Marshal(map[string]any{
-		"eventType": string(event.Type), "state": string(task.State), "progress": event.Progress,
+		"sequence": event.Sequence, "eventType": string(event.Type), "state": string(task.State), "progress": event.Progress,
 		"note": event.Note, "payload": event.Payload,
 	})
 	if err != nil {

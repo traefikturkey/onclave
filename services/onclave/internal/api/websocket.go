@@ -121,6 +121,20 @@ func (s *Server) agentSession(writer http.ResponseWriter, request *http.Request)
 					_ = write(errMessage(err, "event.subscription.cursor.failed"))
 					return
 				}
+			} else {
+				for _, event := range s.messaging.GlobalEventsAfter(int64(stored.Cursor)) {
+					if err := write(map[string]any{
+						"type": "task.event", "sequence": event.Sequence, "taskId": event.TaskID, "messageType": event.Type,
+						"issuedAt": event.At, "payload": event.Payload, "progress": event.Progress, "note": event.Note,
+					}); err != nil {
+						return
+					}
+					stored.Cursor = int(event.Sequence)
+				}
+				if _, err := s.messaging.UpdateSubscriptionCursor(stored.SubscriptionID, agentID, stored.Cursor); err != nil {
+					_ = write(errMessage(err, "event.subscription.cursor.failed"))
+					return
+				}
 			}
 		}
 		eventSubscription, eventErr := s.events.SubscribeEvents(ctx, "agent-events-"+agentID, pattern, func(envelope messaging.Envelope) error {
@@ -144,8 +158,15 @@ func (s *Server) agentSession(writer http.ResponseWriter, request *http.Request)
 			}); err != nil {
 				return err
 			}
-			if storedEventSubscription != nil && storedEventSubscription.TaskID == envelope.TaskID {
-				storedEventSubscription.Cursor++
+			if storedEventSubscription != nil && (storedEventSubscription.TaskID == "" || storedEventSubscription.TaskID == envelope.TaskID) {
+				sequence := int64(storedEventSubscription.Cursor + 1)
+				var eventPayload struct {
+					Sequence int64 `json:"sequence"`
+				}
+				if json.Unmarshal(envelope.Payload, &eventPayload) == nil && eventPayload.Sequence > 0 {
+					sequence = eventPayload.Sequence
+				}
+				storedEventSubscription.Cursor = int(sequence)
 				if _, err := s.messaging.UpdateSubscriptionCursor(storedEventSubscription.SubscriptionID, agentID, storedEventSubscription.Cursor); err != nil {
 					return err
 				}
