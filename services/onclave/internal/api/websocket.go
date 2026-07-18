@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/traefikturkey/onclave/services/onclave/internal/messaging"
@@ -37,6 +38,25 @@ func (s *Server) agentSession(writer http.ResponseWriter, request *http.Request)
 		defer writeMu.Unlock()
 		return writeWebSocketJSON(ctx, connection, value)
 	}
+	connection.SetReadLimit(1 << 20)
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				writeMu.Lock()
+				err := connection.Ping(ctx)
+				writeMu.Unlock()
+				if err != nil {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
 
 	if err := write(map[string]string{"type": "session.ready", "agentId": agentID}); err != nil {
 		return
