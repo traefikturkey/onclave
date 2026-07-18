@@ -1,0 +1,38 @@
+package messaging
+
+import (
+	"testing"
+	"time"
+)
+
+func TestTaskFailureIsTerminalAndEmitsFailureEvent(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	service := NewService(func() time.Time { return now })
+	mustSubmit(t, service, now)
+	if err := service.Acknowledge("task-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Start("task-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Fail("task-1", map[string]any{"error": "tool failed"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Fail("task-1", map[string]any{"error": "duplicate"}); err != nil {
+		t.Fatal(err)
+	}
+	task, err := service.Status("task-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.State != StateFailed || task.Result["error"] != "tool failed" {
+		t.Fatalf("unexpected failed task: %+v", task)
+	}
+	events := service.Events("task-1")
+	if len(events) != 4 || events[3].Type != EventFailed {
+		t.Fatalf("unexpected failure events: %+v", events)
+	}
+	if err := service.Complete("task-1", nil); err != ErrInvalidTransition {
+		t.Fatalf("expected failed task to reject completion, got %v", err)
+	}
+}

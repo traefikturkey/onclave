@@ -100,6 +100,14 @@ export class OnclaveGatewayClient {
     return (await response.json()) as GatewayTask;
   }
 
+  async failTask(token: string, taskId: string, result: Record<string, unknown> = {}): Promise<void> {
+    await this.request(`/v1/tasks/${encodeURIComponent(taskId)}/fail`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ result }),
+    });
+  }
+
   connectSession(agentId: string, token: string, onMessage: (message: GatewaySessionMessage) => void): WebSocket {
     const url = new URL(`/v1/agents/${encodeURIComponent(agentId)}/session`, this.baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";

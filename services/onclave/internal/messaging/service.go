@@ -37,6 +37,7 @@ const (
 	EventStarted      EventType = "task.started"
 	EventProgress     EventType = "task.progress"
 	EventCompleted    EventType = "task.completed"
+	EventFailed       EventType = "task.failed"
 	EventCancelled    EventType = "task.cancelled"
 )
 
@@ -234,6 +235,28 @@ func (s *Service) Complete(taskID string, result map[string]any) error {
 		return err
 	}
 	s.record(task, Event{Type: EventCompleted, TaskID: taskID, Progress: 100, Payload: cloneMap(result)})
+	return nil
+}
+
+func (s *Service) Fail(taskID string, result map[string]any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	task, err := s.task(taskID)
+	if err != nil {
+		return err
+	}
+	if task.State == StateFailed {
+		return nil
+	}
+	if task.State != StateRunning {
+		return ErrInvalidTransition
+	}
+	task.State = StateFailed
+	task.Result = cloneMap(result)
+	if err := s.persist(task); err != nil {
+		return err
+	}
+	s.record(task, Event{Type: EventFailed, TaskID: taskID, Payload: cloneMap(result)})
 	return nil
 }
 

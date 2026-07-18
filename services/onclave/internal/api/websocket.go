@@ -122,6 +122,13 @@ func (s *Server) agentSession(writer http.ResponseWriter, request *http.Request)
 				}
 				continue
 			}
+		case "task.failed":
+			if err := s.messaging.Fail(message.TaskID, message.Result); err != nil {
+				if write(errMessage(err, "task.fail.failed")) != nil {
+					return
+				}
+				continue
+			}
 		case "task.cancelled":
 			if err := s.messaging.Cancel(message.TaskID); err != nil {
 				if write(errMessage(err, "task.cancel.failed")) != nil {

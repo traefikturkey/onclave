@@ -42,6 +42,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/tasks/{taskID}/start", s.startTask)
 	mux.HandleFunc("POST /v1/tasks/{taskID}/progress", s.progressTask)
 	mux.HandleFunc("POST /v1/tasks/{taskID}/complete", s.completeTask)
+	mux.HandleFunc("POST /v1/tasks/{taskID}/fail", s.failTask)
 	mux.HandleFunc("POST /v1/tasks/{taskID}/cancel", s.cancelTask)
 	return mux
 }
@@ -284,6 +285,27 @@ func (s *Server) completeTask(writer http.ResponseWriter, request *http.Request)
 		return
 	}
 	if err := s.messaging.Complete(request.PathValue("taskID"), body.Result); err != nil {
+		writeDomainError(writer, err)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) failTask(writer http.ResponseWriter, request *http.Request) {
+	if s.messaging == nil {
+		writeError(writer, http.StatusServiceUnavailable, "messaging service unavailable")
+		return
+	}
+	if _, ok := s.requireTaskSession(writer, request, request.PathValue("taskID"), false); !ok {
+		return
+	}
+	var body struct {
+		Result map[string]any `json:"result"`
+	}
+	if !decodeJSON(writer, request, &body) {
+		return
+	}
+	if err := s.messaging.Fail(request.PathValue("taskID"), body.Result); err != nil {
 		writeDomainError(writer, err)
 		return
 	}
