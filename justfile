@@ -21,6 +21,9 @@ check:
 gateway-acceptance:
     node ./scripts/gateway-acceptance.mjs
 
+gateway-restart-acceptance:
+    ONCLAVE_ACCEPTANCE_RESTART=1 node ./scripts/gateway-acceptance.mjs
+
 go-rabbitmq-test:
     bash ./scripts/rabbitmq-test.sh
 

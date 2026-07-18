@@ -1,8 +1,10 @@
 import { randomBytes } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { getPublicKeyAsync, signAsync } from "@noble/ed25519";
 import WebSocket from "ws";
 
 const baseUrl = process.env.ONCLAVE_GATEWAY_URL ?? "http://127.0.0.1:8080";
+const restartGateway = process.env.ONCLAVE_ACCEPTANCE_RESTART === "1";
 
 async function request(path, options = {}, expected = [200]) {
   const response = await fetch(`${baseUrl}${path}`, {
@@ -60,18 +62,19 @@ const taskId = `task-${Date.now()}`;
 let delivered = false;
 let completed = false;
 
-const sourceSession = openSession(source, (message) => {
+const onSourceMessage = (message) => {
   if (message.type === "task.event" && message.messageType === "task.completed" && message.taskId === taskId) completed = true;
-});
-const targetSession = openSession(target, (message, socket) => {
+};
+const onTargetMessage = (message, socket) => {
   if (message.type !== "command.delivery" || message.taskId !== taskId) return;
   delivered = true;
   socket.send(JSON.stringify({ type: "task.ack", messageId: message.messageId, taskId }));
   socket.send(JSON.stringify({ type: "task.started", messageId: message.messageId, taskId }));
   socket.send(JSON.stringify({ type: "task.completed", messageId: message.messageId, taskId, result: { passed: true, direction: "target-to-source" } }));
-});
-await Promise.all([sourceSession.ready, targetSession.ready]);
-await request("/v1/commands", {
+};
+let sourceSession = openSession(source, onSourceMessage);
+let targetSession;
+const submit = () => request("/v1/commands", {
   ...json({
     messageId: `${taskId}-message`, taskId, correlationId: taskId,
     sourceAgentId: source.agentId, targetAgentId: target.agentId, type: "task.assign",
@@ -79,6 +82,34 @@ await request("/v1/commands", {
   }),
   headers: source.headers,
 }, [202]);
+
+if (restartGateway) {
+  await sourceSession.ready;
+  // Declare the durable target queue before submitting, then disconnect the
+  // target runtime to prove the command survives the gateway restart.
+  const initialTargetSession = openSession(target, onTargetMessage);
+  await initialTargetSession.ready;
+  initialTargetSession.socket.close();
+  await submit();
+  sourceSession.socket.close();
+  execFileSync("docker", ["compose", "-f", "infrastructure/docker/onclave-compose.yml", "restart", "onclave"], { stdio: "inherit" });
+  const readyDeadline = Date.now() + 30000;
+  while (Date.now() < readyDeadline) {
+    try {
+      await request("/readyz");
+      break;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  sourceSession = openSession(source, onSourceMessage);
+  targetSession = openSession(target, onTargetMessage);
+} else {
+  targetSession = openSession(target, onTargetMessage);
+  await Promise.all([sourceSession.ready, targetSession.ready]);
+  await submit();
+}
+await Promise.all([sourceSession.ready, targetSession.ready]);
 const deadline = Date.now() + 10000;
 while ((!delivered || !completed) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
 sourceSession.socket.close();

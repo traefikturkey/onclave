@@ -142,3 +142,15 @@ just go-rabbitmq-test
 ```
 
 It starts the Compose RabbitMQ service and runs the full Go suite from a temporary container sharing RabbitMQ's network namespace. The suite covers queue delivery, publisher recovery after channel closure, and TTL/dead-letter observation.
+
+The gateway acceptance flow can also verify durable state across an Onclave
+restart. With the Compose stack running, use:
+
+```bash
+ONCLAVE_ACCEPTANCE_RESTART=1 node ./scripts/gateway-acceptance.mjs
+```
+
+This submits the command, restarts only the gateway, reconnects the source
+session, and then verifies delivery, lifecycle completion, and source event
+fan-out after the restart. RabbitMQ remains private; the runner uses only the
+gateway API and WebSocket boundary.
