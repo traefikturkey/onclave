@@ -331,6 +331,26 @@ func (s *Service) Events(taskID string) []Event {
 	return events
 }
 
+func (s *Service) EventsAfter(taskID string, cursor int) []Event {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, loaded := s.events[taskID]; !loaded {
+		if eventStore, ok := s.store.(EventStore); ok {
+			if events, err := eventStore.GetEvents(taskID); err == nil {
+				s.events[taskID] = events
+			}
+		}
+	}
+	events := s.events[taskID]
+	if cursor < 0 || cursor >= len(events) {
+		if cursor >= len(events) {
+			return nil
+		}
+		cursor = 0
+	}
+	return append([]Event(nil), events[cursor:]...)
+}
+
 func (s *Service) task(taskID string) (*Task, error) {
 	task, ok := s.tasks[taskID]
 	if !ok {

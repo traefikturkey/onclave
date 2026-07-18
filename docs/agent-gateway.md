@@ -66,8 +66,23 @@ wss://gateway.example/v1/agents/{agentID}/session
 The default event subscription is `task.*.{agentID}`. A session may request
 one narrower lifecycle pattern using the `events` query parameter, for example
 `?events=task.completed.agent-id`; the gateway only accepts patterns scoped to
-the authenticated agent. Optional `correlationId` and `taskId` query
-parameters further filter events without widening the agent scope.
+the authenticated agent.
+
+Durable observers use the subscription API with the agent's bearer session:
+
+- `POST /v1/subscriptions` creates a lease-backed subscription. The body accepts
+  `pattern`, optional `correlationId`, optional `taskId`, and `expiresAt`.
+- `GET /v1/subscriptions/{subscriptionId}` reads the subscription.
+- `POST /v1/subscriptions/{subscriptionId}/renew` renews its lease.
+- `POST /v1/subscriptions/{subscriptionId}/cursor` advances its replay cursor;
+  cursors are monotonic.
+- `DELETE /v1/subscriptions/{subscriptionId}` removes it.
+
+Connect a WebSocket with `subscriptionId` to replay retained task events after
+the stored cursor and continue receiving live events. Subscription ownership
+and `message.receive` capability are enforced for every operation. Optional
+`correlationId` and `taskId` query parameters further filter events without
+widening the agent scope.
 
 Send the bearer token in the WebSocket handshake `Authorization` header. The first server message is:
 

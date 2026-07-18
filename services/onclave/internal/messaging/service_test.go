@@ -77,6 +77,22 @@ func TestTaskLifecycleEmitsProgressAndCompletionEvents(t *testing.T) {
 	}
 }
 
+func TestEventsAfterUsesPersistedCursorOffset(t *testing.T) {
+	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
+	service := NewService(func() time.Time { return now })
+	mustSubmit(t, service, now)
+	if err := service.Acknowledge("task-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Start("task-1"); err != nil {
+		t.Fatal(err)
+	}
+	events := service.EventsAfter("task-1", 1)
+	if len(events) != 2 || events[0].Type != EventAcknowledged || events[1].Type != EventStarted {
+		t.Fatalf("unexpected cursor replay: %+v", events)
+	}
+}
+
 func TestDuplicateSubmissionIsIdempotent(t *testing.T) {
 	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
 	service := NewService(func() time.Time { return now })

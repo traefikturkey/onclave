@@ -66,6 +66,7 @@ func (s *Server) agentSession(writer http.ResponseWriter, request *http.Request)
 	if err := write(map[string]string{"type": "session.ready", "agentId": agentID}); err != nil {
 		return
 	}
+	var storedEventSubscription *messaging.StoredSubscription
 	var subscription *messaging.Subscription
 	if s.subscriber != nil {
 		subscription, err = s.subscriber.SubscribeAgent(ctx, agentID, func(envelope messaging.Envelope) error {
@@ -89,15 +90,38 @@ func (s *Server) agentSession(writer http.ResponseWriter, request *http.Request)
 		defer subscription.Close()
 	}
 	if s.events != nil {
-		pattern, patternErr := eventSubscriptionPattern(request, agentID)
+		pattern, filters, patternErr := s.resolveEventSubscription(request, agentID)
 		if patternErr != nil {
 			_ = write(errMessage(patternErr, "event.subscription.invalid"))
 			return
 		}
-		filters, filterErr := eventSubscriptionFilters(request)
-		if filterErr != nil {
-			_ = write(errMessage(filterErr, "event.subscription.invalid"))
-			return
+		if subscriptionID := request.URL.Query().Get("subscriptionId"); subscriptionID != "" {
+			stored, err := s.messaging.GetSubscription(subscriptionID)
+			if err != nil || stored.AgentID != agentID {
+				if err == nil {
+					err = errors.New("agent is not authorized for this subscription")
+				}
+				_ = write(errMessage(err, "event.subscription.invalid"))
+				return
+			}
+			storedEventSubscription = &stored
+			pattern = stored.Pattern
+			filters = eventSubscriptionFilter{correlationID: stored.CorrelationID, taskID: stored.TaskID}
+			if stored.TaskID != "" {
+				for _, event := range s.messaging.EventsAfter(stored.TaskID, stored.Cursor) {
+					if err := write(map[string]any{
+						"type": "task.event", "taskId": event.TaskID, "messageType": event.Type,
+						"issuedAt": event.At, "payload": event.Payload, "progress": event.Progress, "note": event.Note,
+					}); err != nil {
+						return
+					}
+					stored.Cursor++
+				}
+				if _, err := s.messaging.UpdateSubscriptionCursor(stored.SubscriptionID, agentID, stored.Cursor); err != nil {
+					_ = write(errMessage(err, "event.subscription.cursor.failed"))
+					return
+				}
+			}
 		}
 		eventSubscription, eventErr := s.events.SubscribeEvents(ctx, "agent-events-"+agentID, pattern, func(envelope messaging.Envelope) error {
 			if filters.correlationID != "" && envelope.CorrelationID != filters.correlationID {
@@ -106,7 +130,7 @@ func (s *Server) agentSession(writer http.ResponseWriter, request *http.Request)
 			if filters.taskID != "" && envelope.TaskID != filters.taskID {
 				return nil
 			}
-			return write(map[string]any{
+			if err := write(map[string]any{
 				"type":          "task.event",
 				"messageId":     envelope.MessageID,
 				"taskId":        envelope.TaskID,
@@ -117,7 +141,16 @@ func (s *Server) agentSession(writer http.ResponseWriter, request *http.Request)
 				"issuedAt":      envelope.IssuedAt,
 				"expiresAt":     envelope.ExpiresAt,
 				"payload":       json.RawMessage(envelope.Payload),
-			})
+			}); err != nil {
+				return err
+			}
+			if storedEventSubscription != nil && storedEventSubscription.TaskID == envelope.TaskID {
+				storedEventSubscription.Cursor++
+				if _, err := s.messaging.UpdateSubscriptionCursor(storedEventSubscription.SubscriptionID, agentID, storedEventSubscription.Cursor); err != nil {
+					return err
+				}
+			}
+			return nil
 		})
 		if eventErr != nil {
 			_ = write(map[string]string{"type": "error", "error": "event queue unavailable"})
@@ -250,6 +283,18 @@ func writeWebSocketJSON(ctx context.Context, connection *websocket.Conn, value a
 		return err
 	}
 	return connection.Write(ctx, websocket.MessageText, payload)
+}
+
+func (s *Server) resolveEventSubscription(request *http.Request, agentID string) (string, eventSubscriptionFilter, error) {
+	pattern, err := eventSubscriptionPattern(request, agentID)
+	if err != nil {
+		return "", eventSubscriptionFilter{}, err
+	}
+	filters, err := eventSubscriptionFilters(request)
+	if err != nil {
+		return "", eventSubscriptionFilter{}, err
+	}
+	return pattern, filters, nil
 }
 
 func eventSubscriptionPattern(request *http.Request, agentID string) (string, error) {
