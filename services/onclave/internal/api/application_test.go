@@ -16,7 +16,7 @@ import (
 
 func TestAgentAdmissionAndTaskSubmissionFlow(t *testing.T) {
 	admissionService := admission.NewService(admission.Policy{AllowedCapabilities: map[string]map[string]bool{
-		"reference": {"message.receive": true},
+		"reference": {"message.receive": true, "message.send": true},
 	}})
 	messagingService := messaging.NewService(time.Now)
 	server := NewApplicationServer(Config{}, admissionService, messagingService, func() error { return nil })
@@ -61,7 +61,7 @@ func TestAgentAdmissionAndTaskSubmissionFlow(t *testing.T) {
 	postJSONWithAuth(t, server.Handler(), "/v1/agents/agent-api/capabilities", map[string]any{
 		"requestId":    capabilityRequest.RequestID,
 		"nonce":        capabilityRequest.Nonce,
-		"capabilities": []string{"message.receive"},
+		"capabilities": []string{"message.receive", "message.send"},
 	}, auth.SessionToken, http.StatusNoContent)
 
 	taskResponse := postJSONWithAuth(t, server.Handler(), "/v1/commands", map[string]any{

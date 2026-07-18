@@ -21,6 +21,7 @@ var (
 	ErrNotAuthenticated         = errors.New("agent is not authenticated")
 	ErrCapabilityRequestMissing = errors.New("capability request is missing or already consumed")
 	ErrCapabilityNonceMismatch  = errors.New("capability nonce does not match request")
+	ErrCapabilityNotGranted     = errors.New("required capability is not granted")
 	ErrInvalidSession           = errors.New("invalid agent session")
 )
 
@@ -370,6 +371,21 @@ func (s *Service) EffectiveCapabilities(agentID string) ([]string, error) {
 		return nil, err
 	}
 	return append([]string(nil), agent.effective...), nil
+}
+
+func (s *Service) HasCapability(agentID, capability string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	agent, err := s.agent(agentID)
+	if err != nil {
+		return err
+	}
+	for _, effective := range agent.effective {
+		if effective == capability {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %s", ErrCapabilityNotGranted, capability)
 }
 
 func (s *Service) Status(agentID string) (Status, error) {

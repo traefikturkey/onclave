@@ -82,7 +82,13 @@ func TestCapabilityDeclarationIsNonceBoundAndPolicyFiltered(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(capabilities) != 1 || capabilities[0] != "message.receive" {
-		t.Fatalf("unexpected effective capabilities: %#v", capabilities)
+		t.Fatalf("unexpected effective capabilities: %+v", capabilities)
+	}
+	if err := service.HasCapability("agent-3", "message.receive"); err != nil {
+		t.Fatalf("expected granted capability: %v", err)
+	}
+	if err := service.HasCapability("agent-3", "admin.shutdown"); err == nil {
+		t.Fatal("expected denied capability")
 	}
 }
 

@@ -190,6 +190,9 @@ func (s *Server) submitCommand(writer http.ResponseWriter, request *http.Request
 	if !s.requireSession(writer, request, body.SourceAgentID) {
 		return
 	}
+	if !s.requireCapability(writer, body.SourceAgentID, "message.send") {
+		return
+	}
 	task, err := s.messaging.Submit(messaging.Command{
 		MessageID: body.MessageID, TaskID: body.TaskID, CorrelationID: body.CorrelationID,
 		SourceAgentID: body.SourceAgentID, TargetAgentID: body.TargetAgentID, Type: body.Type,
@@ -398,6 +401,14 @@ func (s *Server) requireSession(writer http.ResponseWriter, request *http.Reques
 	return true
 }
 
+func (s *Server) requireCapability(writer http.ResponseWriter, agentID, capability string) bool {
+	if err := s.admission.HasCapability(agentID, capability); err != nil {
+		writeDomainError(writer, err)
+		return false
+	}
+	return true
+}
+
 func (s *Server) requireTaskSession(writer http.ResponseWriter, request *http.Request, taskID string, allowSource bool) (messaging.Task, bool) {
 	if s.admission == nil || s.messaging == nil {
 		writeError(writer, http.StatusServiceUnavailable, "task services unavailable")
@@ -421,6 +432,14 @@ func (s *Server) requireTaskSession(writer http.ResponseWriter, request *http.Re
 	}
 	if agentID != task.TargetAgentID && (!allowSource || agentID != task.SourceAgentID) {
 		writeError(writer, http.StatusForbidden, "agent is not authorized for this task")
+		return messaging.Task{}, false
+	}
+	requiredCapability := "message.receive"
+	if allowSource && agentID == task.SourceAgentID {
+		requiredCapability = "message.send"
+	}
+	if err := s.admission.HasCapability(agentID, requiredCapability); err != nil {
+		writeDomainError(writer, err)
 		return messaging.Task{}, false
 	}
 	return task, true
