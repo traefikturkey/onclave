@@ -2,8 +2,12 @@ package messaging
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -146,6 +150,7 @@ type RabbitMQPublisher struct {
 	connection    *amqp.Connection
 	channel       *amqp.Channel
 	url           string
+	caFile        string
 	exchange      string
 	eventExchange string
 	deadExchange  string
@@ -173,7 +178,11 @@ func (publisher *RabbitMQPublisher) Ready() error {
 }
 
 func NewRabbitMQPublisher(url, exchange string) (*RabbitMQPublisher, error) {
-	connection, err := amqp.Dial(url)
+	return NewRabbitMQPublisherWithTLS(url, exchange, "")
+}
+
+func NewRabbitMQPublisherWithTLS(rawURL, exchange, caFile string) (*RabbitMQPublisher, error) {
+	connection, err := dialRabbitMQ(rawURL, caFile)
 	if err != nil {
 		return nil, fmt.Errorf("connect to RabbitMQ: %w", err)
 	}
@@ -205,7 +214,39 @@ func NewRabbitMQPublisher(url, exchange string) (*RabbitMQPublisher, error) {
 		return nil, fmt.Errorf("enable RabbitMQ publisher confirms: %w", err)
 	}
 	confirmations := channel.NotifyPublish(make(chan amqp.Confirmation, 1))
-	return &RabbitMQPublisher{connection: connection, channel: channel, url: url, exchange: exchange, eventExchange: eventExchange, deadExchange: deadExchange, confirmations: confirmations}, nil
+	return &RabbitMQPublisher{connection: connection, channel: channel, url: rawURL, caFile: caFile, exchange: exchange, eventExchange: eventExchange, deadExchange: deadExchange, confirmations: confirmations}, nil
+}
+
+func dialRabbitMQ(rawURL, caFile string) (*amqp.Connection, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse RabbitMQ URL: %w", err)
+	}
+	if parsed.Scheme != "amqp" && parsed.Scheme != "amqps" {
+		return nil, fmt.Errorf("RabbitMQ URL must use amqp or amqps scheme")
+	}
+	if caFile == "" && parsed.Scheme == "amqp" {
+		return amqp.Dial(rawURL)
+	}
+	if parsed.Scheme != "amqps" {
+		return nil, fmt.Errorf("RabbitMQ CA file requires an amqps URL")
+	}
+	tlsConfig := &tls.Config{ServerName: parsed.Hostname(), MinVersion: tls.VersionTLS12}
+	if caFile != "" {
+		certificate, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, fmt.Errorf("read RabbitMQ CA file: %w", err)
+		}
+		pool, err := x509.SystemCertPool()
+		if err != nil || pool == nil {
+			pool = x509.NewCertPool()
+		}
+		if !pool.AppendCertsFromPEM(certificate) {
+			return nil, fmt.Errorf("RabbitMQ CA file contains no certificates")
+		}
+		tlsConfig.RootCAs = pool
+	}
+	return amqp.DialTLS(rawURL, tlsConfig)
 }
 
 func (publisher *RabbitMQPublisher) Publish(ctx context.Context, envelope Envelope) error {
@@ -459,7 +500,7 @@ func (publisher *RabbitMQPublisher) reconnect() error {
 	defer publisher.publishMu.Unlock()
 	publisher.connectionMu.Lock()
 	defer publisher.connectionMu.Unlock()
-	connection, err := amqp.Dial(publisher.url)
+	connection, err := dialRabbitMQ(publisher.url, publisher.caFile)
 	if err != nil {
 		return fmt.Errorf("reconnect to RabbitMQ: %w", err)
 	}

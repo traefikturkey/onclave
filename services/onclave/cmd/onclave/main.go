@@ -28,7 +28,7 @@ func main() {
 	var publisher messaging.Publisher
 	var subscriber *messaging.RabbitMQPublisher
 	if serviceConfig.RabbitMQURL != "" {
-		rabbitPublisher, err := messaging.NewRabbitMQPublisher(serviceConfig.RabbitMQURL, serviceConfig.RabbitMQExchange)
+		rabbitPublisher, err := messaging.NewRabbitMQPublisherWithTLS(serviceConfig.RabbitMQURL, serviceConfig.RabbitMQExchange, serviceConfig.RabbitMQCAFile)
 		if err != nil {
 			log.Fatal(err)
 		}

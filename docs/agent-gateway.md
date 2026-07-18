@@ -84,6 +84,13 @@ and `message.receive` capability are enforced for every operation. Optional
 `correlationId` and `taskId` query parameters further filter events without
 widening the agent scope.
 
+For RabbitMQ TLS deployments, set `ONCLAVE_RABBITMQ_URL` to an `amqps://` URL
+and set `ONCLAVE_RABBITMQ_CA_FILE` to a mounted PEM CA bundle. The gateway
+requires TLS 1.2 or newer, validates the broker hostname, and reuses the CA
+bundle after reconnect. The local Compose profile intentionally uses private
+plain AMQP on the internal Docker network; do not publish RabbitMQ ports in a
+production deployment.
+
 Send the bearer token in the WebSocket handshake `Authorization` header. The first server message is:
 
 ```json

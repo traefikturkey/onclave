@@ -17,6 +17,15 @@ func TestDeliveryRedeliveryCountReadsRabbitDeathHeaders(t *testing.T) {
 	}
 }
 
+func TestRabbitMQDialRequiresAMQPSForCustomCA(t *testing.T) {
+	if _, err := dialRabbitMQ("amqp://onclave@rabbitmq:5672/%2Fonclave", "ca.pem"); err == nil {
+		t.Fatal("expected custom CA to require amqps")
+	}
+	if _, err := dialRabbitMQ("https://rabbitmq:5671/", ""); err == nil {
+		t.Fatal("expected unsupported RabbitMQ URL scheme to be rejected")
+	}
+}
+
 func TestTaskFailureIsTerminalAndEmitsFailureEvent(t *testing.T) {
 	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
 	service := NewService(func() time.Time { return now })

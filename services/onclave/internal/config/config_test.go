@@ -37,6 +37,7 @@ func TestFromEnvironmentReadsOverrides(t *testing.T) {
 	t.Setenv("ONCLAVE_STATE_DIR", "/tmp/onclave")
 	t.Setenv("ONCLAVE_RABBITMQ_URL", "amqp://user:pass@rabbitmq:5672/%2Fonclave")
 	t.Setenv("ONCLAVE_RABBITMQ_EXCHANGE", "custom.commands")
+	t.Setenv("ONCLAVE_RABBITMQ_CA_FILE", "/run/secrets/rabbitmq-ca.pem")
 	t.Setenv("ONCLAVE_SESSION_TTL", "45m")
 	t.Setenv("ONCLAVE_TLS_CERT_FILE", "/run/secrets/onclave.crt")
 	t.Setenv("ONCLAVE_TLS_KEY_FILE", "/run/secrets/onclave.key")
@@ -44,7 +45,7 @@ func TestFromEnvironmentReadsOverrides(t *testing.T) {
 
 	config := FromEnvironment()
 
-	if config.Address != "127.0.0.1:9090" || config.StateDir != "/tmp/onclave" || config.RabbitMQURL == "" || config.RabbitMQExchange != "custom.commands" || config.SessionTTL != 45*time.Minute || config.TLSCertFile == "" || config.TLSKeyFile == "" {
+	if config.Address != "127.0.0.1:9090" || config.StateDir != "/tmp/onclave" || config.RabbitMQURL == "" || config.RabbitMQExchange != "custom.commands" || config.RabbitMQCAFile != "/run/secrets/rabbitmq-ca.pem" || config.SessionTTL != 45*time.Minute || config.TLSCertFile == "" || config.TLSKeyFile == "" {
 		t.Fatalf("unexpected environment config: %+v", config)
 	}
 	if !config.AllowedCapabilities["*"]["message.send"] || !config.AllowedCapabilities["*"]["message.receive"] {
