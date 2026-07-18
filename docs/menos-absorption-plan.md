@@ -113,8 +113,8 @@ through the API), no data loss (volumes untouched).
 2. Docs: onclave README gains the menos subsystem section; menos README
    and operator docs land under docs/menos; deployment docs point at the
    onclave harness. Remove `infra/ansible/menos-legacy/`.
-3. Backup/update playbooks ported or consciously dropped (open
-   question 2).
+3. Port the active daily data backup as `backup-menos.yml`; retire the
+   unreferenced configuration snapshot and quick-update playbooks.
 
 Gate: CI green including the python job; docs reviewed; legacy dir gone.
 
@@ -144,14 +144,13 @@ Gate: menos deploys run only from onclave; old repo archived.
    or another containerized S3-compatible service remains allowed as a
    future, separately planned change; nothing in the ported deploy may
    assume MinIO beyond the S3_* env contract.
-
-## Open Questions
-
-1. Are backup.yml / backup-setup.yml / update.yml still in use and worth
-   porting, or superseded?
-2. Should the menos API history import preserve full history (subtree
-   keeps it reachable) or is a squashed import acceptable? Defaulting to
-   full history.
+2. The active daily SurrealDB and MinIO backup is retained (decided
+   2026-07-18). Read-only host checks confirmed the root cron, successful
+   daily logs, 30-day retention, and current backup artifacts. Repository
+   and host automation checks found no references to the configuration
+   snapshot or quick-update playbooks, so both are retired.
+3. The menos import preserves full history through the subtree merge
+   (decided 2026-07-18).
 
 ## Risks
 

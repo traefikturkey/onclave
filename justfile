@@ -56,6 +56,9 @@ deploy-syntax:
 deploy-lint:
     docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-lint playbooks/deploy.yml
 
+menos-backup-setup *ARGS:
+    docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-playbook playbooks/backup-menos.yml {{ARGS}}
+
 pi-local:
     pi -e ./extensions/onclave-comms
 

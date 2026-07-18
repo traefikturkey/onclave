@@ -49,6 +49,4 @@ make reboot         # Fix: reboot the server
 ```bash
 make shell          # Interactive shell in Ansible container
 make deploy         # Full deploy (sync, rebuild, restart)
-make update         # Quick update (pull images, restart)
-make backup         # Backup server config
 ```

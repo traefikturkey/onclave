@@ -1,4 +1,4 @@
-.PHONY: deploy update backup backup-setup reboot shell build logs status test lint \
+.PHONY: deploy reboot shell build logs status test lint \
 	version-show version-check version-set version-bump-major version-bump-minor version-bump-patch
 
 VERSION_FILE = api/pyproject.toml
@@ -39,18 +39,6 @@ ANSIBLE_CMD = docker compose -f infra/ansible/docker-compose.yml run --rm ansibl
 # Full deploy: sync files, pull images, start services
 deploy:
 	$(ANSIBLE_CMD) ansible-playbook playbooks/deploy.yml
-
-# Quick update: pull latest images and restart
-update:
-	$(ANSIBLE_CMD) ansible-playbook playbooks/update.yml
-
-# Backup current server config
-backup:
-	$(ANSIBLE_CMD) ansible-playbook playbooks/backup.yml
-
-# Set up data backup infrastructure (cron, script, directories)
-backup-setup:
-	$(ANSIBLE_CMD) ansible-playbook playbooks/backup-setup.yml
 
 # Reboot remote server (fixes nvidia driver mismatch)
 reboot:
@@ -97,9 +85,6 @@ fmt:
 test-infra:
 	@echo "Checking Ansible syntax..."
 	$(ANSIBLE_CMD) --syntax-check playbooks/deploy.yml
-	$(ANSIBLE_CMD) --syntax-check playbooks/update.yml
-	$(ANSIBLE_CMD) --syntax-check playbooks/backup.yml
-	$(ANSIBLE_CMD) --syntax-check playbooks/backup-setup.yml
 	@echo "All playbooks OK"
 
 # Semantic versioning helpers

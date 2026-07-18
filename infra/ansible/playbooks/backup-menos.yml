@@ -1,0 +1,52 @@
+---
+- name: Install Menos data backup
+  hosts: menos
+  become: true
+
+  vars:
+    menos_backup_path: /backups/menos
+    menos_backup_script_dest: /apps/menos/scripts/backup.sh
+    menos_backup_log: /var/log/menos-backup.log
+
+  tasks:
+    - name: Create Menos backup directory
+      ansible.builtin.file:
+        path: "{{ menos_backup_path }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+
+    - name: Create Menos scripts directory
+      ansible.builtin.file:
+        path: "{{ deploy_path }}/scripts"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+
+    - name: Install Menos backup script
+      ansible.builtin.copy:
+        src: /ansible/files/menos-backup.sh
+        dest: "{{ menos_backup_script_dest }}"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Create Menos backup log
+      ansible.builtin.file:
+        path: "{{ menos_backup_log }}"
+        state: touch
+        access_time: preserve
+        modification_time: preserve
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Install daily Menos backup cron job
+      ansible.builtin.cron:
+        name: menos daily data backup
+        minute: "0"
+        hour: "3"
+        job: "{{ menos_backup_script_dest }} >> {{ menos_backup_log }} 2>&1"
+        user: root
