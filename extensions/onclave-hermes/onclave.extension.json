@@ -1,0 +1,14 @@
+{
+  "manifestVersion": 1,
+  "id": "org.onclave.hermes",
+  "name": "onclave-hermes",
+  "version": "0.1.0",
+  "runtime": "hermes",
+  "entrypoint": "./__init__.py",
+  "protocolVersion": "v1",
+  "gateway": {
+    "requiredCapabilities": ["message.send", "message.receive"],
+    "supportsSubscriptions": true,
+    "supportsTaskLifecycle": true
+  }
+}

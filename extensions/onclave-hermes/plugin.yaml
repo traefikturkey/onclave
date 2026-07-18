@@ -1,0 +1,20 @@
+name: onclave-hermes
+version: 0.1.0
+description: Connect Hermes Agent to the public Onclave HTTPS/WebSocket gateway.
+provides_tools:
+  - onclave_status
+  - onclave_send
+  - onclave_task
+  - onclave_inbox
+  - onclave_complete
+  - onclave_fail
+  - onclave_cancel
+  - onclave_subscribe
+  - onclave_disconnect
+requires_env:
+  - name: ONCLAVE_GATEWAY_URL
+    description: HTTPS base URL of the Onclave gateway
+    secret: false
+  - name: ONCLAVE_AGENT_ID
+    description: Enrolled Onclave agent ID
+    secret: false

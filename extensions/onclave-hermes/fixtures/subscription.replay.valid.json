@@ -1,0 +1,13 @@
+{
+  "subscriptionId": "subscription-1",
+  "cursor": 4,
+  "events": [
+    {
+      "type": "task.event",
+      "sequence": 5,
+      "taskId": "task-1",
+      "messageType": "task.completed",
+      "payload": {"state": "completed"}
+    }
+  ]
+}

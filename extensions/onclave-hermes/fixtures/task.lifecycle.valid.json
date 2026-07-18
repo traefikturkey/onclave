@@ -1,0 +1,8 @@
+{
+  "type": "task.event",
+  "messageId": "message-1:task.completed:2026-07-18T00:00:00Z",
+  "taskId": "task-1",
+  "messageType": "task.completed",
+  "payload": {"eventType": "task.completed", "state": "completed"},
+  "sequence": 5
+}

@@ -1,0 +1,10 @@
+{
+  "name": "onclave-hermes",
+  "version": "0.1.0",
+  "description": "Hermes Agent plugin for the public Onclave gateway",
+  "runtime": "hermes",
+  "files": ["plugin.yaml", "onclave.extension.json", "__init__.py", "schemas.py", "tools.py", "src", "scripts", "fixtures", "requirements.txt", "README.md"],
+  "scripts": {
+    "test": "python -m pytest tests -q"
+  }
+}

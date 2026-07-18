@@ -1,0 +1,10 @@
+{
+  "type": "command.delivery",
+  "messageId": "message-1",
+  "taskId": "task-1",
+  "correlationId": "workflow-1",
+  "sourceAgentId": "agent-planner",
+  "targetAgentId": "agent-hermes",
+  "messageType": "task.assign",
+  "payload": {"instruction": "[REDACTED]"}
+}
