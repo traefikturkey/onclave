@@ -31,3 +31,10 @@ def test_subscription_manager_rejects_non_monotonic_cursor(tmp_path):
     manager.ensure("task.*.agent-hermes")
     assert manager.accept_event({"sequence": 5}) is True
     assert manager.accept_event({"sequence": 4}) is False
+
+
+def test_subscription_manager_delivers_events_without_sequence(tmp_path):
+    manager = SubscriptionManager(FakeClient(), tmp_path / "state.json")
+    delivered = []
+    assert manager.accept_event({"type": "task.event"}, delivered.append) is True
+    assert delivered == [{"type": "task.event"}]

@@ -14,6 +14,7 @@ SEND = {
             "instruction": {"type": "string", "description": "Task instruction"},
             "task_id": {"type": "string", "description": "Optional stable idempotency task ID"},
             "correlation_id": {"type": "string", "description": "Optional workflow correlation ID"},
+            "expires_at": {"type": "string", "description": "Optional RFC3339 UTC expiry timestamp"},
         },
         "required": ["target_agent_id", "instruction"],
         "additionalProperties": False,
@@ -23,6 +24,11 @@ TASK = {
     "name": "onclave_task",
     "description": "Read the current public Onclave task state by task ID.",
     "parameters": {"type": "object", "properties": {"task_id": {"type": "string"}}, "required": ["task_id"], "additionalProperties": False},
+}
+AWAIT = {
+    "name": "onclave_await",
+    "description": "Wait for an Onclave task to reach a terminal state.",
+    "parameters": {"type": "object", "properties": {"task_id": {"type": "string"}, "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 300000}}, "required": ["task_id"], "additionalProperties": False},
 }
 INBOX = {
     "name": "onclave_inbox",
@@ -42,12 +48,12 @@ FAIL = {
 CANCEL = {
     "name": "onclave_cancel",
     "description": "Cancel an Onclave task owned by this agent when gateway policy permits it.",
-    "parameters": {"type": "object", "properties": {"task_id": {"type": "string"}}, "required": ["task_id"], "additionalProperties": False},
+    "parameters": {"type": "object", "properties": {"task_id": {"type": "string"}, "reason": {"type": "string"}}, "required": ["task_id"], "additionalProperties": False},
 }
 SUBSCRIBE = {
     "name": "onclave_subscribe",
     "description": "Create or reuse an agent-scoped durable Onclave event subscription.",
-    "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"], "additionalProperties": False},
+    "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "correlation_id": {"type": "string"}, "task_id": {"type": "string"}, "expires_at": {"type": "string"}}, "required": ["pattern"], "additionalProperties": False},
 }
 DISCONNECT = {
     "name": "onclave_disconnect",

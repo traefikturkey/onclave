@@ -30,18 +30,26 @@ class GatewaySession:
         import websockets
         return await websockets.connect(url, **kwargs)
 
-    def websocket_url(self) -> str:
+    def websocket_url(self, subscription_id: str | None = None, correlation_id: str | None = None, task_id: str | None = None) -> str:
         parsed = urlparse(self.base_url)
         scheme = "wss" if parsed.scheme == "https" else "ws"
         path_prefix = parsed.path.rstrip("/")
         path = f"{path_prefix}/v1/agents/{quote(self.agent_id, safe='')}/session"
-        return urlunparse((scheme, parsed.netloc, path, "", "", ""))
+        query: list[tuple[str, str]] = []
+        if subscription_id:
+            query.append(("subscriptionId", subscription_id))
+        if correlation_id:
+            query.append(("correlationId", correlation_id))
+        if task_id:
+            query.append(("taskId", task_id))
+        from urllib.parse import urlencode
+        return urlunparse((scheme, parsed.netloc, path, "", urlencode(query), ""))
 
-    async def run_once(self, on_message: Callable[[dict[str, Any]], Any | Awaitable[Any]]) -> None:
+    async def run_once(self, on_message: Callable[[dict[str, Any]], Any | Awaitable[Any]], session_options: dict[str, str] | None = None) -> None:
         self.ready = False
         self.closed = False
         socket_or_awaitable = self.connect_fn(
-            self.websocket_url(),
+            self.websocket_url(**(session_options or {})),
             additional_headers={"Authorization": f"Bearer {self.token}"},
         )
         socket = await socket_or_awaitable if inspect.isawaitable(socket_or_awaitable) else socket_or_awaitable
@@ -103,11 +111,11 @@ class GatewaySession:
                         await result
                 raise SessionError("gateway heartbeat acknowledgement timed out") from error
 
-    async def run_forever(self, on_message: Callable[[dict[str, Any]], Any | Awaitable[Any]], stop_event: asyncio.Event | None = None) -> None:
+    async def run_forever(self, on_message: Callable[[dict[str, Any]], Any | Awaitable[Any]], stop_event: asyncio.Event | None = None, options_fn: Callable[[], dict[str, str]] | None = None) -> None:
         delay = 1.0
         while not self.closed and not (stop_event and stop_event.is_set()):
             try:
-                await self.run_once(on_message)
+                await self.run_once(on_message, options_fn() if options_fn else None)
                 delay = 1.0
             except (OSError, SessionError, RuntimeError):
                 if self.closed or (stop_event and stop_event.is_set()):

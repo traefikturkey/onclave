@@ -5,6 +5,7 @@ provides_tools:
   - onclave_status
   - onclave_send
   - onclave_task
+  - onclave_await
   - onclave_inbox
   - onclave_complete
   - onclave_fail

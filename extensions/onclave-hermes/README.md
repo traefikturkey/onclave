@@ -65,12 +65,18 @@ State contains only subscription/cursor and idempotency metadata. By default it 
 - `onclave_status`: validates configuration without network access.
 - `onclave_send`: submits a `task.assign` command to a target agent.
 - `onclave_task`: reads task state.
+- `onclave_await`: waits for a task to reach a terminal state.
 - `onclave_inbox`: reads inbound command/event deliveries received by the background WSS session.
 - `onclave_complete`: completes an inbound task after Hermes handles it.
 - `onclave_fail`: reports failure for an inbound task.
 - `onclave_cancel`: requests cancellation where gateway ownership policy permits it.
 - `onclave_subscribe`: creates or reuses an agent-scoped durable subscription.
 - `onclave_disconnect`: clears the cached controller.
+
+`onclave_send` uses the canonical `instruction` parameter and accepts optional
+`task_id`, `correlation_id`, and `expires_at` values. Task results use normalized
+`task_id`, `state`, `progress`, `note`, `result`, `created_at`, and `updated_at`
+fields. `onclave_get` is not a Hermes command; use `onclave_task`.
 
 Inbound WSS is started lazily when a network tool first initializes the plugin. Deliveries are acknowledged, marked started, and placed in the bounded `onclave_inbox`; Hermes can then process them and report `onclave_complete` or `onclave_fail`. The controller deduplicates by both `messageId` and `taskId`, and `onclave_disconnect` stops the background session.
 

@@ -73,17 +73,23 @@ class OnclaveController:
         with self._lock:
             if self.idempotency.seen(message_id, task_id):
                 return {"accepted": False, "duplicate": True, "messageId": message_id, "taskId": task_id}
-            self.client.lifecycle(task_id, "ack")
-            self.client.lifecycle(task_id, "started")
-            self.idempotency.record(message_id, task_id)
-        try:
-            result = handler(message)
-        except Exception as error:
-            self.fail(task_id, str(error))
-            raise
+            try:
+                result = handler(message)
+                self.idempotency.record(message_id, task_id)
+                self.client.lifecycle(task_id, "ack")
+                self.client.lifecycle(task_id, "started")
+            except Exception as error:
+                self.fail(task_id, str(error))
+                raise
+
         if complete:
             self.complete(task_id, result if isinstance(result, dict) else {"result": result})
         return {"accepted": True, "messageId": message_id, "taskId": task_id, "result": result}
+
+    def cancel(self, task_id: str, reason: str = "") -> None:
+        if not task_id:
+            raise ValueError("task_id is required")
+        self.client.lifecycle(task_id, "cancelled", {"reason": reason} if reason else None)
 
     def complete(self, task_id: str, result: dict[str, Any]) -> None:
         self.client.lifecycle(task_id, "completed", result)

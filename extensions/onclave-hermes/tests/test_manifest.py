@@ -18,6 +18,7 @@ def test_plugin_manifest_exposes_only_supported_tools():
     text = (ROOT / "plugin.yaml").read_text()
     assert "onclave_status" in text
     assert "onclave_send" in text
+    assert "onclave_await" in text
     assert "ONCLAVE_AGENT_ID" in text
     assert "session_token" not in text
     assert "rabbitmq" not in text.lower()

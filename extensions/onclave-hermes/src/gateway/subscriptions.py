@@ -48,6 +48,8 @@ class SubscriptionManager:
     def accept_event(self, event: dict[str, Any], handler=None) -> bool:
         sequence = event.get("sequence", event.get("cursor"))
         if not isinstance(sequence, int):
+            if handler is not None:
+                handler(event)
             return True
         current = self.cursor
         if current is not None and sequence <= current:

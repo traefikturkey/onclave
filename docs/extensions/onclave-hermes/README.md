@@ -92,7 +92,8 @@ The plugin exposes these Hermes tools:
 |---|---|
 | `onclave_status` | Validate local configuration without a network call. |
 | `onclave_send` | Submit a task to an enrolled target agent. |
-| `onclave_task` | Read task state by task ID. |
+| `onclave_task` | Read task state. |
+| `onclave_await` | Wait for a task to reach a terminal state. |
 | `onclave_inbox` | Read inbound commands/events received by the WSS session. |
 | `onclave_complete` | Complete an inbound task after Hermes handles it. |
 | `onclave_fail` | Report failure for an inbound task. |
@@ -100,12 +101,18 @@ The plugin exposes these Hermes tools:
 | `onclave_subscribe` | Create or reuse an agent-scoped durable event subscription. |
 | `onclave_disconnect` | Stop the background WSS session and clear the controller. |
 
+`onclave_send` accepts `target_agent_id` and `instruction`, plus optional
+`task_id`, `correlation_id`, and `expires_at` values. `onclave_task` and
+`onclave_await` return normalized `task_id`, `state`, `progress`, `note`,
+`result`, `created_at`, and `updated_at` fields. Use `onclave_task` rather than
+the legacy `onclave_get` name.
+
 Typical workflow:
 
 1. Run `onclave_status` and correct configuration errors.
 2. Run `onclave_send` with `target_agent_id` and `instruction`.
 3. Keep the returned task ID.
-4. Use `onclave_task` to inspect state, or subscribe to task events with
+4. Use `onclave_task` or `onclave_await` to inspect state, or subscribe to task events with
    `onclave_subscribe`.
 5. For inbound work, read `onclave_inbox`, handle the instruction, then call
    `onclave_complete` or `onclave_fail` with the same task ID.
