@@ -98,29 +98,51 @@ API_VERSION=$({ docker inspect menos-api --format '{{.Config.Image}}' 2>/dev/nul
 # Create manifest
 # ---------------------------------------------------------------------------
 log "Creating backup manifest"
-cat > "${BACKUP_DIR}/manifest.json" <<MANIFEST
-{
-  "backup_date": "${BACKUP_DATE}",
-  "created_at": "$(date -Iseconds)",
-  "hostname": "$(hostname)",
-  "surrealdb_export": {
-    "file": "database.surql",
-    "size_bytes": ${SURQL_SIZE},
-    "namespace": "${SURREALDB_NAMESPACE}",
-    "database": "${SURREALDB_DATABASE}"
-  },
-  "minio_data": {
-    "directory": "minio/",
-    "size_bytes": ${MINIO_SIZE}
-  },
-  "container_versions": {
-    "surrealdb": "${SURREALDB_VERSION}",
-    "minio": "${MINIO_VERSION}",
-    "ollama": "${OLLAMA_VERSION}",
-    "menos-api": "${API_VERSION}"
-  }
+python3 - "${BACKUP_DIR}/manifest.json" \
+    "${BACKUP_DATE}" "$(date -Iseconds)" "$(hostname)" \
+    "${SURQL_SIZE}" "${SURREALDB_NAMESPACE}" "${SURREALDB_DATABASE}" \
+    "${MINIO_SIZE}" "${SURREALDB_VERSION}" "${MINIO_VERSION}" \
+    "${OLLAMA_VERSION}" "${API_VERSION}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+(
+    output,
+    backup_date,
+    created_at,
+    hostname,
+    surrealdb_size,
+    namespace,
+    database,
+    minio_size,
+    surrealdb_version,
+    minio_version,
+    ollama_version,
+    api_version,
+) = sys.argv[1:]
+manifest = {
+    "backup_date": backup_date,
+    "created_at": created_at,
+    "hostname": hostname,
+    "surrealdb_export": {
+        "file": "database.surql",
+        "size_bytes": int(surrealdb_size),
+        "namespace": namespace,
+        "database": database,
+    },
+    "minio_data": {"directory": "minio/", "size_bytes": int(minio_size)},
+    "container_versions": {
+        "surrealdb": surrealdb_version,
+        "minio": minio_version,
+        "ollama": ollama_version,
+        "menos-api": api_version,
+    },
 }
-MANIFEST
+Path(output).write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+PY
+python3 -m json.tool "${BACKUP_DIR}/manifest.json" >/dev/null \
+    || die "Backup manifest validation failed"
 
 log "Manifest written to ${BACKUP_DIR}/manifest.json"
 
