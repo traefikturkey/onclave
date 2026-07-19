@@ -1,23 +1,20 @@
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
 
 WORKDIR /app
 
-# Install uv for fast dependency management
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.11.29@sha256:eb2843a1e56fd9e30c7276ce1a52cba86e64c7b385f5e3279a0e08e02dd058fc /uv /usr/local/bin/uv
 
-# Copy project files
-COPY pyproject.toml .
+COPY pyproject.toml uv.lock ./
 COPY menos/ menos/
 COPY migrations/ migrations/
 
-# Install dependencies
-RUN uv pip install --system -e .
+RUN uv sync --locked --exclude-newer P3D --no-dev --no-editable
 
-# Version metadata (placed last to avoid cache busting)
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown
 ENV GIT_SHA=$GIT_SHA
 ENV BUILD_DATE=$BUILD_DATE
+ENV PATH="/app/.venv/bin:$PATH"
 
 EXPOSE 8000
 
