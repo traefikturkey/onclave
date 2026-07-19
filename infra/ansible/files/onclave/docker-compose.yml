@@ -1,6 +1,6 @@
 # Production onclave stack, deployed to the docker host by
 # infra/ansible/playbooks/deploy.yml. Credentials come from the
-# Infisical-rendered .env installed next to this file.
+# Bitwarden-rendered .env installed next to this file.
 services:
   rabbitmq:
     image: rabbitmq:4-management

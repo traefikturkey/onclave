@@ -28,9 +28,9 @@ services:
       joyride.host.name: "surrealdb.traefikturkey.icu"
     volumes:
       - ${DATA_PATH:-/apps/menos/data}/surrealdb:/data
-    command: start --user root --pass ${SURREALDB_PASSWORD} file:/data/database.db
+    command: start --user root --pass ${SURREALDB_PASSWORD:?} file:/data/database.db
     environment:
-      - SURREALDB_PASSWORD=${SURREALDB_PASSWORD}
+      - SURREALDB_PASSWORD=${SURREALDB_PASSWORD:?}
     restart: unless-stopped
 
   minio:
@@ -47,8 +47,8 @@ services:
       - ${DATA_PATH:-/apps/menos/data}/minio:/data
     command: server /data --console-address ":9001"
     environment:
-      - MINIO_ROOT_USER=${S3_ACCESS_KEY}
-      - MINIO_ROOT_PASSWORD=${S3_SECRET_KEY}
+      - MINIO_ROOT_USER=${S3_ACCESS_KEY:?}
+      - MINIO_ROOT_PASSWORD=${S3_SECRET_KEY:?}
     restart: unless-stopped
 
   searxng:
@@ -63,7 +63,7 @@ services:
     volumes:
       - ./searxng:/etc/searxng
     environment:
-      - SEARXNG_SECRET=${SEARXNG_SECRET}
+      - SEARXNG_SECRET=${SEARXNG_SECRET:?}
       - GRANIAN_HOST=0.0.0.0
     restart: unless-stopped
 
@@ -99,22 +99,22 @@ services:
     environment:
       - SURREALDB_URL=http://surrealdb:8000
       - SURREALDB_USER=root
-      - SURREALDB_PASSWORD=${SURREALDB_PASSWORD}
-      - SURREALDB_NAMESPACE=${SURREALDB_NAMESPACE}
-      - SURREALDB_DATABASE=${SURREALDB_DATABASE}
+      - SURREALDB_PASSWORD=${SURREALDB_PASSWORD:?}
+      - SURREALDB_NAMESPACE=${SURREALDB_NAMESPACE:?}
+      - SURREALDB_DATABASE=${SURREALDB_DATABASE:?}
       - S3_ENDPOINT_URL=minio:9000
-      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
-      - S3_SECRET_KEY=${S3_SECRET_KEY}
-      - S3_BUCKET=${S3_BUCKET}
-      - S3_REGION=${S3_REGION}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY:?}
+      - S3_SECRET_KEY=${S3_SECRET_KEY:?}
+      - S3_BUCKET=${S3_BUCKET:?}
+      - S3_REGION=${S3_REGION:?}
       - OLLAMA_URL=http://ollama:11434
       - SSH_PUBLIC_KEYS_PATH=/keys
-      - WEBSHARE_PROXY_USERNAME=${WEBSHARE_PROXY_USERNAME}
-      - WEBSHARE_PROXY_PASSWORD=${WEBSHARE_PROXY_PASSWORD}
-      - YOUTUBE_API_KEY=${YOUTUBE_API_KEY}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - WEBSHARE_PROXY_USERNAME=${WEBSHARE_PROXY_USERNAME:?}
+      - WEBSHARE_PROXY_PASSWORD=${WEBSHARE_PROXY_PASSWORD:?}
+      - YOUTUBE_API_KEY=${YOUTUBE_API_KEY:?}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:?}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:?}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - UNIFIED_PIPELINE_ENABLED=${UNIFIED_PIPELINE_ENABLED:-true}
       - UNIFIED_PIPELINE_PROVIDER=${UNIFIED_PIPELINE_PROVIDER:-openrouter}
       - UNIFIED_PIPELINE_MODEL=${UNIFIED_PIPELINE_MODEL:-}

@@ -6,3 +6,5 @@
 #   BITWARDEN_IDENTITY_SERVER - e.g. https://vault.bitwarden.com/identity
 #   ONCLAVE_BWS_PROJECT_ID    - optional project scope for bws secret list
 # Required secrets (by key name): RABBITMQ_DEFAULT_USER, RABBITMQ_DEFAULT_PASS.
+# The project ID is non-secret and may be committed with deployment configuration.
+bws_project_id: 00000000-0000-0000-0000-000000000000

@@ -56,6 +56,18 @@ deploy-syntax:
 deploy-lint:
     docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-lint playbooks/deploy.yml
 
+menos-deploy *ARGS:
+    docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-playbook playbooks/deploy-menos.yml {{ARGS}}
+
+menos-secrets *ARGS:
+    docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-playbook playbooks/deploy-menos.yml --tags secrets {{ARGS}}
+
+menos-deploy-syntax:
+    docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-playbook --syntax-check playbooks/deploy-menos.yml
+
+menos-deploy-lint:
+    docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-lint playbooks/deploy-menos.yml
+
 menos-backup-setup *ARGS:
     docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-playbook playbooks/backup-menos.yml {{ARGS}}
 

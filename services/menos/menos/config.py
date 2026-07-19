@@ -29,13 +29,13 @@ class Settings(BaseSettings):
     surrealdb_namespace: str = "menos"
     surrealdb_database: str = "menos"
 
-    # S3-compatible storage (Garage)
-    s3_endpoint_url: str = "localhost:3900"
+    # S3-compatible storage
+    s3_endpoint_url: str = "localhost:9000"
     s3_access_key: str = "minio"
     s3_secret_key: str = "minio123"
     s3_secure: bool = False
     s3_bucket: str = "menos"
-    s3_region: str = "garage"
+    s3_region: str = "us-east-1"
 
     # Ollama (embeddings only)
     ollama_url: str = "http://localhost:11434"

@@ -9,6 +9,7 @@
       ansible.builtin.assert:
         that:
           - lookup('env', 'BITWARDEN_ACCESS_KEY') | length > 0
+          - bws_project_id | length > 0
           - onclave_secrets_required_keys | length > 0
         fail_msg: >-
           Bitwarden preflight failed. Export BITWARDEN_ACCESS_KEY (and
@@ -33,7 +34,11 @@
 
     - name: Validate onclave runtime secrets from Bitwarden
       ansible.builtin.command:
-        cmd: python3 /project/scripts/onclave-bws-env.py --validate
+        cmd: >-
+          python3 /project/scripts/onclave-bws-env.py
+          --stack onclave
+          --project-id {{ bws_project_id }}
+          --validate
       delegate_to: localhost
       become: false
       register: onclave_bws_validate
@@ -47,6 +52,8 @@
       ansible.builtin.command:
         cmd: >-
           python3 /project/scripts/onclave-bws-env.py
+          --stack onclave
+          --project-id {{ bws_project_id }}
           --out {{ onclave_secrets_tmp_dir }}/onclave.env
           --write
       delegate_to: localhost

@@ -92,9 +92,9 @@ under ~/.dotfiles/onclave (non-starter resolved).
    /health git_sha.
 2. Replace the Infisical preflight with the Bitwarden flow: extend
    `scripts/onclave-bws-env.py` to take a stack spec (onclave vs menos
-   required/optional key sets); operator creates the menos secrets in
-   Bitwarden (SURREALDB_*, S3_*, GARAGE_*, SEARXNG_SECRET, optional
-   WEBSHARE_*, YOUTUBE_API_KEY, provider keys).
+   required/optional key sets); operator creates the Menos secrets in
+   Bitwarden (SurrealDB and S3 credentials, `SEARXNG_SECRET`, Webshare
+   credentials, `YOUTUBE_API_KEY`, and provider keys).
 3. Resolve the storage question (open question 1) before first deploy:
    the menos repo carries both MinIO (live) and Garage
    (compose.migration + migrate-s3 playbook); port only the canonical
@@ -104,6 +104,11 @@ under ~/.dotfiles/onclave (non-starter resolved).
 Gate: real deploy from onclave produces an identical stack: /health 200
 with matching git_sha, yt pipeline smoke passes (ingest or content fetch
 through the API), no data loss (volumes untouched).
+
+Secret prerequisite completed 2026-07-18: Onclave and Menos required values
+exist in Bitwarden, both stack specifications validate, and the live Menos
+runtime env is rendered from Bitwarden with the pre-migration env preserved as
+`.env.bak`. The full M1 deployment gate remains pending.
 
 ### Phase M2: Consolidation
 
