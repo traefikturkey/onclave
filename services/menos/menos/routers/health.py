@@ -30,7 +30,6 @@ async def check_surrealdb() -> str:
         db.signin({"username": settings.surrealdb_user, "password": settings.surrealdb_password})
         db.use(settings.surrealdb_namespace, settings.surrealdb_database)
         db.query("INFO FOR DB")
-        db.close()
         return "ok"
     except Exception as e:
         return f"error: {e}"
