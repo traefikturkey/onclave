@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { ulid } from "../src/ulid";
 import { createEnvelope, type AgentOrigin } from "../src/envelope";
+import type { DelegationGrant } from "../src/delegation";
 import {
+  buildDelegatedRequestFraming,
   buildInformDisplayText,
   buildRequestFraming,
   generateBoundary,
@@ -79,6 +82,30 @@ describe("buildRequestFraming", () => {
     const match = text.match(/begin bus content (onclave-[0-9a-f]{16})/);
     expect(match).not.toBeNull();
     expect(body).not.toContain(match?.[1]);
+  });
+});
+
+describe("buildDelegatedRequestFraming", () => {
+  it("labels only the verified bounded request as operator-authorized", () => {
+    const base = requestWith("commit and push the reviewed source change");
+    const grant: DelegationGrant = {
+      v: 1,
+      grant_id: ulid(),
+      issuer_agent_id: sender.agent_id,
+      audience_agent_id: "agent-b",
+      conversation_id: base.conversation_id,
+      request_sha256: "22".repeat(32),
+      actions: ["repo_write", "git_commit", "git_push"],
+      scope: "Reviewed source wave only.",
+      issued_at: "2026-07-19T18:00:00.000Z",
+      expires_at: "2026-07-19T18:30:00.000Z",
+    };
+    const text = buildDelegatedRequestFraming({ ...base, delegation: grant }, "safe-boundary");
+    expect(text).toContain("verified operator delegation");
+    expect(text).toContain("repo_write, git_commit, git_push");
+    expect(text).toContain("Existing system, project, safety, plan");
+    expect(text).toContain("Actions\noutside this grant require separate operator authorization");
+    expect(text).toContain("commit and push the reviewed source change");
   });
 });
 

@@ -1,3 +1,7 @@
+import {
+  parseDelegationGrant,
+  type DelegationGrant,
+} from "./delegation";
 import { isPerformative, type Performative } from "./performative";
 import { isUlid, ulid } from "./ulid";
 
@@ -31,6 +35,7 @@ export type Envelope = {
   traceparent?: string;
   schema?: string;
   usage?: TokenUsage;
+  delegation?: DelegationGrant;
 };
 
 export type EnvelopeParseResult =
@@ -117,9 +122,21 @@ const ENVELOPE_CHECKS: FieldCheck[] = [
     ok: (value) => isOptional(value, isTokenUsage),
     error: "usage must contain non-negative token counts",
   },
+  {
+    field: "delegation",
+    ok: (value) => value === undefined || parseDelegationGrant(value).ok,
+    error: "delegation must be a valid delegation grant",
+  },
 ];
 
-const OPTIONAL_FIELDS = ["in_reply_to", "ttl_ms", "traceparent", "schema", "usage"] as const;
+const OPTIONAL_FIELDS = [
+  "in_reply_to",
+  "ttl_ms",
+  "traceparent",
+  "schema",
+  "usage",
+  "delegation",
+] as const;
 
 export function parseEnvelope(value: unknown): EnvelopeParseResult {
   if (!isRecord(value)) {
@@ -160,27 +177,36 @@ export type CreateEnvelopeInput = {
   traceparent?: string;
   schema?: string;
   usage?: TokenUsage;
+  delegation?: DelegationGrant;
   now?: () => Date;
 };
 
 export function createEnvelope(input: CreateEnvelopeInput): Envelope {
   const now = input.now ?? (() => new Date());
+  const conversationId = input.conversationId ?? ulid();
   return {
     v: ENVELOPE_VERSION,
     id: ulid(),
-    conversation_id: input.conversationId ?? ulid(),
+    conversation_id: conversationId,
     performative: input.performative,
     from: input.from,
     to: input.to,
     hops: 0,
     body: input.body,
     sent_at: now().toISOString(),
-    ...(input.inReplyTo !== undefined ? { in_reply_to: input.inReplyTo } : {}),
-    ...(input.ttlMs !== undefined ? { ttl_ms: input.ttlMs } : {}),
-    ...(input.traceparent !== undefined ? { traceparent: input.traceparent } : {}),
-    ...(input.schema !== undefined ? { schema: input.schema } : {}),
-    ...(input.usage !== undefined ? { usage: input.usage } : {}),
+    ...optionalEnvelopeFields(input),
   };
+}
+
+function optionalEnvelopeFields(input: CreateEnvelopeInput): Partial<Envelope> {
+  const fields: Partial<Envelope> = {};
+  if (input.inReplyTo !== undefined) fields.in_reply_to = input.inReplyTo;
+  if (input.ttlMs !== undefined) fields.ttl_ms = input.ttlMs;
+  if (input.traceparent !== undefined) fields.traceparent = input.traceparent;
+  if (input.schema !== undefined) fields.schema = input.schema;
+  if (input.usage !== undefined) fields.usage = input.usage;
+  if (input.delegation !== undefined) fields.delegation = input.delegation;
+  return fields;
 }
 
 export type HopResult =

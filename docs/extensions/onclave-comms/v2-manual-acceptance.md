@@ -99,6 +99,35 @@ ONCLAVE_AMQP_URL=amqp://onclave:onclave-dev@<broker-host>:5672/onclave \
    The next cross-host request runs without a prompt. Remove the entry and
    the prompt returns, again without a restart.
 
+## Cross-machine operator delegation
+
+On the receiving machine, add the sender agent id to the restart-free policy:
+
+```json
+{
+  "autoAcceptHosts": [],
+  "delegatedAuthorityAgents": ["<sender-agent-id>"]
+}
+```
+
+1. Ask the sending session to delegate a bounded workflow. It should call
+   `onclave_delegate` with the target agent, exact request, concise scope,
+   action classes, and a short lifetime.
+2. Review or edit the complete request in the operator editor, inspect the
+   target/actions/scope/expiry summary, and confirm once.
+3. The receiver must display `verified operator delegation`, the grant id,
+   actions, expiry, and scope, then execute the bounded request without asking
+   for the same approval again.
+4. Alter the body, audience, project, or expiry. The receiver must reject the
+   request and produce no turn.
+5. Remove the sender from `delegatedAuthorityAgents` without restarting. The
+   next delegated request must be rejected.
+6. Send an ordinary `onclave_send` request. It must retain the original
+   non-authoritative provenance framing and cross-host confirmation behavior.
+
+Delegation does not replace repository safety rules, reviewed infrastructure
+plans, rollback requirements, or separately gated destructive operations.
+
 ## Audit checks
 
 - Adapter: `~/.pi/agent/onclave/v2-audit.jsonl` records register, delivery,

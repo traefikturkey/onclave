@@ -55,6 +55,7 @@ function buildHeaders(envelope: Envelope): JsonRecord {
 export function toAmqpPublish(envelope: Envelope): AmqpPublishSpec {
   const content: JsonRecord = { body: envelope.body };
   if (envelope.schema !== undefined) content.schema = envelope.schema;
+  if (envelope.delegation !== undefined) content.delegation = envelope.delegation;
   const options: AmqpPublishOptions = {
     persistent: true,
     contentType: "application/json",
@@ -134,6 +135,7 @@ export function fromAmqpMessage(message: AmqpConsumedMessage): EnvelopeParseResu
     traceparent: headers.traceparent,
     schema: contentRecord.schema,
     usage,
+    delegation: contentRecord.delegation,
   };
   return parseEnvelope(candidate);
 }

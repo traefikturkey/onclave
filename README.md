@@ -27,14 +27,15 @@ substrate, replacing the in-session hub model:
 
 - `packages/envelope` - shared envelope schema: required performatives
   (`request | inform | query | failure | not_understood`), strict
-  validation, AMQP property mapping, budgets, provenance framing;
+  validation, AMQP property mapping, budgets, provenance framing, and signed
+  operator-delegation grants;
 - `services/core` - the onclave-core service: registry and presence,
   versioned adapter RPC, per-agent durable queues with dead-lettering,
   conversation budgets with forced termination, JSONL audit;
 - `extensions/onclave-pi` - the thin Pi adapter: durable consume with
   validate-on-read, structurally inert `inform` delivery, strict reply
   correlation by message id, cross-host confirmation with restart-free
-  auto-accept policy.
+  auto-accept policy, and directly confirmed cross-machine delegation.
 
 v1 (`extensions/onclave-comms`) stays frozen and passing until the v2
 adapter reaches parity.
@@ -52,6 +53,15 @@ just pi-local-v2                               # Pi session with the v2 adapter
 
 Broker credentials for local development default to the values in
 `docker/.env.example`; copy it to `docker/.env` (gitignored) to override.
+Use `onclave_delegate` when one operator wants a trusted remote session to
+continue a bounded workflow without repeating approvals. The tool opens the
+exact request for review, confirms target/actions/scope/expiry, and binds the
+grant to one agent, project, conversation, and request body.
+
+The receiver must explicitly list the sender agent id in
+`~/.pi/agent/onclave/v2-policy.json` under `delegatedAuthorityAgents`. This is
+a trust policy for operator-owned broker sessions, not a second sandbox or
+replacement for repository safety rules.
 See [v2 PRD](./docs/extensions/onclave-comms/v2-PRD.md),
 [v2 implementation plan](./docs/extensions/onclave-comms/v2-implementation-plan.md),
 [v2 status](./docs/extensions/onclave-comms/v2-status.md), and the

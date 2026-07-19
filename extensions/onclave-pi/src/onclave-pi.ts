@@ -6,17 +6,25 @@ import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+  DELEGATED_ACTIONS,
   EXCHANGE_AGENTS,
   EXCHANGE_EVENTS,
   PROTOCOL_VERSION,
+  buildDelegatedRequestFraming,
   buildInformDisplayText,
   buildInformReply,
   buildFailureReply,
   buildRequestFraming,
+  createDelegationGrant,
   createEnvelope,
+  requestSha256,
   toAmqpPublish,
+  ulid,
+  verifyDelegationGrant,
   type AgentCard,
   type AgentOrigin,
+  type DelegatedAction,
+  type DelegationGrant,
   type Envelope,
   type TokenUsage,
 } from "@onclave/envelope";
@@ -25,7 +33,11 @@ import { BrokerLink, type ConnectionState } from "./lib/connection";
 import { CorrelationStore, INBOUND_CUSTOM_TYPE } from "./lib/correlation";
 import { SeenIds } from "./lib/dedup";
 import { handleInboundMessage, type DeliveryDeps } from "./lib/delivery";
-import { isAutoAccepted, loadAdapterPolicy } from "./lib/policy";
+import {
+  isAutoAccepted,
+  isDelegatedAuthorityAgent,
+  loadAdapterPolicy,
+} from "./lib/policy";
 import { resolveProjectLabel } from "./lib/project-label";
 import { CoreRpcClient } from "./lib/rpc-client";
 import { lastAssistantText, runUsage } from "./lib/run-summary";
@@ -251,6 +263,8 @@ function buildDeliveryDeps(
       if (response.ok === true) return { deliver: true };
       return { deliver: false, reason: String(response.error ?? "budget") };
     },
+    verifyDelegation: (envelope) =>
+      verifyInboundDelegation(envelope, runtime.card, options.policyPath),
     deliverTurn: (envelope) => {
       pi.sendMessage(
         {
@@ -258,6 +272,17 @@ function buildDeliveryDeps(
           content: buildRequestFraming(envelope),
           display: true,
           details: inboundDetails(envelope),
+        },
+        { triggerTurn: true, deliverAs: "followUp" }
+      );
+    },
+    deliverDelegatedTurn: (envelope, grant) => {
+      pi.sendMessage(
+        {
+          customType: INBOUND_CUSTOM_TYPE,
+          content: buildDelegatedRequestFraming(envelope),
+          display: true,
+          details: inboundDetails(envelope, grant),
         },
         { triggerTurn: true, deliverAs: "followUp" }
       );
@@ -290,14 +315,44 @@ function buildDeliveryDeps(
   };
 }
 
-function inboundDetails(envelope: Envelope): Record<string, unknown> {
+function inboundDetails(
+  envelope: Envelope,
+  grant?: DelegationGrant
+): Record<string, unknown> {
   return {
     msgId: envelope.id,
     conversationId: envelope.conversation_id,
     performative: envelope.performative,
     fromAgentId: envelope.from.agent_id,
     fromHost: envelope.from.host,
+    ...(grant !== undefined
+      ? {
+          delegationGrantId: grant.grant_id,
+          delegatedActions: grant.actions,
+          delegationExpiresAt: grant.expires_at,
+        }
+      : {}),
   };
+}
+
+async function verifyInboundDelegation(
+  envelope: Envelope,
+  card: AgentCard,
+  policyPath: string
+): Promise<{ ok: true; grant: DelegationGrant } | { ok: false; reason: string }> {
+  const grant = envelope.delegation;
+  if (grant === undefined) return { ok: false, reason: "missing_grant" };
+  const policy = await loadAdapterPolicy(policyPath);
+  if (!isDelegatedAuthorityAgent(policy, envelope.from.agent_id)) {
+    return { ok: false, reason: "sender is not trusted for delegated authority" };
+  }
+  const result = verifyDelegationGrant({
+    grant,
+    envelope,
+    localAgentId: card.agent_id,
+    localProject: card.project,
+  });
+  return result.ok ? result : { ok: false, reason: result.error };
 }
 
 function publishEnvelope(channel: Channel, envelope: Envelope): void {
@@ -474,6 +529,7 @@ function registerAdapterTools(
 ): void {
   registerListTool(pi, getRuntime);
   registerSendTool(pi, getRuntime);
+  registerDelegateTool(pi, getRuntime, audit);
   registerInformTool(pi, getRuntime, audit);
   registerGetTool(pi, getRuntime);
   registerAwaitTool(pi, getRuntime);
@@ -541,6 +597,145 @@ function registerSendTool(pi: ExtensionAPI, getRuntime: RuntimeGetter): void {
       );
     },
   });
+}
+
+function registerDelegateTool(
+  pi: ExtensionAPI,
+  getRuntime: RuntimeGetter,
+  audit: (event: AdapterAuditEventName, metadata?: AdapterAuditMetadata) => Promise<void>
+): void {
+  pi.registerTool({
+    name: "onclave_delegate",
+    label: "Onclave Delegate",
+    description:
+      "Request direct operator confirmation, then send a scoped, expiring request to an agent explicitly trusted for delegated authority.",
+    parameters: Type.Object({
+      to: Type.String({ description: "Target agent id (see onclave_agents).", maxLength: 256 }),
+      body: Type.String({ description: "Exact delegated request body.", maxLength: MAX_MESSAGE_LENGTH }),
+      scope: Type.String({ description: "Concise boundary for the delegated work.", minLength: 1, maxLength: 2_000 }),
+      actions: Type.Array(StringEnum(DELEGATED_ACTIONS), {
+        description: "Authorized action classes.",
+        minItems: 1,
+        maxItems: DELEGATED_ACTIONS.length,
+      }),
+      ttl_minutes: Type.Optional(
+        Type.Integer({ description: "Authorization lifetime in minutes.", minimum: 1, maximum: 1_440 })
+      ),
+      conversation_id: Type.Optional(
+        Type.String({ description: "Continue an existing conversation." })
+      ),
+    }),
+    async execute(_callId, params, _signal, _onUpdate, ctx) {
+      requireInteractiveTui(ctx);
+      const runtime = requireRuntime(getRuntime);
+      const target = await resolveDelegationTarget(runtime, params.to);
+      const editedBody = await ctx.ui.editor("Review delegated Onclave request", params.body);
+      if (editedBody === undefined) throw new Error("Onclave delegation cancelled by operator");
+      const actions = [...new Set(params.actions)] as DelegatedAction[];
+      const ttlMinutes = params.ttl_minutes ?? 30;
+      const confirmed = await ctx.ui.confirm(
+        "Authorize Onclave delegation",
+        delegationSummary(target, actions, params.scope, ttlMinutes, editedBody)
+      );
+      if (!confirmed) throw new Error("Onclave delegation declined by operator");
+      return publishDelegation(runtime, target, editedBody, actions, params, ttlMinutes, audit);
+    },
+  });
+}
+
+function requireInteractiveTui(ctx: ExtensionContext): void {
+  const mode = (ctx as ExtensionContext & { mode?: string }).mode;
+  const interactive =
+    mode === "tui" ||
+    (mode === undefined && process.stdin.isTTY === true && process.stdout.isTTY === true);
+  if (!interactive) throw new Error("onclave_delegate requires confirmation in an interactive TUI");
+}
+
+type DelegationTarget = { agent_id: string; project?: string };
+
+function delegationSummary(
+  target: DelegationTarget,
+  actions: DelegatedAction[],
+  scope: string,
+  ttlMinutes: number,
+  body: string
+): string {
+  return (
+    `Target: ${target.agent_id} (${target.project ?? "no project"})\n` +
+    `Actions: ${actions.join(", ")}\nTTL: ${ttlMinutes} minutes\n` +
+    `Scope: ${scope}\nRequest SHA256: ${requestSha256(body)}\n\n` +
+    "Authorize this trusted agent to execute the reviewed request within these bounds?"
+  );
+}
+
+async function publishDelegation(
+  runtime: AdapterRuntime,
+  target: DelegationTarget,
+  body: string,
+  actions: DelegatedAction[],
+  params: { scope: string; conversation_id?: string },
+  ttlMinutes: number,
+  audit: (event: AdapterAuditEventName, metadata?: AdapterAuditMetadata) => Promise<void>
+) {
+  const conversationId = params.conversation_id ?? ulid();
+  const grant = createDelegationGrant({
+    issuerAgentId: runtime.card.agent_id,
+    issuerProject: runtime.card.project,
+    audienceAgentId: target.agent_id,
+    audienceProject: target.project,
+    conversationId,
+    body,
+    actions,
+    scope: params.scope,
+    ttlMs: ttlMinutes * 60_000,
+  });
+  const envelope = createEnvelope({
+    performative: "request",
+    from: cardOrigin(runtime.card),
+    to: target.agent_id,
+    body,
+    conversationId,
+    ttlMs: ttlMinutes * 60_000,
+    delegation: grant,
+  });
+  runtime.correlation.registerOutbound(envelope);
+  publishEnvelope(requireChannel(runtime), envelope);
+  await audit("delegation_issued", {
+    message_id: envelope.id,
+    grant_id: grant.grant_id,
+    to_agent_id: target.agent_id,
+    actions,
+    expires_at: grant.expires_at,
+  });
+  return textResult(
+    `onclave_delegate -> ${target.agent_id}\nmsg_id ${envelope.id}\n` +
+      `conversation_id ${envelope.conversation_id}\ngrant_id ${grant.grant_id}\n` +
+      `expires_at ${grant.expires_at}`,
+    {
+      msg_id: envelope.id,
+      conversation_id: envelope.conversation_id,
+      grant_id: grant.grant_id,
+      to: target.agent_id,
+      actions,
+      expires_at: grant.expires_at,
+    }
+  );
+}
+
+async function resolveDelegationTarget(
+  runtime: AdapterRuntime,
+  agentId: string
+): Promise<DelegationTarget> {
+  const response = await requireRpc(runtime).call({ op: "list_agents" });
+  if (response.ok !== true || !Array.isArray(response.agents)) {
+    throw new Error(`list_agents failed: ${String(response.error ?? "invalid response")}`);
+  }
+  const target = (response.agents as Array<Record<string, unknown>>).find(
+    (agent) => agent.agent_id === agentId
+  );
+  if (target === undefined) throw new Error(`Onclave target agent is not registered: ${agentId}`);
+  const project = typeof target.project === "string" ? target.project : undefined;
+  return { agent_id: agentId, ...(project === undefined ? {} : { project }) };
 }
 
 function registerInformTool(

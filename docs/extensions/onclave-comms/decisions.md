@@ -333,3 +333,34 @@ Pi adapter.
 - The repo converts to a pnpm workspace to host `packages/envelope`,
   `services/core`, and `extensions/onclave-pi` alongside the frozen v1
   extension.
+
+## Decision 11: Scoped Operator Delegation Across Trusted Machines
+
+**Status:** accepted 2026-07-19 (operator decision).
+
+**Decision:** A direct operator confirmation may create a scoped, expiring
+delegation for one registered target agent. A receiving adapter treats the
+bounded request as delegated operator authorization only when its local policy
+explicitly trusts the sender agent id for delegation and the audience, project,
+conversation, request hash, and validity window match.
+
+### Rationale
+
+- Repeating the same approval in every trusted session prevents agents from
+  completing an explicitly coordinated cross-machine workflow.
+- The deployment is an operator-owned broker connecting trusted machines.
+- Exact request binding plus direct review records bounded intent without
+  making every ordinary peer message authoritative.
+
+### Consequences
+
+- `onclave_delegate` requires direct TUI interaction and is unavailable through
+  RPC or ordinary `onclave_send`.
+- Receivers opt in per sender through `delegatedAuthorityAgents` in the
+  restart-free adapter policy.
+- Grants are limited to 24 hours and bind the sender, target, project,
+  conversation, exact body, action labels, and scope.
+- The delegation is not a second sandbox or command-policy engine. Existing
+  system, project, plan, backup, rollback, and safety constraints remain in
+  force, and work outside the grant requires another delegation or direct
+  approval.

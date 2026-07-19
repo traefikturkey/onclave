@@ -1,30 +1,44 @@
 import { readFile } from "node:fs/promises";
 
-// Adapter-side origin policy: cross-host requests confirm by default, with
-// per-host auto-accept as explicit opt-in. The file is re-read on every
-// decision so policy changes apply without session restarts.
+// Adapter-side origin policy. The file is re-read on every decision so
+// explicit trust changes apply without restarting the session.
 export type AdapterPolicy = {
   autoAcceptHosts: string[];
+  delegatedAuthorityAgents: string[];
+};
+
+const EMPTY_POLICY: AdapterPolicy = {
+  autoAcceptHosts: [],
+  delegatedAuthorityAgents: [],
 };
 
 export async function loadAdapterPolicy(path: string): Promise<AdapterPolicy> {
-  let raw: string;
   try {
-    raw = await readFile(path, "utf8");
+    return parsePolicy(JSON.parse(await readFile(path, "utf8")) as unknown);
   } catch {
-    return { autoAcceptHosts: [] };
-  }
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (parsed === null || typeof parsed !== "object") return { autoAcceptHosts: [] };
-    const hosts = (parsed as { autoAcceptHosts?: unknown }).autoAcceptHosts;
-    if (!Array.isArray(hosts)) return { autoAcceptHosts: [] };
-    return { autoAcceptHosts: hosts.filter((host) => typeof host === "string") };
-  } catch {
-    return { autoAcceptHosts: [] };
+    return EMPTY_POLICY;
   }
 }
 
 export function isAutoAccepted(policy: AdapterPolicy, host: string): boolean {
   return policy.autoAcceptHosts.includes(host);
+}
+
+export function isDelegatedAuthorityAgent(policy: AdapterPolicy, agentId: string): boolean {
+  return policy.delegatedAuthorityAgents.includes(agentId);
+}
+
+function parsePolicy(value: unknown): AdapterPolicy {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return EMPTY_POLICY;
+  const record = value as Record<string, unknown>;
+  return {
+    autoAcceptHosts: stringArray(record.autoAcceptHosts),
+    delegatedAuthorityAgents: stringArray(record.delegatedAuthorityAgents),
+  };
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }

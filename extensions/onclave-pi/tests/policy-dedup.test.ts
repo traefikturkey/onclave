@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SeenIds } from "../src/lib/dedup";
-import { isAutoAccepted, loadAdapterPolicy } from "../src/lib/policy";
+import {
+  isAutoAccepted,
+  isDelegatedAuthorityAgent,
+  loadAdapterPolicy,
+} from "../src/lib/policy";
 import { lastAssistantText, runUsage } from "../src/lib/run-summary";
 
 let dir: string;
@@ -18,18 +22,33 @@ afterEach(async () => {
 
 describe("loadAdapterPolicy", () => {
   it("returns empty policy when the file is missing or invalid", async () => {
-    expect(await loadAdapterPolicy(join(dir, "missing.json"))).toEqual({ autoAcceptHosts: [] });
+    expect(await loadAdapterPolicy(join(dir, "missing.json"))).toEqual({
+      autoAcceptHosts: [],
+      delegatedAuthorityAgents: [],
+    });
     const invalid = join(dir, "invalid.json");
     await writeFile(invalid, "{broken", "utf8");
-    expect(await loadAdapterPolicy(invalid)).toEqual({ autoAcceptHosts: [] });
+    expect(await loadAdapterPolicy(invalid)).toEqual({
+      autoAcceptHosts: [],
+      delegatedAuthorityAgents: [],
+    });
   });
 
   it("reloads changes without restart (fresh read per call)", async () => {
     const path = join(dir, "policy.json");
     await writeFile(path, JSON.stringify({ autoAcceptHosts: [] }), "utf8");
     expect(isAutoAccepted(await loadAdapterPolicy(path), "build-box")).toBe(false);
-    await writeFile(path, JSON.stringify({ autoAcceptHosts: ["build-box"] }), "utf8");
-    expect(isAutoAccepted(await loadAdapterPolicy(path), "build-box")).toBe(true);
+    await writeFile(
+      path,
+      JSON.stringify({
+        autoAcceptHosts: ["build-box"],
+        delegatedAuthorityAgents: ["trusted-agent"],
+      }),
+      "utf8"
+    );
+    const policy = await loadAdapterPolicy(path);
+    expect(isAutoAccepted(policy, "build-box")).toBe(true);
+    expect(isDelegatedAuthorityAgent(policy, "trusted-agent")).toBe(true);
   });
 });
 

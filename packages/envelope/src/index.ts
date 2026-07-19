@@ -18,6 +18,21 @@ export {
 } from "./budget";
 export { canonicalJson, type CanonicalJsonValue } from "./canonical-json";
 export {
+  DELEGATED_ACTIONS,
+  DELEGATION_VERSION,
+  MAX_DELEGATION_LIFETIME_MS,
+  createDelegationGrant,
+  isDelegatedAction,
+  parseDelegationGrant,
+  requestSha256,
+  verifyDelegationGrant,
+  type CreateDelegationGrantInput,
+  type DelegatedAction,
+  type DelegationGrant,
+  type DelegationVerificationResult,
+  type VerifyDelegationGrantInput,
+} from "./delegation";
+export {
   DEFAULT_MAX_HOPS,
   ENVELOPE_VERSION,
   buildFailureReply,
@@ -36,6 +51,7 @@ export {
   type TokenUsage,
 } from "./envelope";
 export {
+  buildDelegatedRequestFraming,
   buildInformDisplayText,
   buildRequestFraming,
   generateBoundary,

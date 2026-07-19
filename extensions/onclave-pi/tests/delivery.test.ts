@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createEnvelope,
   toAmqpPublish,
+  ulid,
   type AgentOrigin,
   type AmqpConsumedMessage,
+  type DelegationGrant,
   type Envelope,
   type Performative,
 } from "@onclave/envelope";
@@ -15,6 +17,21 @@ const remoteSender: AgentOrigin = { agent_id: "peer-remote", name: "Remote", hos
 
 function envelopeFrom(from: AgentOrigin, performative: Performative, body: string): Envelope {
   return createEnvelope({ performative, from, to: "me", body });
+}
+
+function delegationGrant(conversationId: string): DelegationGrant {
+  return {
+    v: 1,
+    grant_id: ulid(),
+    issuer_agent_id: remoteSender.agent_id,
+    audience_agent_id: "me",
+    conversation_id: conversationId,
+    request_sha256: "22".repeat(32),
+    actions: ["repo_write", "git_commit"],
+    scope: "Bounded source changes only.",
+    issued_at: "2026-07-19T18:00:00.000Z",
+    expires_at: "2026-07-19T18:30:00.000Z",
+  };
 }
 
 function asConsumed(envelope: Envelope): AmqpConsumedMessage {
@@ -37,7 +54,9 @@ function makeDeps(overrides: Partial<DeliveryDeps> = {}): DeliveryDeps {
     isAutoAcceptedHost: vi.fn(async () => false),
     confirmRemote: vi.fn(async () => true),
     recordExchange: vi.fn(async () => ({ deliver: true })),
+    verifyDelegation: vi.fn(async () => ({ ok: false as const, reason: "not delegated" })),
     deliverTurn: vi.fn(),
+    deliverDelegatedTurn: vi.fn(),
     deliverInert: vi.fn(),
     publishFailureReply: vi.fn(),
     publishNotUnderstood: vi.fn(),
@@ -122,6 +141,43 @@ describe("handleInboundMessage", () => {
     expect(decision).toBe("ack");
     expect(deps.confirmRemote).toHaveBeenCalledOnce();
     expect(deps.deliverTurn).toHaveBeenCalledOnce();
+  });
+
+  it("delivers a verified delegation without a second cross-host prompt", async () => {
+    const base = envelopeFrom(remoteSender, "request", "bounded delegated work");
+    const grant = delegationGrant(base.conversation_id);
+    const envelope = { ...base, delegation: grant };
+    const deps = makeDeps({
+      verifyDelegation: vi.fn(async () => ({ ok: true as const, grant })),
+    });
+    const decision = await handleInboundMessage(deps, asConsumed(envelope));
+    expect(decision).toBe("ack");
+    expect(deps.confirmRemote).not.toHaveBeenCalled();
+    expect(deps.deliverTurn).not.toHaveBeenCalled();
+    expect(deps.deliverDelegatedTurn).toHaveBeenCalledWith(envelope, grant);
+    expect(deps.audit).toHaveBeenCalledWith(
+      "delegation_accepted",
+      expect.objectContaining({ grant_id: grant.grant_id })
+    );
+  });
+
+  it("rejects an invalid delegation without ordinary-request fallback", async () => {
+    const base = envelopeFrom(remoteSender, "request", "tampered delegated work");
+    const grant = delegationGrant(base.conversation_id);
+    const envelope = { ...base, delegation: grant };
+    const deps = makeDeps({
+      verifyDelegation: vi.fn(async () => ({ ok: false as const, reason: "signature invalid" })),
+    });
+    const decision = await handleInboundMessage(deps, asConsumed(envelope));
+    expect(decision).toBe("ack");
+    expect(deps.confirmRemote).not.toHaveBeenCalled();
+    expect(deps.recordExchange).not.toHaveBeenCalled();
+    expect(deps.deliverTurn).not.toHaveBeenCalled();
+    expect(deps.deliverDelegatedTurn).not.toHaveBeenCalled();
+    expect(deps.publishFailureReply).toHaveBeenCalledWith(
+      envelope,
+      "delegation_rejected:signature invalid"
+    );
   });
 
   it("declines cross-host requests with a failure reply when refused", async () => {

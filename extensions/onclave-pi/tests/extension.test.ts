@@ -20,10 +20,22 @@ describe("Onclave v2 adapter registration", () => {
     expect(registered.tools.map((tool) => tool.name).sort()).toEqual([
       "onclave_agents",
       "onclave_await",
+      "onclave_delegate",
       "onclave_get",
       "onclave_inform",
       "onclave_send",
     ]);
+  });
+
+  it("delegation tool exposes bounded non-destructive action classes", () => {
+    const registered = createFakePi();
+    onclavePi(registered.pi as never);
+    const delegate = registered.tools.find((tool) => tool.name === "onclave_delegate");
+    const serialized = JSON.stringify(delegate?.parameters);
+    expect(serialized).toContain("infrastructure_apply");
+    expect(serialized).toContain("data_migration");
+    expect(serialized).not.toContain("delete");
+    expect(serialized).not.toContain("destroy");
   });
 
   it("send tool restricts performatives to request and query", () => {

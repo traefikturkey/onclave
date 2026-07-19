@@ -20,9 +20,9 @@ alongside the untouched v1 extension.
 | Phase | Status | Notes |
 |---|---|---|
 | Phase 0: Workspace and compose stack | Complete | pnpm workspace extended with packages/* and services/*; rabbitmq + onclave-core compose stack with healthchecks; core skeleton with AMQP retry/backoff, idempotent topology declaration, /health; just targets up/down/logs/core-dev/test-integration; v1 suite stayed green through the conversion. |
-| Phase 1: Shared envelope package | Complete | @onclave/envelope: versioned envelope schema, performatives, ULID, strict validation, AMQP property/header mapping with round-trip tests, hops, TTL parsing, reply builders, budget types (exchange hard stop, token advisory), provenance framing with receiver-generated boundaries, canonical-json ported from v1. |
+| Phase 1: Shared envelope package | Complete | @onclave/envelope: versioned envelope schema, performatives, ULID, strict validation, AMQP property/header mapping with round-trip tests, hops, TTL parsing, reply builders, budget types (exchange hard stop, token advisory), provenance framing with receiver-generated boundaries, canonical JSON, and signed scoped delegation grants. |
 | Phase 2: Core service | Complete | Registry persisted with the v1 atomic-write pattern, versioned RPC (register/heartbeat/unregister/list_agents/conversation_status/record_exchange), per-agent durable queues with DLX/TTL/length bounds, budget termination with failure to both parties, dead-letter consumer with advisory informs, JSONL audit with body-field rejection, trust scaffold. Integration suite runs against the compose test broker via just test-integration. |
-| Phase 3: Pi adapter | Complete | extensions/onclave-pi: reconnect state machine, versioned register, validate-on-read consume with dedup, structurally inert inform (display-only, triggerTurn false), strict reply correlation by message id with no fallback, cross-host confirm with restart-free auto-accept policy, budget check before every turn delivery, tools (onclave_agents/send/inform/get/await), /onclave command, status widget. |
+| Phase 3: Pi adapter | Complete | extensions/onclave-pi: reconnect state machine, versioned register, validate-on-read consume with dedup, structurally inert inform (display-only, triggerTurn false), strict reply correlation by message id with no fallback, cross-host confirm with restart-free auto-accept and delegated-authority policy, budget check before every turn delivery, tools (onclave_agents/send/delegate/inform/get/await), direct TUI review, request/audience/project/expiry binding, /onclave command, status widget. |
 | Phase 4: Acceptance | Complete | scripts/onclave-v2-acceptance.ts drives the real adapter code through simulated Pi sessions against the real compose stack. Manual runbook in ./v2-manual-acceptance.md covers live-session, outage, and cross-host checks. |
 | Phase 5: CI and finalization | Complete on-branch | GitHub Actions workflow (typecheck, unit tests, integration tests against a rabbitmq service container, core image build), README v2 overview and quick start, decisions review below. The workflow commands and the image build were validated locally; a CI run on GitHub and the PR against main are left to the operator. |
 
@@ -59,8 +59,9 @@ adapter audit (~/.pi/agent/onclave/v2-audit.jsonl, 167 entries) and core
 audit (/data/audit.jsonl, 89 entries) contain only metadata keys, zero
 message-body matches, and a credential-redacted broker URL.
 
-Still not covered (see ./v2-manual-acceptance.md): cross-host confirmation
-and restart-free policy reload (needs a second host), live budget halt
+Still not covered (see ./v2-manual-acceptance.md): cross-host confirmation,
+operator-delegation execution, and restart-free policy reload (needs a second
+host), live budget halt
 (compose does not yet pass ONCLAVE_MAX_EXCHANGES; the automated script
 covers the path), TLS/per-adapter broker users (deferred hardening).
 

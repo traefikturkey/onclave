@@ -1,4 +1,10 @@
-import { fromAmqpMessage, mayTriggerTurn, type AmqpConsumedMessage, type Envelope } from "@onclave/envelope";
+import {
+  fromAmqpMessage,
+  mayTriggerTurn,
+  type AmqpConsumedMessage,
+  type DelegationGrant,
+  type Envelope,
+} from "@onclave/envelope";
 import type { AdapterAuditEventName, AdapterAuditMetadata } from "./audit";
 import type { SeenIds } from "./dedup";
 
@@ -9,6 +15,10 @@ export type BudgetCheckResult = {
   reason?: string;
 };
 
+export type DelegationCheckResult =
+  | { ok: true; grant: DelegationGrant }
+  | { ok: false; reason: string };
+
 // Every side effect is injected so the decision path is fully unit-testable.
 // deliverTurn is reachable only from the request/query branch; inform,
 // failure, and not_understood are structurally unable to reach it.
@@ -18,7 +28,9 @@ export type DeliveryDeps = {
   isAutoAcceptedHost: (host: string) => Promise<boolean>;
   confirmRemote: (envelope: Envelope) => Promise<boolean>;
   recordExchange: (envelope: Envelope) => Promise<BudgetCheckResult>;
+  verifyDelegation: (envelope: Envelope) => Promise<DelegationCheckResult>;
   deliverTurn: (envelope: Envelope) => void;
+  deliverDelegatedTurn: (envelope: Envelope, grant: DelegationGrant) => void;
   deliverInert: (envelope: Envelope) => void;
   publishFailureReply: (envelope: Envelope, reason: string) => void;
   publishNotUnderstood: (replyTo: string, error: string) => void;
@@ -86,21 +98,69 @@ async function handleInert(deps: DeliveryDeps, envelope: Envelope): Promise<Deli
 }
 
 async function handleTurnCandidate(deps: DeliveryDeps, envelope: Envelope): Promise<DeliveryDecision> {
-  if (envelope.from.host !== deps.localHost) {
-    const allowed = await confirmCrossHost(deps, envelope);
-    if (!allowed) return "ack";
-  }
-  const budget = await deps.recordExchange(envelope);
-  if (!budget.deliver) {
-    await deps.audit("message_budget_blocked", {
-      message_id: envelope.id,
-      conversation_id: envelope.conversation_id,
-      reason: budget.reason ?? "budget",
-    });
-    return "ack";
-  }
+  const authorization = await authorizeTurn(deps, envelope);
+  if (!authorization.deliver) return "ack";
+  if (!(await passesBudget(deps, envelope))) return "ack";
   deps.registerInbound(envelope);
-  deps.deliverTurn(envelope);
+  deliverAuthorizedTurn(deps, envelope, authorization.delegation);
+  await auditTurnDelivery(deps, envelope);
+  return "ack";
+}
+
+type TurnAuthorization = { deliver: boolean; delegation?: DelegationGrant };
+
+async function authorizeTurn(
+  deps: DeliveryDeps,
+  envelope: Envelope
+): Promise<TurnAuthorization> {
+  if (envelope.delegation !== undefined) return authorizeDelegation(deps, envelope);
+  if (envelope.from.host === deps.localHost) return { deliver: true };
+  return { deliver: await confirmCrossHost(deps, envelope) };
+}
+
+async function authorizeDelegation(
+  deps: DeliveryDeps,
+  envelope: Envelope
+): Promise<TurnAuthorization> {
+  const verified = await deps.verifyDelegation(envelope);
+  if (!verified.ok) {
+    deps.publishFailureReply(envelope, `delegation_rejected:${verified.reason}`);
+    await deps.audit("delegation_rejected", {
+      message_id: envelope.id,
+      grant_id: envelope.delegation?.grant_id,
+      reason: verified.reason,
+    });
+    return { deliver: false };
+  }
+  await deps.audit("delegation_accepted", {
+    message_id: envelope.id,
+    grant_id: verified.grant.grant_id,
+    from_agent_id: envelope.from.agent_id,
+  });
+  return { deliver: true, delegation: verified.grant };
+}
+
+async function passesBudget(deps: DeliveryDeps, envelope: Envelope): Promise<boolean> {
+  const budget = await deps.recordExchange(envelope);
+  if (budget.deliver) return true;
+  await deps.audit("message_budget_blocked", {
+    message_id: envelope.id,
+    conversation_id: envelope.conversation_id,
+    reason: budget.reason ?? "budget",
+  });
+  return false;
+}
+
+function deliverAuthorizedTurn(
+  deps: DeliveryDeps,
+  envelope: Envelope,
+  delegation?: DelegationGrant
+): void {
+  if (delegation === undefined) deps.deliverTurn(envelope);
+  else deps.deliverDelegatedTurn(envelope, delegation);
+}
+
+async function auditTurnDelivery(deps: DeliveryDeps, envelope: Envelope): Promise<void> {
   await deps.audit("message_delivered_turn", {
     message_id: envelope.id,
     performative: envelope.performative,
@@ -108,7 +168,6 @@ async function handleTurnCandidate(deps: DeliveryDeps, envelope: Envelope): Prom
     from_agent_id: envelope.from.agent_id,
     from_host: envelope.from.host,
   });
-  return "ack";
 }
 
 async function confirmCrossHost(deps: DeliveryDeps, envelope: Envelope): Promise<boolean> {
