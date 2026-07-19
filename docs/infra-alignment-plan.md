@@ -141,28 +141,31 @@ just check green.
 
 ### Phase A3: Homelab-infra consumption path (separate repo, approval-gated)
 
-1. Add an `onclave_onramp` service to homelab-infra following the
+1. Add `onclave_onramp` (and `menos_onramp` when its app definition is
+   ready) to homelab-infra following the
    `searxng_onramp`/`infisical_onramp` pattern: services.json entry with
-   `onramp_host` dependency, role that consumes the onclave app
-   definition (pinned image digest + env contract), loopback/Caddy and
-   DNS decisions per the contract's DNS section - the broker needs a
-   stable LAN name (e.g. an apps-subdomain record) and the AMQP port
-   published for LAN adapters; /health and the management UI proxied via
-   Caddy or kept LAN-direct per operator choice.
+   `onramp_host` dependency, role that consumes the app definition
+   (pinned image digest + env contract). DNS per Decision 1: real
+   ilude.com records in homelab-infra-values (Technitium), placeholders
+   in tracked files; the AMQP port publishes for LAN adapters, HTTP
+   surfaces behind the app host's Caddy per operator choice.
 2. Secrets: the role renders the env contract from homelab-infra's
    mechanism (values/ or its selected store); onclave's BWS provider
    remains for standalone users.
-3. On acceptance, retire onclave's direct-ssh deploy playbook; onclave
-   keeps the app definition, local-dev compose, and the standalone
-   catalog path for users without homelab-infra.
+3. On acceptance (Decision 1), retire onclave's direct-ssh deploy
+   playbook and inventory entirely; onclave keeps the app definitions
+   and the local-dev compose. Standalone users consume the app
+   definition on their own hosts.
 4. Update the app-platform contract: onclave and menos named as app
    workloads; exception closed or transferred to onramp-vNext when that
    platform is ready.
+5. Operator cutover tasks recorded: dotfiles ONCLAVE_AMQP_URL and yt
+   MENOS_API_BASE switch to the ilude.com names.
 
 Gate: homelab-infra `just validate` + reviewed plan + approved apply
-deploys the onclave stack; adapters on workstations connect via the DNS
-name; onclave repo carries no live-mutation path against the shared host
-other than the standalone catalog (documented as the non-homelab path).
+deploys the onclave stack; adapters on workstations connect via the
+ilude.com DNS name; onclave repo carries no live-mutation path against
+any shared host.
 
 ### Phase A4: Service moves out of homelab-infra (decisions, not code)
 
@@ -184,17 +187,48 @@ homelab-infra's own planned waves:
 Gate: decisions recorded in the contract doc and here; no unplanned
 migrations.
 
+## Decisions
+
+1. Platform and domain (decided 2026-07-18): onclave and menos deploy
+   through homelab-infra's mechanics onto the homelab-infra-managed app
+   host, with DNS under the operator's real domain (ilude.com) managed as
+   Technitium records in homelab-infra's private values - not the legacy
+   docker host's Joyride/traefikturkey.icu publication. Consequences:
+   - The Joyride `joyride.host.name` labels in
+     `infra/ansible/files/{onclave,menos}/docker-compose.yml` are
+     removed; app definitions carry no DNS mechanism at all - naming is
+     consumer-owned (homelab-infra records, or whatever a standalone user
+     runs).
+   - Phase A3 is the primary deployment path, not an optional endpoint;
+     onclave's direct-ssh playbook is retired at the A3 gate instead of
+     retained as a standalone alternative. Standalone users get the app
+     definition (compose + env contract) and bring their own host.
+   - The first production deploy of the onclave stack happens through
+     homelab-infra (nothing has shipped via the direct path; it stays
+     that way).
+   - Tracked files keep public-safe placeholders (apps.example.net
+     style); real ilude.com names live only in homelab-infra-values.
+   - Workstation adapter URLs (dotfiles private/secrets.env
+     ONCLAVE_AMQP_URL) and the yt tooling MENOS_API_BASE cut over to the
+     ilude.com names when their homelab-infra services go live.
+2. Broker exposure (closes former open question 3): AMQP is not HTTP, so
+   the broker's 5672 publishes as a TCP port with a Technitium A/CNAME
+   record; HTTP surfaces (/health, management UI, menos API) may sit
+   behind the app host's Caddy per homelab-infra conventions.
+
 ## Open Questions
 
 1. Registry/org: GHCR under traefikturkey vs ilude for published images;
    affects the app definition references.
 2. onclave-values remote: private Forgejo (matching homelab-infra-values)
-   assumed; confirm.
-3. Broker DNS name and exposure: apps-subdomain record vs Joyride
-   publication (v2 plan deferral); AMQP is not HTTP, so Caddy cannot
-   proxy it - published port with DNS name is the practical default.
-4. Does onramp-vNext want the onclave/menos app definitions directly
+   assumed; confirm. With the direct-ssh path retired, onclave-values
+   shrinks to standalone-user scaffolding only.
+3. Does onramp-vNext want the onclave/menos app definitions directly
    (skipping the homelab-infra role), and on what timeline?
+4. Which host does homelab-infra's onramp_host inventory designate today
+   (the existing docker host vs the planned Debian 13 Podman VM), and is
+   it ready to receive these stacks? Resolve from homelab-infra values
+   before A3 planning; do not hardcode a host in onclave.
 
 ## Risks
 
