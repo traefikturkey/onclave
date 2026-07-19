@@ -96,6 +96,10 @@ dotfiles submodule pin after each phase gate.
    stack spec (required/optional keys) as input; providers: bws, plain
    env file. Validation logic unchanged.
 
+Status: complete on `feature/v2-broker-core`; the registry organization
+remains open question 1 because the workflow follows the repository owner
+without hardcoding an operator organization.
+
 Gate: `docker compose config` clean for the app definition with a sample
 env; CI image build+push green; renderer unit-validated for both
 providers; just check green.
@@ -116,6 +120,9 @@ providers; just check green.
    forward (history rewrite explicitly out of scope; the values are
    RFC 1918 and a username, recorded as accepted).
 
+Status: complete on `feature/v2-broker-core`; local values initialize as a
+nested repository without a remote while open question 2 remains unresolved.
+
 Gate: public-safety check passes on tracked source; `just deploy-syntax`
 and `deploy-lint` pass with scaffold placeholder values; a fresh-checkout
 flow (`just setup`-equivalent: clone/init values, validate) works.
@@ -128,16 +135,20 @@ flow (`just setup`-equivalent: clone/init values, validate) works.
 2. Align the tooling container with homelab-infra conventions where they
    pay: host uid/gid mapping, pinned base image with checksums,
    ansible-lint in the image (already present), gitleaks retained.
-3. Record the contract exception in-repo and in the homelab-infra
-   contract doc: onclave deploys itself directly until Phase A3 or
-   onramp-vNext ownership; exception includes its removal condition.
+3. Record the contract exception in-repo with its removal condition. The
+   matching homelab-infra contract update belongs to Phase A3 and is not
+   performed from the A0-A2 onclave-repo scope.
 4. Menos absorption M1 re-pointed at this mechanism (app definition +
    catalog entry); legacy menos playbook stays in menos-legacy for
    reference only.
 
-Gate: catalog-driven deploy reaches the existing /srv/onclave stack with
-identical results (health verified); ansible-lint production profile;
-just check green.
+Status: source implementation complete on `feature/v2-broker-core`.
+Decision 1 and the operator constraint prohibit a direct production deploy;
+the first live deployment remains the Phase A3 homelab-infra gate.
+
+Gate for A0-A2 source scope: catalog validation covers both app definitions;
+the temporary direct playbook passes syntax and production-profile lint; just
+check remains green. No host deployment or health mutation is performed.
 
 ### Phase A3: Homelab-infra consumption path (separate repo, approval-gated)
 

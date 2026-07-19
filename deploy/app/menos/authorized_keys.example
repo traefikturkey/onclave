@@ -1,0 +1,2 @@
+# Replace with one or more public ssh-ed25519 authorization lines.
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExamplePublicKeyMaterialOnly replace@example

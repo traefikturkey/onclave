@@ -53,8 +53,14 @@ test-integration:
 deploy-build:
     docker compose -f infra/ansible/docker-compose.yml build
 
-deploy *ARGS:
-    docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-playbook playbooks/deploy.yml {{ARGS}}
+services:
+    python ./scripts/service-catalog.py list
+
+validate service="": public-safety deploy-syntax deploy-lint
+    python ./scripts/service-catalog.py validate "{{service}}"
+
+deploy service:
+    python ./scripts/service-catalog.py deploy "{{service}}"
 
 deploy-syntax: values-init
     docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-playbook --syntax-check playbooks/deploy.yml

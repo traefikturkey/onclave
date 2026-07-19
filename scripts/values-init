@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly SCRIPT_DIR
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-readonly REPO_ROOT
+readonly SCRIPT_DIR
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+readonly REPO_ROOT
 readonly VALUES_DIR="$REPO_ROOT/values"
 readonly SCAFFOLD_DIR="$REPO_ROOT/scaffold"
 readonly SETTINGS_LOCAL="$REPO_ROOT/settings.local.json"

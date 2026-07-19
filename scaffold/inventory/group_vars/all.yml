@@ -7,3 +7,6 @@ onclave_secrets_runtime_env_mode: "0600"
 onclave_secrets_required_keys:
   - RABBITMQ_DEFAULT_USER
   - RABBITMQ_DEFAULT_PASS
+onclave_core_image_repository: ghcr.io/example/onclave-core
+onclave_core_image_tag: 0000000000000000000000000000000000000000
+onclave_core_image_digest: sha256:0000000000000000000000000000000000000000000000000000000000000000

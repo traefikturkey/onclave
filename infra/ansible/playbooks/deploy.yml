@@ -67,6 +67,20 @@
       diff: false
       tags: [preflight]
 
+    - name: Add immutable core image coordinates
+      ansible.builtin.blockinfile:
+        path: "{{ onclave_secrets_tmp_dir }}/onclave.env"
+        marker: "# {mark} IMAGE COORDINATES"
+        block: |
+          ONCLAVE_CORE_IMAGE_REPOSITORY={{ onclave_core_image_repository }}
+          ONCLAVE_CORE_IMAGE_TAG={{ onclave_core_image_tag }}
+          ONCLAVE_CORE_IMAGE_DIGEST={{ onclave_core_image_digest }}
+      delegate_to: localhost
+      become: false
+      no_log: true
+      diff: false
+      tags: [preflight]
+
     # --- Git state checks ---
     - name: Configure git for container environment
       ansible.builtin.command:
@@ -149,37 +163,11 @@
         state: directory
         mode: "0755"
 
-    - name: Create data directories
-      ansible.builtin.file:
-        path: "{{ data_path }}/{{ item }}"
-        state: directory
-        mode: "0755"
-      loop:
-        - rabbitmq
-        - onclave
-        - onclave/trust
-
-    - name: Sync compose file
+    - name: Sync app definition
       ansible.builtin.copy:
-        src: /ansible/files/onclave/docker-compose.yml
+        src: /project/deploy/app/onclave/compose.yaml
         dest: "{{ deploy_path }}/docker-compose.yml"
         mode: "0644"
-
-    - name: Sync core build context
-      ansible.builtin.command:
-        argv:
-          - /bin/sh
-          - -c
-          - >-
-            rsync -av --delete
-            --exclude='.git' --exclude='node_modules' --exclude='docs'
-            --exclude='infra' --exclude='coverage' --exclude='dist'
-            -e "ssh -o StrictHostKeyChecking=no"
-            /project/
-            {{ ansible_user }}@{{ ansible_host }}:{{ deploy_path }}/src/
-      delegate_to: localhost
-      register: rsync_result
-      changed_when: rsync_result.stdout_lines | length > 4
 
     # --- Runtime env ---
     - name: Check existing runtime env
@@ -216,13 +204,7 @@
 
     - name: Pull container images
       ansible.builtin.command:
-        cmd: docker compose pull rabbitmq
-        chdir: "{{ deploy_path }}"
-      changed_when: true
-
-    - name: Build core image
-      ansible.builtin.command:
-        cmd: docker compose build onclave-core
+        cmd: docker compose pull rabbitmq onclave-core
         chdir: "{{ deploy_path }}"
       changed_when: true
 

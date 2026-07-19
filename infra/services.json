@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "services": [
+    {
+      "id": "onclave",
+      "order": 10,
+      "dependencies": [],
+      "appDefinition": "deploy/app/onclave/compose.yaml",
+      "sampleEnv": "deploy/app/onclave/.env.example",
+      "stateOrder": ["rabbitmq", "onclave-core"],
+      "deployment": {
+        "mode": "temporary-direct",
+        "playbook": "playbooks/deploy.yml",
+        "removalCondition": "Retire after the Phase A3 homelab-infra deployment gate passes."
+      }
+    },
+    {
+      "id": "menos",
+      "order": 20,
+      "dependencies": [],
+      "appDefinition": "deploy/app/menos/compose.yaml",
+      "sampleEnv": "deploy/app/menos/.env.example",
+      "stateOrder": [
+        "surrealdb",
+        "minio",
+        "ollama",
+        "searxng",
+        "docling-serve",
+        "menos-api"
+      ],
+      "deployment": {
+        "mode": "external",
+        "removalCondition": "Deploy only through the Phase A3 homelab-infra consumer."
+      }
+    }
+  ]
+}
