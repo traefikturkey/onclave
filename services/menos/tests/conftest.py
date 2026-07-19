@@ -1,5 +1,6 @@
 """Shared test fixtures."""
 
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -13,6 +14,10 @@ from cryptography.hazmat.primitives.serialization import (
     PublicFormat,
 )
 from fastapi.testclient import TestClient
+
+os.environ.setdefault("SURREALDB_PASSWORD", "test-surrealdb-password")
+os.environ.setdefault("S3_ACCESS_KEY", "test-s3-access-key")
+os.environ.setdefault("S3_SECRET_KEY", "test-s3-secret-key")
 
 from menos.client.signer import RequestSigner
 from menos.services.di import (

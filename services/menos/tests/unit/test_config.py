@@ -2,7 +2,25 @@
 
 import re
 
+import pytest
+from pydantic import ValidationError
+
 from menos.config import Settings
+
+
+class TestRequiredCredentialConfig:
+    """Tests for required storage credentials."""
+
+    @pytest.mark.parametrize(
+        "key",
+        ["SURREALDB_PASSWORD", "S3_ACCESS_KEY", "S3_SECRET_KEY"],
+    )
+    def test_missing_storage_credential_is_rejected(self, monkeypatch, key):
+        """Storage credentials must not fall back to development values."""
+        monkeypatch.delenv(key)
+
+        with pytest.raises(ValidationError):
+            Settings(_env_file=None)
 
 
 class TestUnifiedPipelineConfig:

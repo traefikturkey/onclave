@@ -25,14 +25,14 @@ class Settings(BaseSettings):
     # SurrealDB
     surrealdb_url: str = "http://localhost:8000"
     surrealdb_user: str = "root"
-    surrealdb_password: str = "root"
+    surrealdb_password: str
     surrealdb_namespace: str = "menos"
     surrealdb_database: str = "menos"
 
     # S3-compatible storage
     s3_endpoint_url: str = "localhost:9000"
-    s3_access_key: str = "minio"
-    s3_secret_key: str = "minio123"
+    s3_access_key: str
+    s3_secret_key: str
     s3_secure: bool = False
     s3_bucket: str = "menos"
     s3_region: str = "us-east-1"
