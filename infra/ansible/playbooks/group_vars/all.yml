@@ -1,8 +1,6 @@
 bws_project_id: 06e2f73a-9869-40dc-b430-b48500175560
 onclave_secrets_tmp_dir: /dev/shm/onclave
 onclave_secrets_runtime_env_mode: "0600"
-menos_secrets_tmp_dir: /dev/shm/menos
-menos_secrets_runtime_env_mode: "0600"
 onclave_secrets_required_keys:
   - RABBITMQ_DEFAULT_USER
   - RABBITMQ_DEFAULT_PASS

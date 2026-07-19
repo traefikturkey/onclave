@@ -11,7 +11,6 @@ pattern. The harness runs in a container, so only docker is needed locally.
 - `ansible/inventory/hosts.yml` - target hosts and deploy paths for
   `/apps/onclave` and `/apps/menos`.
 - `ansible/playbooks/deploy.yml` - Onclave deployment.
-- `ansible/playbooks/deploy-menos.yml` - Menos deployment and secret migration.
 - `ansible/files/{onclave,menos}/docker-compose.yml` - production stack
   definitions installed on the target.
 - `../scripts/onclave-bws-env.py` - renders stack-specific runtime `.env`
@@ -42,12 +41,9 @@ just deploy-build     # build the harness image (first time / on change)
 just deploy-syntax    # playbook syntax check, no secrets needed
 just deploy-lint      # ansible-lint, no secrets needed
 just deploy           # deploy Onclave
-just menos-deploy     # deploy Menos
-just menos-secrets    # render and install only the Menos runtime env
-just menos-deploy-syntax
-just menos-deploy-lint
 ```
 
-The full deployment playbooks refuse dirty working trees and verify their
-service health after `docker compose up`. Secret-only Menos migration backs
-up the existing runtime env before installing the Bitwarden-rendered file.
+The deployment playbook refuses dirty working trees and verifies service
+health after `docker compose up`. Menos deployment follows
+`docs/infra-alignment-plan.md`; its direct legacy playbook remains reference
+material only.
