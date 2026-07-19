@@ -89,10 +89,10 @@ fi
 # ---------------------------------------------------------------------------
 # Capture container versions
 # ---------------------------------------------------------------------------
-SURREALDB_VERSION=$(docker inspect menos-surrealdb --format '{{.Config.Image}}' 2>/dev/null || echo "unknown")
-MINIO_VERSION=$(docker inspect menos-minio --format '{{.Config.Image}}' 2>/dev/null || echo "unknown")
-OLLAMA_VERSION=$(docker inspect menos-ollama --format '{{.Config.Image}}' 2>/dev/null || echo "unknown")
-API_VERSION=$(docker inspect menos-api --format '{{.Config.Image}}' 2>/dev/null || echo "unknown")
+SURREALDB_VERSION=$({ docker inspect menos-surrealdb --format '{{.Config.Image}}' 2>/dev/null || echo "unknown"; } | tr -d '\r\n')
+MINIO_VERSION=$({ docker inspect menos-minio --format '{{.Config.Image}}' 2>/dev/null || echo "unknown"; } | tr -d '\r\n')
+OLLAMA_VERSION=$({ docker inspect menos-ollama --format '{{.Config.Image}}' 2>/dev/null || echo "unknown"; } | tr -d '\r\n')
+API_VERSION=$({ docker inspect menos-api --format '{{.Config.Image}}' 2>/dev/null || echo "unknown"; } | tr -d '\r\n')
 
 # ---------------------------------------------------------------------------
 # Create manifest
