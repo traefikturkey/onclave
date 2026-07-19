@@ -85,6 +85,11 @@ under ~/.dotfiles/onclave (non-starter resolved).
 
 ### Phase M1: Deployment parity on the onclave harness
 
+> Superseded in part by ./infra-alignment-plan.md: menos deployment lands
+> as an app definition plus catalog entry on the aligned harness (phases
+> A0-A2), not a 1:1 port of the legacy menos playbook. The gate below
+> (identical stack, health git_sha, yt smoke, no data loss) still applies.
+
 1. Port deploy.yml from the menos repo to
    `infra/ansible/playbooks/deploy-menos.yml` on the onclave harness:
    same target host, same /apps/menos deploy path, same container names,
