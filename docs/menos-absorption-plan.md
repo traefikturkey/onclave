@@ -44,12 +44,13 @@ the source lives.
 services/
   core/            # TS broker core (existing)
   menos/           # FastAPI app (from menos repo api/)
+deploy/app/
+  menos/               # provider-agnostic Menos app definition
 infra/ansible/
   playbooks/
-    deploy.yml         # onclave stack (existing)
-    deploy-menos.yml   # menos stack (ported)
-    backup-menos.yml   # ported from menos backup.yml if still wanted
-  files/menos/         # compose, garage.toml, searxng config (ported)
+    deploy.yml         # temporary standalone Onclave deploy
+    backup-menos.yml   # active Menos backup automation
+  files/menos/         # transitional Menos compose and MinIO config
 docs/menos/            # menos docs (ported)
 scripts/
   onclave-bws-env.py   # generalized: per-stack required-key sets
@@ -90,21 +91,18 @@ under ~/.dotfiles/onclave (non-starter resolved).
 > A0-A2), not a 1:1 port of the legacy menos playbook. The gate below
 > (identical stack, health git_sha, yt smoke, no data loss) still applies.
 
-1. Port deploy.yml from the menos repo to
-   `infra/ansible/playbooks/deploy-menos.yml` on the onclave harness:
-   same target host, same /apps/menos deploy path, same container names,
-   same compose files, same version/ancestry gate against the API
-   /health git_sha.
+1. Publish the Menos stack as `deploy/app/menos/` and add its catalog
+   entry on the aligned harness: same target host, `/apps/menos` deploy
+   path, container names, ports, volumes, version gate, and health checks.
 2. Replace the Infisical preflight with the Bitwarden flow: extend
    `scripts/onclave-bws-env.py` to take a stack spec (onclave vs menos
    required/optional key sets); operator creates the Menos secrets in
    Bitwarden (SurrealDB and S3 credentials, `SEARXNG_SECRET`, Webshare
    credentials, `YOUTUBE_API_KEY`, and provider keys).
-3. Resolve the storage question (open question 1) before first deploy:
-   the menos repo carries both MinIO (live) and Garage
-   (compose.migration + migrate-s3 playbook); port only the canonical
-   path.
-4. `just menos-deploy` target; ansible-lint at production profile.
+3. Keep MinIO and the provider-neutral `S3_*` runtime contract; leave
+   the Garage migration assets in legacy reference material.
+4. Route Menos validation and deployment through the service catalog;
+   ansible-lint remains at the production profile.
 
 Gate: real deploy from onclave produces an identical stack: /health 200
 with matching git_sha, yt pipeline smoke passes (ingest or content fetch
