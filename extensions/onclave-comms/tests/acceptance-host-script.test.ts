@@ -47,7 +47,7 @@ describe("Onclave acceptance host script", () => {
           name: "host-b",
           nodeId: "node_b",
           hubInstanceId: "hub_b",
-          endpoint: "wss://172.30.20.51:4444/v1/hub",
+          endpoint: "wss://203.0.113.51:4444/v1/hub",
         },
       }
     );

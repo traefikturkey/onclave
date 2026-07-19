@@ -8,9 +8,10 @@ pattern. The harness runs in a container, so only docker is needed locally.
 
 - `ansible/docker-compose.yml` - the harness container (ansible + rsync +
   gitleaks + bws) with the repo mounted at `/project`.
-- `ansible/inventory/hosts.yml` - target hosts and deploy paths for
-  `/apps/onclave` and `/apps/menos`.
-- `ansible/playbooks/deploy.yml` - Onclave deployment.
+- `../deploy/app/onclave/` - provider-neutral Onclave app definition.
+- `../values/inventory/` - ignored site inventory and group variables,
+  initialized from `../scaffold/`.
+- `ansible/playbooks/deploy.yml` - temporary direct Onclave deployment.
 - `ansible/files/{onclave,menos}/docker-compose.yml` - production stack
   definitions installed on the target.
 - `../scripts/onclave-bws-env.py` - renders stack-specific runtime `.env`
@@ -25,8 +26,8 @@ access token. The host shell provides (loaded from
 - `BITWARDEN_ACCESS_KEY` - machine account access token
 - `BITWARDEN_API_SERVER` / `BITWARDEN_IDENTITY_SERVER` - server URLs
 
-The non-secret project ID is configured as `bws_project_id` in
-`ansible/playbooks/group_vars/all.yml`.
+The non-secret project ID and server URLs live in the private values
+repository under `values/inventory/group_vars/all.yml`.
 
 Onclave requires `RABBITMQ_DEFAULT_USER` and `RABBITMQ_DEFAULT_PASS`.
 Menos requires `SURREALDB_PASSWORD`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`,
@@ -37,10 +38,12 @@ that the pre-absorption Compose file remains restart-safe until cutover.
 ## Usage
 
 ```bash
+just values-init      # create ignored values from public-safe scaffold
+just public-safety    # reject tracked site-specific values
 just deploy-build     # build the harness image (first time / on change)
 just deploy-syntax    # playbook syntax check, no secrets needed
 just deploy-lint      # ansible-lint, no secrets needed
-just deploy           # deploy Onclave
+just deploy           # temporary direct path; approval required
 ```
 
 The deployment playbook refuses dirty working trees and verifies service

@@ -11,6 +11,8 @@ vendor/
 .env
 .env.*
 !.env.example
+settings.local.json
+values/
 
 # Editor files
 *.swo

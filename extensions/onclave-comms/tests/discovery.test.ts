@@ -68,7 +68,7 @@ describe("DiscoveryPeerCache", () => {
         wss_port: 4444,
         started_at: "2026-05-21T00:00:00.000Z",
       },
-      "192.168.1.10",
+      "192.0.2.10",
       "2026-05-21T00:00:01.000Z"
     );
 
@@ -88,7 +88,7 @@ describe("DiscoveryPeerCache", () => {
         wss_port: 4444,
         started_at: "2026-05-21T00:00:00.000Z",
       },
-      "192.168.1.10",
+      "192.0.2.10",
       "2026-05-21T00:00:01.000Z"
     );
 
@@ -97,7 +97,7 @@ describe("DiscoveryPeerCache", () => {
       {
         nodeId: "node_peer",
         hubInstanceId: "hub_peer",
-        endpoint: "wss://192.168.1.10:4444/v1/hub",
+        endpoint: "wss://192.0.2.10:4444/v1/hub",
         lastSeenAt: "2026-05-21T00:00:01.000Z",
         trustState: "untrusted",
         authState: "not_attempted",
@@ -117,7 +117,7 @@ describe("DiscoveryPeerCache", () => {
         wss_port: 4444,
         started_at: "2026-05-21T00:00:00.000Z",
       },
-      "192.168.1.10",
+      "192.0.2.10",
       "2026-05-21T00:00:01.000Z"
     );
 
@@ -125,7 +125,7 @@ describe("DiscoveryPeerCache", () => {
       {
         nodeId: "node_peer",
         hubInstanceId: "hub_peer",
-        endpoint: "wss://192.168.1.10:4444/v1/hub",
+        endpoint: "wss://192.0.2.10:4444/v1/hub",
         lastSeenAt: "2026-05-21T00:00:01.000Z",
         trustState: "trusted",
         authState: "not_attempted",
@@ -144,7 +144,7 @@ describe("DiscoveryPeerCache", () => {
         wss_port: 4444,
         started_at: "2026-05-21T00:00:00.000Z",
       },
-      "192.168.1.10",
+      "192.0.2.10",
       "2026-05-21T00:00:01.000Z"
     );
 

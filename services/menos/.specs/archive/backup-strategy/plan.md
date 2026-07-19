@@ -20,8 +20,8 @@ Implement automated daily backups of the Menos vault data (SurrealDB + MinIO) to
 - **Language**: Shell/Bash (backup script), Ansible YAML (deployment)
 - **Test command**: Manual verification (run backup script, verify files created)
 - **Lint command**: `shellcheck` for shell scripts, `ansible-lint` for playbooks (if available)
-- **Server**: 192.168.16.241, user: anvil, deploy path: /apps/menos
-- **Data path**: `/apps/menos/data` (configurable via DATA_PATH env var)
+- **Server**: 192.0.2.241, user: appuser, deploy path: /srv/menos
+- **Data path**: `/srv/menos/data` (configurable via DATA_PATH env var)
 - **Backup destination**: `/backups/menos/YYYY-MM-DD/` (timestamped directories)
 - **Docker containers**: menos-surrealdb, menos-minio, menos-api, menos-ollama
 
@@ -93,9 +93,9 @@ Implement automated daily backups of the Menos vault data (SurrealDB + MinIO) to
   7. Log all operations with timestamps
   8. Exit with non-zero status on any failure
 
-  **Environment variables** (read from /apps/menos/.env or passed as args):
+  **Environment variables** (read from /srv/menos/.env or passed as args):
   - `SURREALDB_PASSWORD` - Database password
-  - `DATA_PATH` - Base data directory (default: /apps/menos/data)
+  - `DATA_PATH` - Base data directory (default: /srv/menos/data)
   - `BACKUP_PATH` - Backup destination (default: /backups/menos)
   - `RETENTION_DAYS` - How many days to keep (default: 30)
 
@@ -139,8 +139,8 @@ Implement automated daily backups of the Menos vault data (SurrealDB + MinIO) to
 
   **Playbook tasks**:
   1. Create backup directory on server (`/backups/menos/`)
-  2. Ensure directory has correct permissions (anvil user)
-  3. Copy backup script to server (`/apps/menos/scripts/backup.sh`)
+  2. Ensure directory has correct permissions (appuser user)
+  3. Copy backup script to server (`/srv/menos/scripts/backup.sh`)
   4. Set execute permissions on script
   5. Install cron job (daily at 3 AM UTC)
   6. Verify cron job is registered
@@ -149,7 +149,7 @@ Implement automated daily backups of the Menos vault data (SurrealDB + MinIO) to
   **Cron job specification**:
   ```
   # Daily backup at 3 AM UTC
-  0 3 * * * /apps/menos/scripts/backup.sh >> /var/log/menos-backup.log 2>&1
+  0 3 * * * /srv/menos/scripts/backup.sh >> /var/log/menos-backup.log 2>&1
   ```
 
   **Note**: Existing `backup.yml` playbook backs up config files, not data. This is a separate playbook for data backups.
@@ -203,8 +203,8 @@ Implement automated daily backups of the Menos vault data (SurrealDB + MinIO) to
 
   **Verification steps**:
   1. Run `backup-setup.yml` playbook via Ansible
-  2. Verify cron job installed: `ssh anvil@192.168.16.241 'crontab -l'`
-  3. Trigger manual backup: `ssh anvil@192.168.16.241 '/apps/menos/scripts/backup.sh'`
+  2. Verify cron job installed: `ssh appuser@192.0.2.241 'crontab -l'`
+  3. Trigger manual backup: `ssh appuser@192.0.2.241 '/srv/menos/scripts/backup.sh'`
   4. Verify backup files created in `/backups/menos/YYYY-MM-DD/`
   5. Check backup manifest contains expected metadata
   6. Verify log output shows successful operations

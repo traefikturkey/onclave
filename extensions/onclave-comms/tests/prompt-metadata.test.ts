@@ -10,7 +10,7 @@ describe("assertAsyncReplyablePrompt", () => {
         origin: {
           nodeId: "node_origin",
           hubInstanceId: "hub_origin",
-          endpoint: "wss://172.30.20.50:43837/v1/hub",
+          endpoint: "wss://203.0.113.50:43837/v1/hub",
           sessionId: "session-origin",
           correlationId: "corr-1",
         },
@@ -26,7 +26,7 @@ describe("assertAsyncReplyablePrompt", () => {
         origin: {
           nodeId: "node_origin",
           hubInstanceId: "hub_origin",
-          endpoint: "wss://172.30.20.50:43837/v1/hub",
+          endpoint: "wss://203.0.113.50:43837/v1/hub",
           sessionId: "session-origin",
           correlationId: "corr-2",
         },
@@ -42,7 +42,7 @@ describe("assertAsyncReplyablePrompt", () => {
         origin: {
           nodeId: "node_origin",
           hubInstanceId: "hub_origin",
-          endpoint: "wss://172.30.20.50:43837/v1/hub",
+          endpoint: "wss://203.0.113.50:43837/v1/hub",
           sessionId: "session-origin",
           correlationId: "corr-3",
           inReplyToMsgId: "msg-parent",

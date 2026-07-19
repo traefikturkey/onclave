@@ -31,7 +31,7 @@ describe("onclave config", () => {
             name: "bench",
             nodeId: "node_bench",
             hubInstanceId: "hub_bench",
-            endpoint: "wss://192.168.1.20:4444/v1/hub",
+            endpoint: "wss://192.0.2.20:4444/v1/hub",
           },
         ],
       }),
@@ -43,7 +43,7 @@ describe("onclave config", () => {
       name: "bench",
       nodeId: "node_bench",
       hubInstanceId: "hub_bench",
-      endpoint: "wss://192.168.1.20:4444/v1/hub",
+      endpoint: "wss://192.0.2.20:4444/v1/hub",
     });
   });
 

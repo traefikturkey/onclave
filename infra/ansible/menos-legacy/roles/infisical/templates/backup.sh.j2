@@ -6,7 +6,7 @@ DEPLOY_DIR="{{ infisical_deploy_path }}"
 COMPOSE_PROJECT="{{ infisical_compose_project }}"
 RETENTION_DAYS="14"
 WARN_PCT="80"
-AGE_RECIPIENT_FILE="{{ infisical_age_recipient_file | default('/apps/menos/backup-age-recipient.txt') }}"
+AGE_RECIPIENT_FILE="{{ infisical_age_recipient_file | default('/srv/menos/backup-age-recipient.txt') }}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 WORKDIR="$(mktemp -d)"
 

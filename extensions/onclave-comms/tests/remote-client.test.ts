@@ -34,7 +34,7 @@ afterAll(async () => {
 
 describe("RemoteHubClient", () => {
   it("authenticates and lists remote agents with mutual verification", async () => {
-    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.168.1.10:4444/v1/hub");
+    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.0.2.10:4444/v1/hub");
     const serverIdentity = await createIdentity("node_server", "hub_server", "wss://127.0.0.1:0/v1/hub");
     const agent = createAgent();
     const server = await startTestServer(clientIdentity, serverIdentity, { agents: [agent] });
@@ -60,7 +60,7 @@ describe("RemoteHubClient", () => {
   });
 
   it("authenticates, sends a prompt to the remote hub, and audits metadata", async () => {
-    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.168.1.10:4444/v1/hub");
+    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.0.2.10:4444/v1/hub");
     const serverIdentity = await createIdentity("node_server", "hub_server", "wss://127.0.0.1:0/v1/hub");
     const events: unknown[] = [];
     const sent: SendPromptFrame[] = [];
@@ -117,7 +117,7 @@ describe("RemoteHubClient", () => {
   });
 
   it("rejects a remote auth response signed by an unknown server key", async () => {
-    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.168.1.10:4444/v1/hub");
+    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.0.2.10:4444/v1/hub");
     const trustedServerIdentity = await createIdentity("node_server", "hub_server", "wss://127.0.0.1:0/v1/hub");
     const untrustedServerIdentity = await createIdentity("node_server", "hub_server", "wss://127.0.0.1:0/v1/hub");
     const server = await startTestServer(clientIdentity, untrustedServerIdentity, { agents: [] });
@@ -143,7 +143,7 @@ describe("RemoteHubClient", () => {
   });
 
   it("authenticates and gets a remote response", async () => {
-    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.168.1.10:4444/v1/hub");
+    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.0.2.10:4444/v1/hub");
     const serverIdentity = await createIdentity("node_server", "hub_server", "wss://127.0.0.1:0/v1/hub");
     const server = await startTestServer(clientIdentity, serverIdentity, {
       getResponse: () => ({ status: "complete", response: "done", error: null }),

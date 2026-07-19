@@ -15,7 +15,7 @@ Prevent multi-machine deployment conflicts by ensuring the server always knows w
 - **Test command**: `cd api && uv run pytest`
 - **Lint command**: `cd api && uv run ruff check`
 - **Deploy tool**: Ansible (runs in Docker container, project mounted at /project)
-- **Server**: 192.168.16.241, deploy path /apps/menos
+- **Server**: 192.0.2.241, deploy path /srv/menos
 
 ## Files to Modify/Create
 

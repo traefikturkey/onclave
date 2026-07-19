@@ -7,11 +7,11 @@ Deploys self-hosted Infisical behind Caddy with a dedicated Postgres container.
 - `vault_infisical_encryption_key`: Infisical data encryption key. Generate a strong random value and store it in the password manager.
 - `vault_infisical_auth_secret`: Infisical auth/JWT secret. Generate a strong random value and store it in the password manager.
 - `vault_infisical_postgres_password`: Password for the dedicated `infisical` Postgres user.
-- `vault_infisical_cloudflare_api_token`: Cloudflare API token scoped to the `ilude.com` zone with `Zone:Read` and `DNS:Edit`. Caddy uses Zone Read to discover the zone for `_acme-challenge.infisical.ilude.com` and DNS Edit to create/remove TXT records.
+- `vault_infisical_cloudflare_api_token`: Cloudflare API token scoped to the `apps.example.net` zone with `Zone:Read` and `DNS:Edit`. Caddy uses Zone Read to discover the zone for `_acme-challenge.infisical.apps.example.net` and DNS Edit to create/remove TXT records.
 
 ## Required non-secret variables
 
-- `infisical_domain`: Public DNS name. Defaults to `infisical.ilude.com`.
+- `infisical_domain`: Public DNS name. Defaults to `infisical.apps.example.net`.
 - `infisical_caddy_email`: Email used for Caddy ACME registration.
 - `infisical_deploy_path`: Directory where compose files are rendered. Defaults to `{{ deploy_path }}/infisical`.
 
@@ -45,10 +45,10 @@ The role builds a local Caddy image with `github.com/caddy-dns/cloudflare` using
 For initial deployment, prefer a Joyride static host entry:
 
 ```text
-192.168.16.241 infisical.ilude.com
+192.0.2.241 infisical.apps.example.net
 ```
 
-The Caddy service also has a `coredns.host.name` label as an optional convenience. Use it only after confirming Joyride resolves the label to `192.168.16.241`.
+The Caddy service also has a `coredns.host.name` label as an optional convenience. Use it only after confirming Joyride resolves the label to `192.0.2.241`.
 
 ## Notes
 

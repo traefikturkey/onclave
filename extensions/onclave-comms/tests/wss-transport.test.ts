@@ -40,7 +40,7 @@ afterAll(async () => {
 
 describe("WSS hub transport", () => {
   it("returns auth_required for gated frames before authentication", async () => {
-    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.168.1.10:4444/v1/hub");
+    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.0.2.10:4444/v1/hub");
     const serverIdentity = await createIdentity("node_server", "hub_server", "wss://127.0.0.1:0/v1/hub");
     const server = await startTestServer([], serverIdentity);
     try {
@@ -55,7 +55,7 @@ describe("WSS hub transport", () => {
   });
 
   it("issues a server hello, authenticates, and handles gated frames on the same WSS connection", async () => {
-    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.168.1.10:4444/v1/hub");
+    const clientIdentity = await createIdentity("node_client", "hub_client", "wss://192.0.2.10:4444/v1/hub");
     const serverIdentity = await createIdentity("node_server", "hub_server", "wss://127.0.0.1:0/v1/hub");
     const authorizedKeys = parseAuthorizedKeys(
       `ssh-ed25519 ${encodeOpenSshEd25519PublicKey(Buffer.from(clientIdentity.publicKeyHex, "hex"))} test@example`

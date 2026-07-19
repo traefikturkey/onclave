@@ -19,9 +19,9 @@ describe("buildOnclaveStatus", () => {
       publicAuthorizedKeyLine: "ssh-ed25519 AAAA node_test",
       networkInterfaces: {
         lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
-        eth0: [{ address: "172.30.20.50", family: "IPv4", internal: false }],
-        docker0: [{ address: "172.18.0.1", family: "IPv4", internal: false }],
-        "br-123": [{ address: "172.19.0.1", family: "IPv4", internal: false }],
+        eth0: [{ address: "203.0.113.50", family: "IPv4", internal: false }],
+        docker0: [{ address: "198.51.100.18", family: "IPv4", internal: false }],
+        "br-123": [{ address: "198.51.100.19", family: "IPv4", internal: false }],
         wlan0: [{ address: "fe80::1", family: "IPv6", internal: false }],
         en0: [{ address: "2001:db8::10", family: "IPv6", internal: false }],
       },
@@ -31,13 +31,13 @@ describe("buildOnclaveStatus", () => {
     expect(status.text).toContain("node_id: node_01TESTNODEID00000000000000");
     expect(status.text).toContain("hub_instance_id: hub_01TESTNODEID00000000000000");
     expect(status.text).toContain("remote_endpoints:");
-    expect(status.text).toContain("wss://172.30.20.50:43837/v1/hub");
+    expect(status.text).toContain("wss://203.0.113.50:43837/v1/hub");
     expect(status.text).toContain("wss://[2001:db8::10]:43837/v1/hub");
-    expect(status.text).not.toContain("172.18.0.1");
-    expect(status.text).not.toContain("172.19.0.1");
+    expect(status.text).not.toContain("198.51.100.18");
+    expect(status.text).not.toContain("198.51.100.19");
     expect(status.text).not.toContain("fe80::1");
     expect(status.details.remoteEndpoints).toEqual([
-      "wss://172.30.20.50:43837/v1/hub",
+      "wss://203.0.113.50:43837/v1/hub",
       "wss://[2001:db8::10]:43837/v1/hub",
     ]);
   });
@@ -51,7 +51,7 @@ describe("buildOnclaveStatus", () => {
       publicAuthorizedKeyLine: "ssh-ed25519 AAAA node_test",
       networkInterfaces: {
         lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
-        docker0: [{ address: "172.18.0.1", family: "IPv4", internal: false }],
+        docker0: [{ address: "198.51.100.18", family: "IPv4", internal: false }],
         wlan0: [{ address: "fe80::1", family: "IPv6", internal: false }],
       },
     });
@@ -67,7 +67,7 @@ describe("buildOnclavePeers", () => {
       {
         nodeId: "node_01PEER00000000000000000000",
         hubInstanceId: "hub_01PEER00000000000000000000",
-        endpoint: "wss://172.30.20.51:33105/v1/hub",
+        endpoint: "wss://203.0.113.51:33105/v1/hub",
         lastSeenAt: "2026-05-22T16:00:00.000Z",
         trustState: "trusted",
         authState: "authenticated",
@@ -78,13 +78,13 @@ describe("buildOnclavePeers", () => {
         name: "host-b",
         nodeId: "node_01PEER00000000000000000000",
         hubInstanceId: "hub_01PEER00000000000000000000",
-        endpoint: "wss://172.30.20.51:33105/v1/hub",
+        endpoint: "wss://203.0.113.51:33105/v1/hub",
       },
       {
         name: "base-ops",
         nodeId: "node_01STATIC000000000000000000",
         hubInstanceId: "hub_01STATIC000000000000000000",
-        endpoint: "wss://172.30.10.20:64993/v1/hub",
+        endpoint: "wss://203.0.113.20:64993/v1/hub",
       },
     ];
 
@@ -98,14 +98,14 @@ describe("buildOnclavePeers", () => {
     expect(peers.text).toContain("source=discovered+static");
     expect(peers.text).toContain("name=base-ops");
     expect(peers.text).toContain("source=static");
-    expect(peers.text).toContain("endpoint=wss://172.30.10.20:64993/v1/hub");
+    expect(peers.text).toContain("endpoint=wss://203.0.113.20:64993/v1/hub");
     expect(peers.text).toContain("trust_state=stale");
     expect(peers.text).toContain("discovered_peers: 1");
     expect(peers.text).toContain("name=host-b");
     expect(peers.text).toContain("peer_name=nxs-dev1");
     expect(peers.text).toContain("node_id=node_01PEER00000000000000000000");
     expect(peers.text).toContain("hub_instance_id=hub_01PEER00000000000000000000");
-    expect(peers.text).toContain("endpoint=wss://172.30.20.51:33105/v1/hub");
+    expect(peers.text).toContain("endpoint=wss://203.0.113.51:33105/v1/hub");
     expect(peers.text).toContain("trust_state=trusted");
     expect(peers.text).toContain("auth_state=authenticated");
     expect(peers.text).toContain("static_peers: 2");
@@ -116,7 +116,7 @@ describe("buildOnclavePeers", () => {
         name: "host-b",
         peerName: "nxs-dev1",
         hubInstanceId: "hub_01PEER00000000000000000000",
-        endpoint: "wss://172.30.20.51:33105/v1/hub",
+        endpoint: "wss://203.0.113.51:33105/v1/hub",
         lastSeenAt: "2026-05-22T16:00:00.000Z",
         trustState: "trusted",
         authState: "authenticated",
@@ -126,7 +126,7 @@ describe("buildOnclavePeers", () => {
         nodeId: "node_01STATIC000000000000000000",
         name: "base-ops",
         hubInstanceId: "hub_01STATIC000000000000000000",
-        endpoint: "wss://172.30.10.20:64993/v1/hub",
+        endpoint: "wss://203.0.113.20:64993/v1/hub",
         trustState: "stale",
         authState: "not_attempted",
         source: "static",
@@ -138,7 +138,7 @@ describe("buildOnclavePeers", () => {
         name: "host-b",
         peerName: "nxs-dev1",
         hubInstanceId: "hub_01PEER00000000000000000000",
-        endpoint: "wss://172.30.20.51:33105/v1/hub",
+        endpoint: "wss://203.0.113.51:33105/v1/hub",
         lastSeenAt: "2026-05-22T16:00:00.000Z",
         trustState: "trusted",
         authState: "authenticated",

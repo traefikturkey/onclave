@@ -115,7 +115,7 @@ describe("OnclaveHubRuntime", () => {
         {
           nodeId: "node_remote",
           hubInstanceId: "hub_remote",
-          endpoint: "wss://192.168.1.20:4444/v1/hub",
+          endpoint: "wss://192.0.2.20:4444/v1/hub",
           lastSeenAt: NOW,
           trustState: "trusted",
           authState: "not_attempted",
@@ -123,7 +123,7 @@ describe("OnclaveHubRuntime", () => {
         {
           nodeId: "node_untrusted",
           hubInstanceId: "hub_untrusted",
-          endpoint: "wss://192.168.1.30:4444/v1/hub",
+          endpoint: "wss://192.0.2.30:4444/v1/hub",
           lastSeenAt: NOW,
           trustState: "untrusted",
           authState: "not_attempted",
@@ -172,14 +172,14 @@ describe("OnclaveHubRuntime", () => {
             started_at: NOW,
           })
         ),
-        { address: "192.168.1.20", port: 48889 }
+        { address: "192.0.2.20", port: 48889 }
       );
 
       expect(runtime.discoveredPeers()).toEqual([
         {
           nodeId: authorizedIdentity.nodeId,
           hubInstanceId: "hub_remote",
-          endpoint: "wss://192.168.1.20:4444/v1/hub",
+          endpoint: "wss://192.0.2.20:4444/v1/hub",
           lastSeenAt: NOW,
           trustState: "trusted",
           authState: "not_attempted",
@@ -357,7 +357,7 @@ async function createClientAuthFrameForHello(
     server_node_id: hello.hello.server_node_id,
     client_instance_id: "hub_client",
     server_instance_id: hello.hello.server_instance_id,
-    client_endpoint: "wss://192.168.1.10:4444/v1/hub",
+    client_endpoint: "wss://192.0.2.10:4444/v1/hub",
     server_endpoint: hello.hello.server_endpoint,
     client_nonce: "client-nonce",
     server_nonce: hello.hello.server_nonce,

@@ -18,7 +18,7 @@ describe("renderOnclavePeerWidget", () => {
           {
             nodeId: "node_01KS8ABYE3Y9RV4NMF35YXCXX9",
             displayName: "host-b",
-            endpoint: "wss://172.30.20.51:39207/v1/hub",
+            endpoint: "wss://203.0.113.51:39207/v1/hub",
             trustState: "trusted",
             authState: "authenticated",
             model: "gpt-5.4",
@@ -26,7 +26,7 @@ describe("renderOnclavePeerWidget", () => {
           {
             nodeId: "node_01OTHER000000000000000000",
             displayName: "lab-node",
-            endpoint: "wss://192.168.1.44:4444/v1/hub",
+            endpoint: "wss://192.0.2.44:4444/v1/hub",
             trustState: "untrusted",
             authState: "not_attempted",
           },
@@ -46,11 +46,11 @@ describe("renderOnclavePeerWidget", () => {
     expect(normalized[1]).toContain("host-b");
     expect(normalized[1]).toContain("gpt-5.4");
     expect(normalized[1]).toContain("trusted/auth");
-    expect(normalized[1]).toContain("172.30.20.51:39207");
+    expect(normalized[1]).toContain("203.0.113.51:39207");
     expect(normalized[2]).toContain("◆");
     expect(normalized[2]).toContain("lab-node");
     expect(normalized[2]).toContain("untrusted/seen");
-    expect(normalized[2]).toContain("192.168.1.44:4444");
+    expect(normalized[2]).toContain("192.0.2.44:4444");
     expect(normalized.at(-1)).toContain("┛");
   });
 
@@ -63,7 +63,7 @@ describe("renderOnclavePeerWidget", () => {
           {
             nodeId: "node_01KS8ABYE3Y9RV4NMF35YXCXX9",
             displayName: "agent-dev1",
-            endpoint: "wss://172.30.20.50:41047/v1/hub",
+            endpoint: "wss://203.0.113.50:41047/v1/hub",
             trustState: "trusted",
             authState: "authenticated",
             model: "claude-sonnet-4.6",
@@ -87,7 +87,7 @@ describe("renderOnclavePeerWidget", () => {
           {
             nodeId: "node_01STATIC000000000000000000",
             displayName: "base-ops",
-            endpoint: "wss://172.30.10.20:64993/v1/hub",
+            endpoint: "wss://203.0.113.20:64993/v1/hub",
             trustState: "stale",
             authState: "not_attempted",
             source: "static",
@@ -101,7 +101,7 @@ describe("renderOnclavePeerWidget", () => {
     expect(normalized[1]).toContain("~");
     expect(normalized[1]).toContain("base-ops");
     expect(normalized[1]).toContain("configured");
-    expect(normalized[1]).toContain("172.30.10.20:64993");
+    expect(normalized[1]).toContain("203.0.113.20:64993");
   });
 
   it("renders an empty-state panel when no peers are available", () => {

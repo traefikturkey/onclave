@@ -17,14 +17,14 @@ menos checkout without replicating its features. This plan makes onclave
 the permanent home for menos code, deployment, and operations, with zero
 disruption to the running services on the docker host.
 
-Menos services currently live (up on 192.168.16.241): menos-api,
+Menos services currently live (up on 192.0.2.241): menos-api,
 menos-surrealdb, menos-minio, menos-searxng, menos-docling-serve. The yt
 tooling in dotfiles talks to the API over HTTP and is unaffected by where
 the source lives.
 
 ## Constraints
 
-- The running menos stack and its data at /apps/menos must not be
+- The running menos stack and its data at /srv/menos must not be
   disrupted; deploy-path, container names, ports, and volumes stay
   identical until a deliberate change is planned.
 - The menos deploy flow currently depends on Infisical at a dead hostname;
@@ -92,7 +92,7 @@ under ~/.dotfiles/onclave (non-starter resolved).
 > (identical stack, health git_sha, yt smoke, no data loss) still applies.
 
 1. Publish the Menos stack as `deploy/app/menos/` and add its catalog
-   entry on the aligned harness: same target host, `/apps/menos` deploy
+   entry on the aligned harness: same target host, `/srv/menos` deploy
    path, container names, ports, volumes, version gate, and health checks.
 2. Replace the Infisical preflight with the Bitwarden flow: extend
    `scripts/onclave-bws-env.py` to take a stack spec (onclave vs menos
@@ -130,7 +130,7 @@ Gate: CI green including the python job; docs reviewed; legacy dir gone.
 
 1. Archive the ilude/menos repo (operator; final commit points at
    onclave).
-2. Backlog cleanup recorded: stale infisical.ilude.com DNS record and the
+2. Backlog cleanup recorded: stale infisical.apps.example.net DNS record and the
    dead .26 LXC decision, menos-repo Infisical role gone with the
    archive.
 3. Status doc updated; dotfiles submodule bumped to the completed state.

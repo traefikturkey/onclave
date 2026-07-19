@@ -11,18 +11,16 @@ services:
       - ./:/ansible:rw
       # Mount repo root for access to scripts/ and the core build context
       - ../..:/project:ro
+      # Mount site-specific values from the ignored nested repository
+      - ../../values:/values:ro
       # Mount git modules (for when this repo is a dotfiles submodule)
       - ../../../.git/modules:/.git/modules:ro
     working_dir: /ansible
     environment:
       - ANSIBLE_CONFIG=/ansible/ansible.cfg
       - ANSIBLE_HOST_KEY_CHECKING=False
-      # Bitwarden Secrets Manager access, passed through from the host shell
-      # (loaded from ~/.dotfiles/private/secrets.env).
+      # Bitwarden bootstrap token; server and project settings come from values.
       - BITWARDEN_ACCESS_KEY
-      - BITWARDEN_API_SERVER
-      - BITWARDEN_IDENTITY_SERVER
-      - ONCLAVE_BWS_PROJECT_ID
     stdin_open: true
     tty: true
     network_mode: host

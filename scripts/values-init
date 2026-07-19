@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly SCRIPT_DIR
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly REPO_ROOT
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+readonly VALUES_DIR="$REPO_ROOT/values"
+readonly SCAFFOLD_DIR="$REPO_ROOT/scaffold"
+readonly SETTINGS_LOCAL="$REPO_ROOT/settings.local.json"
+
+if [[ ! -d "$SCAFFOLD_DIR/inventory" ]]; then
+    echo "missing scaffold inventory: $SCAFFOLD_DIR/inventory" >&2
+    exit 1
+fi
+
+if [[ ! -d "$VALUES_DIR" ]]; then
+    mkdir -p "$VALUES_DIR"
+    cp -R "$SCAFFOLD_DIR/." "$VALUES_DIR/"
+fi
+
+if [[ ! -d "$VALUES_DIR/.git" ]]; then
+    git -C "$VALUES_DIR" init --quiet
+fi
+
+if [[ ! -f "$SETTINGS_LOCAL" ]]; then
+    cp "$REPO_ROOT/settings.example.json" "$SETTINGS_LOCAL"
+fi
+
+for required in \
+    "$VALUES_DIR/inventory/hosts.yml" \
+    "$VALUES_DIR/inventory/group_vars/all.yml" \
+    "$SETTINGS_LOCAL"; do
+    if [[ ! -f "$required" ]]; then
+        echo "missing values file: $required" >&2
+        exit 1
+    fi
+done
+
+printf 'values initialized at %s\n' "$VALUES_DIR"
+printf 'remote not configured; resolve infra alignment open question 2 first\n'

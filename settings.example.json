@@ -1,0 +1,4 @@
+{
+  "valuesPath": "values",
+  "valuesRemote": "ssh://git@example.net/example/onclave-values.git"
+}

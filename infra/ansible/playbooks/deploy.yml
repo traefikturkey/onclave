@@ -38,6 +38,7 @@
           python3 /project/scripts/onclave-bws-env.py
           --stack onclave
           --project-id {{ bws_project_id }}
+          --api-server {{ bws_api_server }}
           --validate
       delegate_to: localhost
       become: false
@@ -54,6 +55,7 @@
           python3 /project/scripts/onclave-bws-env.py
           --stack onclave
           --project-id {{ bws_project_id }}
+          --api-server {{ bws_api_server }}
           --out {{ onclave_secrets_tmp_dir }}/onclave.env
           --write
       delegate_to: localhost

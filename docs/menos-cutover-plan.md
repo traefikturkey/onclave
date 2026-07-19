@@ -12,11 +12,11 @@ related:
 ## Context
 
 The legacy menos stack (menos-api, menos-surrealdb, menos-minio,
-menos-searxng, menos-docling-serve) runs at /apps/menos on the legacy
+menos-searxng, menos-docling-serve) runs at /srv/menos on the legacy
 docker host with a root-cron daily backup (30-day retention, verified
 during absorption M-phase work). The new menos deployment lands through
 homelab-infra (`menos_onramp`, infra-alignment plan Phase A3) under
-ilude.com names. This plan moves the data, proves functionality, and
+apps.example.net names. This plan moves the data, proves functionality, and
 retires the legacy deployment without losing anything.
 
 ## Preconditions (do not start before all hold)
@@ -25,7 +25,7 @@ retires the legacy deployment without losing anything.
    exists, Joyride labels removed, gates green.
 2. Infra-alignment Stage 2 (Phase A3) complete: `menos_onramp` service
    deployed through homelab-infra's approved workflow; the new stack is
-   reachable at its ilude.com names with empty/fresh data stores.
+   reachable at its apps.example.net names with empty/fresh data stores.
 3. Menos absorption M0-M2 complete (quality gates, backup automation
    ported); ilude/menos repo NOT yet archived (M3 waits on this plan).
 4. Topology resolved from homelab-infra values: whether the new stack
@@ -102,10 +102,10 @@ Gate: all five checks pass and are recorded in the run notes.
 ### Phase C4: Cutover
 
 1. Switch consumers: dotfiles yt tooling MENOS_API_BASE (and any other
-   recorded consumers) to the new ilude.com name; verify a real yt
+   recorded consumers) to the new apps.example.net name; verify a real yt
    command round-trips.
 2. Stop (do not remove) the legacy stack: `docker compose stop` at
-   /apps/menos; disable the legacy backup cron so it does not alarm on
+   /srv/menos; disable the legacy backup cron so it does not alarm on
    a stopped database.
 3. Soak: 7 days with the legacy stack stopped but intact. Any
    regression: restart legacy stack, repoint consumers, return to C3.
@@ -116,7 +116,7 @@ Gate: soak period passes with the new stack serving all menos traffic.
 
 1. Final archival snapshot of the stopped legacy data directory into
    the managed backup location; verify checksum.
-2. Remove legacy containers and /apps/menos on the old host; remove
+2. Remove legacy containers and /srv/menos on the old host; remove
    legacy DNS/Joyride leftovers for menos names on the old host.
 3. Close menos absorption M3: archive ilude/menos, record cleanup in
    the status docs, bump the dotfiles submodule pin.

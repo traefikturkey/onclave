@@ -135,7 +135,7 @@ flow (`just setup`-equivalent: clone/init values, validate) works.
    catalog entry); legacy menos playbook stays in menos-legacy for
    reference only.
 
-Gate: catalog-driven deploy reaches the existing /apps/onclave stack with
+Gate: catalog-driven deploy reaches the existing /srv/onclave stack with
 identical results (health verified); ansible-lint production profile;
 just check green.
 
@@ -146,7 +146,7 @@ just check green.
    `searxng_onramp`/`infisical_onramp` pattern: services.json entry with
    `onramp_host` dependency, role that consumes the app definition
    (pinned image digest + env contract). DNS per Decision 1: real
-   ilude.com records in homelab-infra-values (Technitium), placeholders
+   apps.example.net records in homelab-infra-values (Technitium), placeholders
    in tracked files; the AMQP port publishes for LAN adapters, HTTP
    surfaces behind the app host's Caddy per operator choice.
 2. Secrets: the role renders the env contract from homelab-infra's
@@ -160,11 +160,11 @@ just check green.
    workloads; exception closed or transferred to onramp-vNext when that
    platform is ready.
 5. Operator cutover tasks recorded: dotfiles ONCLAVE_AMQP_URL and yt
-   MENOS_API_BASE switch to the ilude.com names.
+   MENOS_API_BASE switch to the apps.example.net names.
 
 Gate: homelab-infra `just validate` + reviewed plan + approved apply
 deploys the onclave stack; adapters on workstations connect via the
-ilude.com DNS name; onclave repo carries no live-mutation path against
+apps.example.net DNS name; onclave repo carries no live-mutation path against
 any shared host.
 
 ### Phase A4: Service moves out of homelab-infra (decisions, not code)
@@ -191,9 +191,9 @@ migrations.
 
 1. Platform and domain (decided 2026-07-18): onclave and menos deploy
    through homelab-infra's mechanics onto the homelab-infra-managed app
-   host, with DNS under the operator's real domain (ilude.com) managed as
+   host, with DNS under the operator's real domain (apps.example.net) managed as
    Technitium records in homelab-infra's private values - not the legacy
-   docker host's Joyride/traefikturkey.icu publication. Consequences:
+   docker host's Joyride/apps.example.net publication. Consequences:
    - The Joyride `joyride.host.name` labels in
      `infra/ansible/files/{onclave,menos}/docker-compose.yml` are
      removed; app definitions carry no DNS mechanism at all - naming is
@@ -207,10 +207,10 @@ migrations.
      homelab-infra (nothing has shipped via the direct path; it stays
      that way).
    - Tracked files keep public-safe placeholders (apps.example.net
-     style); real ilude.com names live only in homelab-infra-values.
+     style); real apps.example.net names live only in homelab-infra-values.
    - Workstation adapter URLs (dotfiles private/secrets.env
      ONCLAVE_AMQP_URL) and the yt tooling MENOS_API_BASE cut over to the
-     ilude.com names when their homelab-infra services go live.
+     apps.example.net names when their homelab-infra services go live.
 2. Broker exposure (closes former open question 3): AMQP is not HTTP, so
    the broker's 5672 publishes as a TCP port with a Technitium A/CNAME
    record; HTTP surfaces (/health, management UI, menos API) may sit

@@ -5,7 +5,7 @@
 
   vars:
     menos_backup_path: /backups/menos
-    menos_backup_script_dest: /apps/menos/scripts/backup.sh
+    menos_backup_script_dest: /srv/menos/scripts/backup.sh
     menos_backup_log: /var/log/menos-backup.log
 
   tasks:

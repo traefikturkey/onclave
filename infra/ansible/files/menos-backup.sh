@@ -4,14 +4,14 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Menos backup script
 # Exports SurrealDB, copies MinIO data, and creates a timestamped backup.
-# Intended to run on the server (192.168.16.241) via Ansible or cron.
+# Intended to run on the server (192.0.2.241) via Ansible or cron.
 # ---------------------------------------------------------------------------
 
 BACKUP_DATE="${1:-$(date +%Y-%m-%d)}"
 BACKUP_ROOT="${BACKUP_PATH:-/backups/menos}"
 BACKUP_DIR="${BACKUP_ROOT}/${BACKUP_DATE}"
-DATA_PATH="${DATA_PATH:-/apps/menos/data}"
-DEPLOY_PATH="${DEPLOY_PATH:-/apps/menos}"
+DATA_PATH="${DATA_PATH:-/srv/menos/data}"
+DEPLOY_PATH="${DEPLOY_PATH:-/srv/menos}"
 RETENTION_DAYS="${RETENTION_DAYS:-30}"
 
 log() { echo "[$(date -Iseconds)] $*"; }

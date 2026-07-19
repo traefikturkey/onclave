@@ -14,16 +14,16 @@ describe("AuditedHubRuntime", () => {
     runtime.hubStart({ nodeId: "node_local", hubInstanceId: "hub_local", endpoint: "https://127.0.0.1:4444" });
     runtime.trustLoaded({ count: 2 });
     runtime.trustChanged({ action: "add", fingerprint: "SHA256:test", duplicate: false });
-    runtime.discoverySeen({ nodeId: "node_peer", endpoint: "wss://192.168.1.20:4444/v1/hub", result: "discovered" });
-    runtime.discoveryIgnored({ reason: "invalid_packet", remote: "192.168.1.30" });
+    runtime.discoverySeen({ nodeId: "node_peer", endpoint: "wss://192.0.2.20:4444/v1/hub", result: "discovered" });
+    runtime.discoveryIgnored({ reason: "invalid_packet", remote: "192.0.2.30" });
     runtime.hubStop({ nodeId: "node_local", hubInstanceId: "hub_local" });
 
     expect(events).toEqual([
       { event: "hub_start", metadata: { node_id: "node_local", hub_instance_id: "hub_local", endpoint: "https://127.0.0.1:4444" } },
       { event: "trust_loaded", metadata: { count: 2 } },
       { event: "trust_changed", metadata: { action: "add", fingerprint: "SHA256:test", duplicate: false } },
-      { event: "discovery_seen", metadata: { node_id: "node_peer", endpoint: "wss://192.168.1.20:4444/v1/hub", result: "discovered" } },
-      { event: "discovery_ignored", metadata: { reason: "invalid_packet", remote: "192.168.1.30" } },
+      { event: "discovery_seen", metadata: { node_id: "node_peer", endpoint: "wss://192.0.2.20:4444/v1/hub", result: "discovered" } },
+      { event: "discovery_ignored", metadata: { reason: "invalid_packet", remote: "192.0.2.30" } },
       { event: "hub_stop", metadata: { node_id: "node_local", hub_instance_id: "hub_local" } },
     ]);
   });

@@ -46,13 +46,13 @@ describe("DiscoveryService", () => {
           started_at: "2026-05-21T00:00:00.000Z",
         })
       ),
-      { address: "192.168.1.20", port: 48889 }
+      { address: "192.0.2.20", port: 48889 }
     );
 
     expect(events).toEqual([
       {
         event: "discovery_seen",
-        metadata: { node_id: "node_peer", endpoint: "wss://192.168.1.20:5555/v1/hub", result: "discovered" },
+        metadata: { node_id: "node_peer", endpoint: "wss://192.0.2.20:5555/v1/hub", result: "discovered" },
       },
     ]);
 
@@ -75,14 +75,14 @@ describe("DiscoveryService", () => {
           started_at: "2026-05-21T00:00:00.000Z",
         })
       ),
-      { address: "192.168.1.20", port: 48889 }
+      { address: "192.0.2.20", port: 48889 }
     );
 
     expect(service.peers()).toEqual([
       {
         nodeId: "node_peer",
         hubInstanceId: "hub_peer",
-        endpoint: "wss://192.168.1.20:5555/v1/hub",
+        endpoint: "wss://192.0.2.20:5555/v1/hub",
         lastSeenAt: "2026-05-21T00:00:01.000Z",
         trustState: "untrusted",
         authState: "not_attempted",
@@ -108,14 +108,14 @@ describe("DiscoveryService", () => {
           started_at: "2026-05-21T00:00:00.000Z",
         })
       ),
-      { address: "192.168.1.20", port: 48889 }
+      { address: "192.0.2.20", port: 48889 }
     );
 
     expect(service.peers()).toEqual([
       {
         nodeId: "node_peer",
         hubInstanceId: "hub_peer",
-        endpoint: "wss://192.168.1.20:5555/v1/hub",
+        endpoint: "wss://192.0.2.20:5555/v1/hub",
         lastSeenAt: "2026-05-21T00:00:01.000Z",
         trustState: "trusted",
         authState: "not_attempted",
@@ -131,7 +131,7 @@ describe("DiscoveryService", () => {
     const service = createService(socket, undefined, events);
     await service.start();
 
-    socket.emitMessage(Buffer.from("not json"), { address: "192.168.1.20", port: 48889 });
+    socket.emitMessage(Buffer.from("not json"), { address: "192.0.2.20", port: 48889 });
     socket.emitMessage(
       Buffer.from(
         JSON.stringify({
@@ -148,7 +148,7 @@ describe("DiscoveryService", () => {
 
     expect(service.peers()).toEqual([]);
     expect(events).toEqual([
-      { event: "discovery_ignored", metadata: { reason: "invalid_packet", remote: "192.168.1.20" } },
+      { event: "discovery_ignored", metadata: { reason: "invalid_packet", remote: "192.0.2.20" } },
       { event: "discovery_ignored", metadata: { reason: "self", remote: "127.0.0.1" } },
     ]);
 

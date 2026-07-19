@@ -1,14 +1,14 @@
 ---
 # Example menos deployment defaults. Copy to an inventory or vault-backed vars file as needed.
-ansible_host: 192.168.16.241
-deploy_path: /apps/menos
-data_path: /apps/menos/data
+ansible_host: 192.0.2.241
+deploy_path: /srv/menos
+data_path: /srv/menos/data
 
 # Infisical selectors. Runtime values may be overridden by inventory/group vars.
 menos_infisical_project: dotfiles
 menos_infisical_environment: prod
 menos_infisical_path: /menos
-menos_infisical_api_url: https://infisical.ilude.com
+menos_infisical_api_url: https://infisical.apps.example.net
 menos_infisical_tmp_dir: /dev/shm/menos
 menos_infisical_runtime_env_out: "{{ deploy_path }}/.env"
 menos_infisical_runtime_env_mode: "0600"

@@ -126,7 +126,7 @@ class YouTubeIngestResponse:
   from pathlib import Path
   from urllib.parse import urlparse
 
-  DEFAULT_API_BASE = "http://192.168.16.241:8000/api/v1"
+  DEFAULT_API_BASE = "http://192.0.2.241:8000/api/v1"
 
   def load_secrets_file() -> None:
       """Load secrets from ~/.dotfiles/.env if env vars not set."""

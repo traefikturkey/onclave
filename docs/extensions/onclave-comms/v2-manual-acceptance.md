@@ -122,7 +122,7 @@ just deploy
 
 The playbook renders broker credentials from Bitwarden Secrets Manager
 (machine account token from the host shell; see `infra/README.md`), syncs
-the build context to `/apps/onclave/src`, builds the core image on the
+the build context to `/srv/onclave/src`, builds the core image on the
 host, starts the stack, and verifies `/health` reports broker
 connectivity. Local development keeps using `docker/compose.yaml` with the
 `docker/.env.example` defaults.

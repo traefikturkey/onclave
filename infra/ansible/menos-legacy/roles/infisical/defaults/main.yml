@@ -3,7 +3,7 @@
 infisical_deploy_path: "{{ deploy_path }}/infisical"
 
 # Public hostname for the Infisical UI and API, without scheme.
-infisical_domain: "infisical.ilude.com"
+infisical_domain: "infisical.apps.example.net"
 
 # Email used by Caddy for ACME registration notices.
 infisical_caddy_email: "admin@example.com"
@@ -45,4 +45,4 @@ infisical_compose_project: "infisical"
 # - vault_infisical_encryption_key: 32-byte or stronger Infisical encryption key from password manager.
 # - vault_infisical_auth_secret: strong random auth secret from password manager.
 # - vault_infisical_postgres_password: strong random password for the dedicated Postgres user.
-# - vault_infisical_cloudflare_api_token: Cloudflare API token scoped to ilude.com with Zone:Read and DNS:Edit.
+# - vault_infisical_cloudflare_api_token: Cloudflare API token scoped to apps.example.net with Zone:Read and DNS:Edit.

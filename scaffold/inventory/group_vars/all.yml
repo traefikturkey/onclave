@@ -1,0 +1,9 @@
+secret_provider: env
+bws_project_id: 00000000-0000-0000-0000-000000000000
+bws_api_server: https://vault.apps.example.net/api
+bws_identity_server: https://vault.apps.example.net/identity
+onclave_secrets_tmp_dir: /dev/shm/onclave
+onclave_secrets_runtime_env_mode: "0600"
+onclave_secrets_required_keys:
+  - RABBITMQ_DEFAULT_USER
+  - RABBITMQ_DEFAULT_PASS

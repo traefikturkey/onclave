@@ -47,16 +47,11 @@ STACKS = {
             "SEMANTIC_SCHOLAR_API_KEY",
         ],
         "defaults": {
-            "API_BASE_URL": "http://192.168.16.241:8000",
-            "DATA_PATH": "/apps/menos/data",
-            "SURREALDB_URL": "ws://192.168.16.241:8080",
             "SURREALDB_USER": "root",
             "SURREALDB_NAMESPACE": "menos",
             "SURREALDB_DATABASE": "menos",
             "S3_BUCKET": "menos",
             "S3_REGION": "us-east-1",
-            "MINIO_URL": "192.168.16.241:9000",
-            "OLLAMA_URL": "http://192.168.16.241:11434",
         },
         "aliases": {
             "MINIO_ACCESS_KEY": "S3_ACCESS_KEY",

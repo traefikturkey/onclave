@@ -196,7 +196,7 @@ Example:
       "name": "bench",
       "nodeId": "node_...",
       "hubInstanceId": "hub_...",
-      "endpoint": "wss://192.168.1.20:4444/v1/hub"
+      "endpoint": "wss://192.0.2.20:4444/v1/hub"
     }
   ]
 }

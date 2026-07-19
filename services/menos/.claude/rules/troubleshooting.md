@@ -3,7 +3,7 @@
 ## Server Access
 
 ```bash
-ssh -i ~/.ssh/id_ed25519 anvil@192.168.16.241
+ssh -i ~/.ssh/id_ed25519 appuser@192.0.2.241
 ```
 
 ## Viewing Logs
@@ -25,8 +25,8 @@ docker compose up -d --build menos-api  # Full rebuild
 ## Health Checks
 
 ```bash
-curl http://192.168.16.241:8000/health   # Basic (returns git SHA)
-curl http://192.168.16.241:8000/ready    # Readiness (checks SurrealDB + MinIO + Ollama)
+curl http://192.0.2.241:8000/health   # Basic (returns git SHA)
+curl http://192.0.2.241:8000/ready    # Readiness (checks SurrealDB + MinIO + Ollama)
 ```
 
 ## Authenticated API Testing

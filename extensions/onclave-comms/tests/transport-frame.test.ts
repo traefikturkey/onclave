@@ -92,7 +92,7 @@ describe("HubFrameProcessor", () => {
       peer: {
         nodeId: "node_client",
         hubInstanceId: "hub_client",
-        endpoint: "wss://192.168.1.10:4444/v1/hub",
+        endpoint: "wss://192.0.2.10:4444/v1/hub",
       },
     });
   });
@@ -311,7 +311,7 @@ async function createProcessor(
       localIdentity: {
         nodeId: "node_server",
         hubInstanceId: "hub_server",
-        endpoint: () => "wss://192.168.1.20:4444/v1/hub",
+        endpoint: () => "wss://192.0.2.20:4444/v1/hub",
         publicKeyHex: Buffer.from(serverKeys.publicKey).toString("hex"),
         privateKeyHex: Buffer.from(serverKeys.secretKey).toString("hex"),
       },
@@ -351,7 +351,7 @@ async function createClientAuthFrame(
     server_node_id: hello.hello.server_node_id,
     client_instance_id: "hub_client",
     server_instance_id: hello.hello.server_instance_id,
-    client_endpoint: "wss://192.168.1.10:4444/v1/hub",
+    client_endpoint: "wss://192.0.2.10:4444/v1/hub",
     server_endpoint: hello.hello.server_endpoint,
     client_nonce: "client-nonce",
     server_nonce: hello.hello.server_nonce,

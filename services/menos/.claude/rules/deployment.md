@@ -14,7 +14,7 @@ Workarounds to deployment tooling can lead to dangerous operations on production
 - Ansible runs inside a Docker container (`infra/ansible/`)
 - Project root mounted at `/project:ro`
 - SSH keys mounted from `~/.ssh` → `/mnt/ssh:ro`
-- Server: 192.168.16.241 (user: anvil), deploy path: /apps/menos
+- Server: 192.0.2.241 (user: appuser), deploy path: /srv/menos
 
 ## Deploy Command
 ```bash

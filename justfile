@@ -9,7 +9,13 @@ preflight:
 preflight-repo:
     node ./scripts/preflight.mjs
 
-setup:
+values-init:
+    bash ./scripts/values-init
+
+public-safety:
+    python ./scripts/public-safety.py
+
+setup: values-init
     pnpm install
 
 test:
@@ -50,10 +56,10 @@ deploy-build:
 deploy *ARGS:
     docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-playbook playbooks/deploy.yml {{ARGS}}
 
-deploy-syntax:
+deploy-syntax: values-init
     docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-playbook --syntax-check playbooks/deploy.yml
 
-deploy-lint:
+deploy-lint: values-init
     docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-lint playbooks/deploy.yml
 
 menos-backup-setup *ARGS:
