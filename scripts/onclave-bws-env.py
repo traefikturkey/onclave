@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -100,12 +101,34 @@ def fetch_bws(args: argparse.Namespace, project_id: str) -> dict[str, str]:
     return values
 
 
+def load_env_file(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line_number, raw_line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line.removeprefix("export ").lstrip()
+        if "=" not in line:
+            raise ValueError(f"{path}:{line_number}: expected KEY=VALUE")
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
+            raise ValueError(f"{path}:{line_number}: invalid key")
+        if key in values:
+            raise ValueError(f"{path}:{line_number}: duplicate key {key}")
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        values[key] = value
+    return values
+
+
 def load_secrets(args: argparse.Namespace, project_id: str) -> dict[str, str]:
-    if args.secrets_json:
-        raw = json.loads(Path(args.secrets_json).read_text(encoding="utf-8"))
-        if isinstance(raw, dict):
-            return {str(k): str(v) for k, v in raw.items()}
-        raise ValueError("secrets JSON fallback must be an object")
+    if args.provider == "env":
+        if not args.env_file:
+            raise ValueError("--env-file is required for the env provider")
+        return load_env_file(Path(args.env_file))
     return fetch_bws(args, project_id)
 
 
@@ -165,10 +188,11 @@ def write_atomic(path: Path, content: str) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stack", choices=sorted(STACKS), default="onclave")
+    parser.add_argument("--provider", choices=["bws", "env"], default="bws")
     parser.add_argument("--project-id")
     parser.add_argument("--api-server")
     parser.add_argument("--access-token")
-    parser.add_argument("--secrets-json")
+    parser.add_argument("--env-file")
     parser.add_argument("--out")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--validate", action="store_true")

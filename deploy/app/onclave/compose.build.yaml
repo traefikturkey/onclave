@@ -1,0 +1,6 @@
+services:
+  onclave-core:
+    image: onclave-core:dev
+    build:
+      context: ../../..
+      dockerfile: services/core/Dockerfile

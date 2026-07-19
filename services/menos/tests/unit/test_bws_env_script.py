@@ -1,7 +1,9 @@
 """Tests for the stack-specific Bitwarden environment renderer."""
 
 import importlib.util
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -24,6 +26,47 @@ def menos_values() -> dict[str, str]:
         "OPENROUTER_API_KEY": "0123456789abcdef",
         "ANTHROPIC_API_KEY": "0123456789abcdef",
     }
+
+
+def test_env_provider_loads_plain_env_file(tmp_path: Path) -> None:
+    env_file = tmp_path / "onclave.env"
+    env_file.write_text(
+        "RABBITMQ_DEFAULT_USER=onclave\nRABBITMQ_DEFAULT_PASS='0123456789abcdef'\n",
+        encoding="utf-8",
+    )
+    args = SimpleNamespace(provider="env", env_file=str(env_file))
+
+    assert MODULE.load_secrets(args, "") == {
+        "RABBITMQ_DEFAULT_USER": "onclave",
+        "RABBITMQ_DEFAULT_PASS": "0123456789abcdef",
+    }
+
+
+def test_bws_provider_loads_project_values(monkeypatch) -> None:
+    payload = [{"key": "RABBITMQ_DEFAULT_USER", "value": "onclave"}]
+    captured = {}
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
+
+    monkeypatch.setenv("BITWARDEN_ACCESS_KEY", "test-access-token")
+    monkeypatch.setattr(MODULE.subprocess, "run", fake_run)
+    args = SimpleNamespace(
+        provider="bws",
+        access_token=None,
+        api_server=None,
+    )
+
+    assert MODULE.load_secrets(args, "project-id") == {"RABBITMQ_DEFAULT_USER": "onclave"}
+    assert captured["command"] == [
+        "bws",
+        "secret",
+        "list",
+        "project-id",
+        "--output",
+        "json",
+    ]
 
 
 def test_menos_stack_validates_required_secrets() -> None:

@@ -1,6 +1,5 @@
-# Production onclave stack, deployed to the docker host by
-# infra/ansible/playbooks/deploy.yml. Credentials come from the
-# Bitwarden-rendered .env installed next to this file.
+name: onclave
+
 services:
   rabbitmq:
     image: rabbitmq:4-management
@@ -13,7 +12,7 @@ services:
       - "5672:5672"
       - "15672:15672"
     volumes:
-      - ./data/rabbitmq:/var/lib/rabbitmq
+      - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s
@@ -22,18 +21,20 @@ services:
       start_period: 20s
 
   onclave-core:
-    build:
-      context: ./src
-      dockerfile: services/core/Dockerfile
-    image: onclave-core:deployed
+    image: ${ONCLAVE_CORE_IMAGE_REPOSITORY:?}:${ONCLAVE_CORE_IMAGE_TAG:?}@${ONCLAVE_CORE_IMAGE_DIGEST:?}
     restart: unless-stopped
     environment:
       ONCLAVE_AMQP_URL: amqp://${RABBITMQ_DEFAULT_USER:?}:${RABBITMQ_DEFAULT_PASS:?}@rabbitmq:5672/onclave
       ONCLAVE_HTTP_PORT: "8080"
+      ONCLAVE_QUEUE_TTL_MS: ${ONCLAVE_QUEUE_TTL_MS:-604800000}
+      ONCLAVE_QUEUE_MAX_LENGTH: ${ONCLAVE_QUEUE_MAX_LENGTH:-1000}
+      ONCLAVE_HEARTBEAT_STALE_MS: ${ONCLAVE_HEARTBEAT_STALE_MS:-90000}
+      ONCLAVE_MAX_EXCHANGES: ${ONCLAVE_MAX_EXCHANGES:-16}
+      ONCLAVE_MAX_TOTAL_TOKENS: ${ONCLAVE_MAX_TOTAL_TOKENS:-200000}
     ports:
       - "8080:8080"
     volumes:
-      - ./data/onclave:/data
+      - onclave-data:/data
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -43,3 +44,7 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+volumes:
+  rabbitmq-data:
+  onclave-data:
