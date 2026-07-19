@@ -61,10 +61,11 @@ def _normalize_snippet(text: str) -> str:
     return text[:200]
 
 
-def _signed_post(signer, path: str, body: dict) -> tuple[dict, float]:
+def _signed_post(signer, path: str, body: dict, base_url: str) -> tuple[dict, float]:
     """POST to menos with RFC 9421 signing; return (response_json, latency_ms)."""
     raw = json.dumps(body).encode()
-    host = MENOS_BASE.split("://", 1)[1]
+    normalized_base = base_url.rstrip("/")
+    host = normalized_base.split("://", 1)[1]
     headers = signer.sign_request("POST", path, host, body=raw)
     headers["content-type"] = "application/json"
 
@@ -72,29 +73,35 @@ def _signed_post(signer, path: str, body: dict) -> tuple[dict, float]:
     # Agentic search runs LLM synthesis; Ollama may queue under load — 180s read timeout.
     timeout = httpx.Timeout(connect=5.0, read=180.0, write=10.0, pool=1.0)
     with httpx.Client(timeout=timeout) as client:
-        resp = client.post(MENOS_BASE + path, content=raw, headers=headers)
+        resp = client.post(normalized_base + path, content=raw, headers=headers)
     latency_ms = (time.perf_counter() - t0) * 1000
 
     resp.raise_for_status()
     return resp.json(), latency_ms
 
 
-def _run_search(signer, query_text: str, top_k: int = 10) -> tuple[list[dict], float]:
+def _run_search(
+    signer, query_text: str, base_url: str, top_k: int = 10
+) -> tuple[list[dict], float]:
     """Run /api/v1/search; return (results, latency_ms)."""
     data, latency = _signed_post(
         signer,
         "/api/v1/search",
         {"query": query_text, "limit": top_k},
+        base_url,
     )
     return data.get("results", []), latency
 
 
-def _run_agentic(signer, query_text: str, top_k: int = 10) -> tuple[list[dict], float]:
+def _run_agentic(
+    signer, query_text: str, base_url: str, top_k: int = 10
+) -> tuple[list[dict], float]:
     """Run /api/v1/search/agentic; return (sources, latency_ms)."""
     data, latency = _signed_post(
         signer,
         "/api/v1/search/agentic",
         {"query": query_text, "limit": top_k},
+        base_url,
     )
     return data.get("sources", []), latency
 
@@ -132,12 +139,12 @@ def _md_table(rows: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _capture_query(signer, q: dict, top_k: int = 10) -> dict:
+def _capture_query(signer, q: dict, base_url: str, top_k: int = 10) -> dict:
     """Run both endpoints for one query; return structured result."""
     text = q["text"]
 
-    search_raw, search_ms = _run_search(signer, text, top_k)
-    agentic_raw, agentic_ms = _run_agentic(signer, text, top_k)
+    search_raw, search_ms = _run_search(signer, text, base_url, top_k)
+    agentic_raw, agentic_ms = _run_agentic(signer, text, base_url, top_k)
 
     search_rows = [_result_to_row(i + 1, r) for i, r in enumerate(_sort_results(search_raw))]
     agentic_rows = [_result_to_row(i + 1, r) for i, r in enumerate(_sort_results(agentic_raw))]
@@ -189,7 +196,7 @@ def cmd_capture(args) -> int:
     for q in queries:
         print(f"  {q['id']} ... ", end="", flush=True)
         try:
-            r = _capture_query(signer, q)
+            r = _capture_query(signer, q, args.base_url)
             s_ms = r["search"]["latency_ms"]
             a_ms = r["agentic"]["latency_ms"]
             s_n = len(r["search"]["rows"])
@@ -367,7 +374,7 @@ def cmd_compare(args) -> int:
 
     for q in queries:
         try:
-            live = _capture_query(signer, q)
+            live = _capture_query(signer, q, args.base_url)
         except Exception as exc:  # noqa: BLE001
             print(f"  {q['id']}: ERROR: {exc}")
             continue
@@ -406,6 +413,11 @@ def main() -> int:
     parser.add_argument("--out", help="Output path (required with --capture)")
     parser.add_argument("--compare", metavar="<baseline>", help="Compare against baseline")
     parser.add_argument("--queries", help="Path to eval-queries.yaml (auto-detected if omitted)")
+    parser.add_argument(
+        "--base-url",
+        default=MENOS_BASE,
+        help="Menos API origin to query (default: %(default)s)",
+    )
     args = parser.parse_args()
 
     if args.capture:
