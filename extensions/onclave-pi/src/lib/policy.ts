@@ -4,12 +4,10 @@ import { readFile } from "node:fs/promises";
 // explicit trust changes apply without restarting the session.
 export type AdapterPolicy = {
   autoAcceptHosts: string[];
-  delegatedAuthorityAgents: string[];
 };
 
 const EMPTY_POLICY: AdapterPolicy = {
   autoAcceptHosts: [],
-  delegatedAuthorityAgents: [],
 };
 
 export async function loadAdapterPolicy(path: string): Promise<AdapterPolicy> {
@@ -24,16 +22,11 @@ export function isAutoAccepted(policy: AdapterPolicy, host: string): boolean {
   return policy.autoAcceptHosts.includes(host);
 }
 
-export function isDelegatedAuthorityAgent(policy: AdapterPolicy, agentId: string): boolean {
-  return policy.delegatedAuthorityAgents.includes(agentId);
-}
-
 function parsePolicy(value: unknown): AdapterPolicy {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return EMPTY_POLICY;
   const record = value as Record<string, unknown>;
   return {
     autoAcceptHosts: stringArray(record.autoAcceptHosts),
-    delegatedAuthorityAgents: stringArray(record.delegatedAuthorityAgents),
   };
 }
 

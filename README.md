@@ -53,15 +53,12 @@ just pi-local-v2                               # Pi session with the v2 adapter
 
 Broker credentials for local development default to the values in
 `docker/.env.example`; copy it to `docker/.env` (gitignored) to override.
-Use `onclave_delegate` when one operator wants a trusted remote session to
-continue a bounded workflow without repeating approvals. The tool opens the
-exact request for review, confirms target/actions/scope/expiry, and binds the
-grant to one agent, project, conversation, and request body.
-
-The receiver must explicitly list the sender agent id in
-`~/.pi/agent/onclave/v2-policy.json` under `delegatedAuthorityAgents`. This is
-a trust policy for operator-owned broker sessions, not a second sandbox or
-replacement for repository safety rules.
+Use `onclave_delegate` when one registered remote session should continue a
+bounded workflow. The grant binds the exact target, project, conversation,
+request body, actions, scope, and expiry. Registered agents on the
+operator-owned broker accept valid grants without an additional Onclave prompt
+or per-sender allowlist. Repository safety rules and separately gated
+operations still apply.
 See [v2 PRD](./docs/extensions/onclave-comms/v2-PRD.md),
 [v2 implementation plan](./docs/extensions/onclave-comms/v2-implementation-plan.md),
 [v2 status](./docs/extensions/onclave-comms/v2-status.md), and the

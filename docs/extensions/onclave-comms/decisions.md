@@ -336,31 +336,33 @@ Pi adapter.
 
 ## Decision 11: Scoped Operator Delegation Across Trusted Machines
 
-**Status:** accepted 2026-07-19 (operator decision).
+**Status:** superseded 2026-07-20 by Decision 12.
 
-**Decision:** A direct operator confirmation may create a scoped, expiring
-delegation for one registered target agent. A receiving adapter treats the
-bounded request as delegated operator authorization only when its local policy
-explicitly trusts the sender agent id for delegation and the audience, project,
-conversation, request hash, and validity window match.
+The original design required direct TUI confirmation and a receiver-side
+per-sender allowlist.
+
+## Decision 12: Direct Delegation Between Registered Agents
+
+**Status:** accepted 2026-07-20 (operator correction).
+
+**Decision:** `onclave_delegate` sends a scoped, expiring grant directly to a
+registered agent on the operator-owned broker. Valid grants do not require an
+Onclave confirmation dialog or receiver-side sender allowlist. Ordinary
+`onclave_send` messages remain non-authoritative.
 
 ### Rationale
 
-- Repeating the same approval in every trusted session prevents agents from
-  completing an explicitly coordinated cross-machine workflow.
-- The deployment is an operator-owned broker connecting trusted machines.
-- Exact request binding plus direct review records bounded intent without
-  making every ordinary peer message authoritative.
+- Per-request confirmation and per-sender configuration blocked the unattended
+  cross-machine continuation that delegation exists to provide.
+- Target, project, conversation, exact body, actions, scope, and expiry already
+  bound each grant to one bounded request.
+- Repository and infrastructure safety controls remain the authority for the
+  delegated work itself.
 
 ### Consequences
 
-- `onclave_delegate` requires direct TUI interaction and is unavailable through
-  RPC or ordinary `onclave_send`.
-- Receivers opt in per sender through `delegatedAuthorityAgents` in the
-  restart-free adapter policy.
-- Grants are limited to 24 hours and bind the sender, target, project,
-  conversation, exact body, action labels, and scope.
-- The delegation is not a second sandbox or command-policy engine. Existing
-  system, project, plan, backup, rollback, and safety constraints remain in
-  force, and work outside the grant requires another delegation or direct
-  approval.
+- `onclave_delegate` works in TUI, RPC, JSON, and print modes.
+- Registered broker agents accept valid grants without extra Onclave policy.
+- Grants remain limited to 24 hours and retain verification and audit.
+- Existing system, project, backup, rollback, and safety constraints remain in
+  force.

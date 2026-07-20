@@ -223,6 +223,24 @@ async function scenarioRequestReply(alpha: SimSession, bravo: SimSession): Promi
   check("reply delivery never triggers a turn", replyDelivery === undefined);
 }
 
+async function scenarioDelegation(alpha: SimSession, bravo: SimSession): Promise<void> {
+  alpha.confirmResult = false;
+  const delegated = await alpha.tool("onclave_delegate", {
+    to: bravo.agentId,
+    body: "bounded delegated work",
+    scope: "read the current project state",
+    actions: ["read"],
+    ttl_minutes: 5,
+  });
+  const delivery = await bravo.waitDelivery(msgIdOf(delegated));
+  check(
+    "bounded delegation runs without Onclave confirmation or sender allowlist",
+    delivery.options.triggerTurn === true &&
+      (delivery.message.content ?? "").includes("verified operator delegation")
+  );
+  alpha.confirmResult = true;
+}
+
 async function scenarioInertInform(alpha: SimSession, bravo: SimSession): Promise<void> {
   const before = bravo.turnCount();
   const inform = await alpha.tool("onclave_inform", {
@@ -329,7 +347,14 @@ async function scenarioAudit(alphaId: string): Promise<void> {
   check("audit records agent registration", audit.includes(`"agent_id":"${alphaId}"`));
   check("audit records conversation termination", audit.includes('"event":"conversation_terminated"'));
   check("audit records exchanges", audit.includes('"event":"conversation_exchange"'));
-  const leaked = ["ping A1", "pong B1", "URGENT INSTRUCTION", "offline delivery", "budget probe"].filter(
+  const leaked = [
+    "ping A1",
+    "pong B1",
+    "bounded delegated work",
+    "URGENT INSTRUCTION",
+    "offline delivery",
+    "budget probe",
+  ].filter(
     (needle) => audit.includes(needle)
   );
   check("audit contains no message bodies", leaked.length === 0, leaked.join(", ") || undefined);
@@ -354,6 +379,7 @@ async function main(): Promise<void> {
   check("both agents registered and listed", true);
 
   await scenarioRequestReply(alpha, bravo);
+  await scenarioDelegation(alpha, bravo);
   await scenarioInertInform(alpha, bravo);
   await scenarioConcurrency(alpha, bravo);
   await scenarioDurability(alpha);

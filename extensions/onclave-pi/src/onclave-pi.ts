@@ -17,7 +17,6 @@ import {
   buildRequestFraming,
   createDelegationGrant,
   createEnvelope,
-  requestSha256,
   toAmqpPublish,
   ulid,
   verifyDelegationGrant,
@@ -33,11 +32,7 @@ import { BrokerLink, type ConnectionState } from "./lib/connection";
 import { CorrelationStore, INBOUND_CUSTOM_TYPE } from "./lib/correlation";
 import { SeenIds } from "./lib/dedup";
 import { handleInboundMessage, type DeliveryDeps } from "./lib/delivery";
-import {
-  isAutoAccepted,
-  isDelegatedAuthorityAgent,
-  loadAdapterPolicy,
-} from "./lib/policy";
+import { isAutoAccepted, loadAdapterPolicy } from "./lib/policy";
 import { resolveProjectLabel } from "./lib/project-label";
 import { CoreRpcClient } from "./lib/rpc-client";
 import { lastAssistantText, runUsage } from "./lib/run-summary";
@@ -263,8 +258,7 @@ function buildDeliveryDeps(
       if (response.ok === true) return { deliver: true };
       return { deliver: false, reason: String(response.error ?? "budget") };
     },
-    verifyDelegation: (envelope) =>
-      verifyInboundDelegation(envelope, runtime.card, options.policyPath),
+    verifyDelegation: (envelope) => verifyInboundDelegation(envelope, runtime.card),
     deliverTurn: (envelope) => {
       pi.sendMessage(
         {
@@ -337,15 +331,10 @@ function inboundDetails(
 
 async function verifyInboundDelegation(
   envelope: Envelope,
-  card: AgentCard,
-  policyPath: string
+  card: AgentCard
 ): Promise<{ ok: true; grant: DelegationGrant } | { ok: false; reason: string }> {
   const grant = envelope.delegation;
   if (grant === undefined) return { ok: false, reason: "missing_grant" };
-  const policy = await loadAdapterPolicy(policyPath);
-  if (!isDelegatedAuthorityAgent(policy, envelope.from.agent_id)) {
-    return { ok: false, reason: "sender is not trusted for delegated authority" };
-  }
   const result = verifyDelegationGrant({
     grant,
     envelope,
@@ -608,7 +597,7 @@ function registerDelegateTool(
     name: "onclave_delegate",
     label: "Onclave Delegate",
     description:
-      "Request direct operator confirmation, then send a scoped, expiring request to an agent explicitly trusted for delegated authority.",
+      "Send a scoped, expiring delegation request to another registered Onclave agent.",
     parameters: Type.Object({
       to: Type.String({ description: "Target agent id (see onclave_agents).", maxLength: 256 }),
       body: Type.String({ description: "Exact delegated request body.", maxLength: MAX_MESSAGE_LENGTH }),
@@ -625,48 +614,17 @@ function registerDelegateTool(
         Type.String({ description: "Continue an existing conversation." })
       ),
     }),
-    async execute(_callId, params, _signal, _onUpdate, ctx) {
-      requireInteractiveTui(ctx);
+    async execute(_callId, params) {
       const runtime = requireRuntime(getRuntime);
       const target = await resolveDelegationTarget(runtime, params.to);
-      const editedBody = await ctx.ui.editor("Review delegated Onclave request", params.body);
-      if (editedBody === undefined) throw new Error("Onclave delegation cancelled by operator");
       const actions = [...new Set(params.actions)] as DelegatedAction[];
       const ttlMinutes = params.ttl_minutes ?? 30;
-      const confirmed = await ctx.ui.confirm(
-        "Authorize Onclave delegation",
-        delegationSummary(target, actions, params.scope, ttlMinutes, editedBody)
-      );
-      if (!confirmed) throw new Error("Onclave delegation declined by operator");
-      return publishDelegation(runtime, target, editedBody, actions, params, ttlMinutes, audit);
+      return publishDelegation(runtime, target, params.body, actions, params, ttlMinutes, audit);
     },
   });
 }
 
-function requireInteractiveTui(ctx: ExtensionContext): void {
-  const mode = (ctx as ExtensionContext & { mode?: string }).mode;
-  const interactive =
-    mode === "tui" ||
-    (mode === undefined && process.stdin.isTTY === true && process.stdout.isTTY === true);
-  if (!interactive) throw new Error("onclave_delegate requires confirmation in an interactive TUI");
-}
-
 type DelegationTarget = { agent_id: string; project?: string };
-
-function delegationSummary(
-  target: DelegationTarget,
-  actions: DelegatedAction[],
-  scope: string,
-  ttlMinutes: number,
-  body: string
-): string {
-  return (
-    `Target: ${target.agent_id} (${target.project ?? "no project"})\n` +
-    `Actions: ${actions.join(", ")}\nTTL: ${ttlMinutes} minutes\n` +
-    `Scope: ${scope}\nRequest SHA256: ${requestSha256(body)}\n\n` +
-    "Authorize this trusted agent to execute the reviewed request within these bounds?"
-  );
-}
 
 async function publishDelegation(
   runtime: AdapterRuntime,
