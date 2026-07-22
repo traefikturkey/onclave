@@ -3,7 +3,7 @@
 ## C1 - Fresh export
 
 - Snapshot: `20260719T223202Z`
-- Legacy deployment path: `/apps/menos`
+- Legacy deployment path: `<legacy-deploy-path>`
 - Quiesce started: `2026-07-19T22:32:06Z`
 - Quiesce ended: `2026-07-19T22:33:06Z`
 - Legacy API source revision: `864a84d0f516554cc18302b788ed2d5b8898b311`
