@@ -65,9 +65,7 @@ def test_ingest_youtube_fetches_metadata_and_stores_rich_fields(
     )
     mock_pipeline_orchestrator.submit = AsyncMock(return_value=MagicMock(id="job-y1"))
 
-    response = authed_client.post(
-        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
-    )
+    response = authed_client.post("/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"})
 
     assert response.status_code == 200
     data = response.json()
@@ -104,9 +102,7 @@ def test_ingest_youtube_gracefully_handles_metadata_failure(
     mock_pipeline_orchestrator,
 ):
     mock_youtube_service.fetch_transcript.return_value = _youtube_transcript()
-    mock_metadata_service.fetch_metadata.side_effect = ValueError(
-        "YouTube API key not configured"
-    )
+    mock_metadata_service.fetch_metadata.side_effect = ValueError("YouTube API key not configured")
     mock_surreal_repo.find_content_by_video_id = AsyncMock(return_value=None)
     mock_surreal_repo.create_content.return_value = ContentMetadata(
         id="content-y2",
@@ -118,9 +114,7 @@ def test_ingest_youtube_gracefully_handles_metadata_failure(
     )
     mock_pipeline_orchestrator.submit = AsyncMock(return_value=MagicMock(id="job-y2"))
 
-    response = authed_client.post(
-        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
-    )
+    response = authed_client.post("/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"})
 
     assert response.status_code == 200
     data = response.json()
@@ -193,13 +187,9 @@ def test_ingest_unknown_classification_falls_back_to_docling(
 
     with patch(
         "menos.routers.ingest.URLDetector.classify_url",
-        return_value=DetectedURL(
-            url="https://example.com", url_type="unknown", extracted_id=""
-        ),
+        return_value=DetectedURL(url="https://example.com", url_type="unknown", extracted_id=""),
     ):
-        response = authed_client.post(
-            "/api/v1/ingest", json={"url": "https://example.com"}
-        )
+        response = authed_client.post("/api/v1/ingest", json={"url": "https://example.com"})
 
     assert response.status_code == 200
     assert response.json()["content_type"] == "web"
@@ -223,9 +213,7 @@ def test_ingest_dedupe_returns_existing_content_and_no_enqueue(
         )
     )
 
-    response = authed_client.post(
-        "/api/v1/ingest", json={"url": "https://example.com/path"}
-    )
+    response = authed_client.post("/api/v1/ingest", json={"url": "https://example.com/path"})
 
     assert response.status_code == 200
     assert response.json() == {
@@ -246,9 +234,7 @@ def test_ingest_returns_docling_errors(
         side_effect=HTTPException(status_code=503, detail="Docling service unavailable")
     )
 
-    response = authed_client.post(
-        "/api/v1/ingest", json={"url": "https://example.com/fail"}
-    )
+    response = authed_client.post("/api/v1/ingest", json={"url": "https://example.com/fail"})
 
     assert response.status_code == 503
 
@@ -383,9 +369,7 @@ def test_backfill_triggered_by_placeholder_title(
     mock_metadata_service.fetch_metadata.return_value = _youtube_metadata()
     mock_minio_storage.download = AsyncMock(return_value=b"transcript text here")
 
-    response = authed_client.post(
-        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
-    )
+    response = authed_client.post("/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"})
 
     assert response.status_code == 200
     data = response.json()
@@ -393,13 +377,11 @@ def test_backfill_triggered_by_placeholder_title(
     assert data["content_id"] == "existing-yt1"
     assert data["job_id"] is None
 
-    # Verify DB update was called with RecordID
-    mock_surreal_repo.db.query.assert_called_once()
-    call_args = mock_surreal_repo.db.query.call_args
-    assert "UPDATE content SET" in call_args[0][0]
-    params = call_args[0][1]
-    assert params["title"] == "Rick Astley - Never Gonna Give You Up"
-    assert params["tags"] == ["rick astley", "never gonna give you up"]
+    mock_surreal_repo.update_content_fields.assert_awaited_once()
+    assert mock_surreal_repo.update_content_fields.call_args.args[0] == "existing-yt1"
+    fields = mock_surreal_repo.update_content_fields.call_args.kwargs
+    assert fields["title"] == "Rick Astley - Never Gonna Give You Up"
+    assert fields["tags"] == ["rick astley", "never gonna give you up"]
 
     # Verify metadata.json uploaded to MinIO
     upload_calls = mock_minio_storage.upload.await_args_list
@@ -418,13 +400,9 @@ def test_backfill_preserves_existing_metadata_fields(
     mock_metadata_service.fetch_metadata.return_value = _youtube_metadata()
     mock_minio_storage.download = AsyncMock(return_value=b"transcript")
 
-    authed_client.post(
-        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
-    )
+    authed_client.post("/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"})
 
-    # Verify the merged metadata preserves original fields
-    call_args = mock_surreal_repo.db.query.call_args
-    merged_meta = call_args[0][1]["metadata"]
+    merged_meta = mock_surreal_repo.update_content_fields.call_args.kwargs["metadata"]
     assert merged_meta["language"] == "en"
     assert merged_meta["segment_count"] == 42
     assert merged_meta["resource_key"] == "yt:dQw4w9WgXcQ"
@@ -443,9 +421,7 @@ def test_backfill_metadata_fetch_failure_returns_existing(
     mock_surreal_repo.find_content_by_resource_key = AsyncMock(return_value=existing)
     mock_metadata_service.fetch_metadata.side_effect = ValueError("API key not configured")
 
-    response = authed_client.post(
-        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
-    )
+    response = authed_client.post("/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"})
 
     assert response.status_code == 200
     data = response.json()
@@ -461,13 +437,10 @@ def test_backfill_db_update_failure_returns_stale_data(
 ):
     existing = _existing_record_with_placeholder()
     mock_surreal_repo.find_content_by_resource_key = AsyncMock(return_value=existing)
-    mock_surreal_repo.db = MagicMock()
-    mock_surreal_repo.db.query.side_effect = RuntimeError("DB connection lost")
+    mock_surreal_repo.update_content_fields.side_effect = RuntimeError("DB connection lost")
     mock_metadata_service.fetch_metadata.return_value = _youtube_metadata()
 
-    response = authed_client.post(
-        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
-    )
+    response = authed_client.post("/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"})
 
     assert response.status_code == 200
     data = response.json()
@@ -493,9 +466,7 @@ def test_complete_youtube_record_skips_backfill(
     )
     mock_surreal_repo.find_content_by_resource_key = AsyncMock(return_value=existing)
 
-    response = authed_client.post(
-        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
-    )
+    response = authed_client.post("/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"})
 
     assert response.status_code == 200
     data = response.json()
@@ -522,9 +493,7 @@ def test_backfill_minio_failure_still_succeeds(
     mock_minio_storage.download = AsyncMock(return_value=b"transcript")
     mock_minio_storage.upload = AsyncMock(side_effect=RuntimeError("MinIO down"))
 
-    response = authed_client.post(
-        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
-    )
+    response = authed_client.post("/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"})
 
     assert response.status_code == 200
     data = response.json()
@@ -557,9 +526,7 @@ def test_video_id_fallback_finds_old_record_without_resource_key(
     mock_surreal_repo.find_content_by_video_id = AsyncMock(return_value=old_record)
     mock_surreal_repo.db = MagicMock()
 
-    response = authed_client.post(
-        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
-    )
+    response = authed_client.post("/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"})
 
     assert response.status_code == 200
     data = response.json()
@@ -570,12 +537,9 @@ def test_video_id_fallback_finds_old_record_without_resource_key(
     # Verify fallback was called
     mock_surreal_repo.find_content_by_video_id.assert_awaited_once_with("dQw4w9WgXcQ")
 
-    # Verify resource_key backfill query was executed
-    mock_surreal_repo.db.query.assert_called_once()
-    call_args = mock_surreal_repo.db.query.call_args
-    assert "UPDATE content SET metadata.resource_key" in call_args[0][0]
-    params = call_args[0][1]
-    assert params["resource_key"] == "yt:dQw4w9WgXcQ"
+    mock_surreal_repo.update_content_fields.assert_awaited_once()
+    updated = mock_surreal_repo.update_content_fields.call_args.kwargs["metadata"]
+    assert updated["resource_key"] == "yt:dQw4w9WgXcQ"
 
     # No new transcript fetch or metadata fetch
     mock_youtube_service.fetch_transcript.assert_not_called()
@@ -605,9 +569,7 @@ def test_video_id_fallback_miss_proceeds_to_new_ingest(
     mock_metadata_service.fetch_metadata.return_value = _youtube_metadata()
     mock_pipeline_orchestrator.submit = AsyncMock(return_value=MagicMock(id="job-new"))
 
-    response = authed_client.post(
-        "/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"}
-    )
+    response = authed_client.post("/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"})
 
     assert response.status_code == 200
     data = response.json()
@@ -620,7 +582,7 @@ def test_video_id_fallback_miss_proceeds_to_new_ingest(
     mock_surreal_repo.create_content.assert_awaited_once()
 
 
-def test_resource_key_backfill_uses_recordid(
+def test_resource_key_backfill_uses_string_id(
     authed_client,
     mock_surreal_repo,
 ):
@@ -639,19 +601,10 @@ def test_resource_key_backfill_uses_recordid(
     mock_surreal_repo.find_content_by_video_id = AsyncMock(return_value=old_record)
     mock_surreal_repo.db = MagicMock()
 
-    authed_client.post(
-        "/api/v1/ingest", json={"url": "https://youtu.be/ABCDefgh123"}
-    )
+    authed_client.post("/api/v1/ingest", json={"url": "https://youtu.be/ABCDefgh123"})
 
-    # Extract the RecordID from the call
-    call_args = mock_surreal_repo.db.query.call_args
-    params = call_args[0][1]
-    record_id = params["id"]
-
-    # Verify it's a RecordID object, not a string
-    from surrealdb import RecordID
-    assert isinstance(record_id, RecordID)
-    assert str(record_id) == "content:abc123"
+    mock_surreal_repo.update_content_fields.assert_awaited_once()
+    assert mock_surreal_repo.update_content_fields.call_args.args[0] == "abc123"
 
 
 def test_ingest_youtube_from_local_transcript_skips_server_transcript_fetch(

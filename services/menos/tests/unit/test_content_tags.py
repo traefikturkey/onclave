@@ -435,103 +435,31 @@ class TestListTagsEndpoint:
         assert result.tags[3].count == 5
 
 
-class TestSurrealDBRepositoryListTagsWithCounts:
-    """Tests for SurrealDBRepository.list_tags_with_counts method."""
+class TestPostgresRepositoryListTagsWithCounts:
+    """Tests for PostgreSQL tag aggregation."""
 
     @pytest.mark.asyncio
-    async def test_list_tags_with_counts_single_items(self):
-        """Test listing tags where each tag appears once."""
+    async def test_list_tags_preserves_database_order_and_counts(self):
         mock_db = MagicMock()
-        mock_db.query.return_value = [
-            {
-                "result": [
-                    {"tags": ["python"]},
-                    {"tags": ["api"]},
-                    {"tags": ["database"]},
-                ]
-            }
+        mock_db.fetch_all.return_value = [
+            {"name": "api", "count": 3},
+            {"name": "database", "count": 1},
+            {"name": "python", "count": 1},
         ]
+        repo = SurrealDBRepository(mock_db)
 
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
         result = await repo.list_tags_with_counts()
 
-        assert len(result) == 3
-        assert result[0] == {"name": "api", "count": 1}
-        assert result[1] == {"name": "database", "count": 1}
-        assert result[2] == {"name": "python", "count": 1}
+        assert result == mock_db.fetch_all.return_value
+        query = mock_db.fetch_all.call_args.args[0]
+        assert "unnest(tags)" in query
+        assert "ORDER BY count DESC,tag ASC" in query
 
     @pytest.mark.asyncio
-    async def test_list_tags_with_counts_multiple_occurrences(self):
-        """Test listing tags with varying counts."""
+    async def test_list_tags_empty(self):
         mock_db = MagicMock()
-        mock_db.query.return_value = [
-            {
-                "result": [
-                    {"tags": ["python", "api"]},
-                    {"tags": ["api", "database"]},
-                    {"tags": ["api"]},
-                ]
-            }
-        ]
-
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
-        result = await repo.list_tags_with_counts()
-
-        assert len(result) == 3
-        assert result[0] == {"name": "api", "count": 3}
-        assert result[1] == {"name": "database", "count": 1}
-        assert result[2] == {"name": "python", "count": 1}
-
-    @pytest.mark.asyncio
-    async def test_list_tags_with_counts_empty(self):
-        """Test listing tags when no content has tags."""
-        mock_db = MagicMock()
-        mock_db.query.return_value = []
-
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
-        result = await repo.list_tags_with_counts()
-
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_list_tags_with_counts_no_result_key(self):
-        """Test listing tags when query returns list without result key."""
-        mock_db = MagicMock()
-        mock_db.query.return_value = [
-            {"tags": ["python"]},
-            {"tags": ["api"]},
-        ]
-
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
-        result = await repo.list_tags_with_counts()
-
-        assert len(result) == 2
-        assert result[0] == {"name": "api", "count": 1}
-        assert result[1] == {"name": "python", "count": 1}
-
-    @pytest.mark.asyncio
-    async def test_list_tags_sorted_correctly(self):
-        """Test that tags are sorted by count descending, then name ascending."""
-        mock_db = MagicMock()
-        mock_db.query.return_value = [
-            {
-                "result": [
-                    {"tags": ["python", "zebra"]},
-                    {"tags": ["python", "apple"]},
-                    {"tags": ["python", "zebra", "apple"]},
-                    {"tags": ["database"]},
-                ]
-            }
-        ]
-
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
-        result = await repo.list_tags_with_counts()
-
-        assert len(result) == 4
-        assert result[0] == {"name": "python", "count": 3}
-        assert result[1] == {"name": "apple", "count": 2}
-        assert result[2] == {"name": "zebra", "count": 2}
-        assert result[3] == {"name": "database", "count": 1}
+        mock_db.fetch_all.return_value = []
+        assert await SurrealDBRepository(mock_db).list_tags_with_counts() == []
 
 
 class TestContentRouterExcludeTagsLogic:
@@ -597,109 +525,41 @@ class TestContentRouterExcludeTagsLogic:
 
 
 class TestExcludeTagsParameter:
-    """Tests for exclude_tags parameter in list_content."""
+    """Tests for PostgreSQL list-content tag filtering."""
+
+    @staticmethod
+    def _repo():
+        database = MagicMock()
+        database.fetch_one.return_value = {"count": 0}
+        database.fetch_all.return_value = []
+        return SurrealDBRepository(database), database
 
     @pytest.mark.asyncio
     async def test_default_excludes_test_tag(self):
-        """Test that exclude_tags defaults to ['test'] when not provided."""
-        mock_db = MagicMock()
-        mock_db.query.return_value = [
-            {
-                "result": [
-                    {
-                        "id": "content:1",
-                        "content_type": "youtube",
-                        "title": "Production Video",
-                        "mime_type": "text/plain",
-                        "file_size": 1000,
-                        "file_path": "youtube/vid1/transcript.txt",
-                        "tags": ["python"],
-                    }
-                ]
-            }
-        ]
+        repo, database = self._repo()
+        await repo.list_content()
 
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
-
-        # Call without exclude_tags parameter (should default to ["test"])
-        results, total = await repo.list_content()
-
-        # Verify query was called with exclude_tags filter
-        query_call = mock_db.query.call_args[0][0]
-        assert "tags CONTAINSNONE $exclude_tags" in query_call
-
-        # Verify the default exclude_tags was passed
-        params = mock_db.query.call_args[0][1]
-        assert params["exclude_tags"] == ["test"]
+        count_sql, count_params = database.fetch_one.call_args.args
+        list_sql, list_params = database.fetch_all.call_args.args
+        assert "NOT tags && %s" in count_sql
+        assert "NOT tags && %s" in list_sql
+        assert count_params == [["test"]]
+        assert list_params[:1] == (["test"],)
 
     @pytest.mark.asyncio
-    async def test_empty_exclude_tags_includes_all(self):
-        """Test that exclude_tags=[] disables tag exclusion."""
-        mock_db = MagicMock()
-        mock_db.query.return_value = [
-            {
-                "result": [
-                    {
-                        "id": "content:1",
-                        "content_type": "youtube",
-                        "title": "Test Video",
-                        "mime_type": "text/plain",
-                        "file_size": 500,
-                        "file_path": "youtube/test/transcript.txt",
-                        "tags": ["test"],
-                    },
-                    {
-                        "id": "content:2",
-                        "content_type": "youtube",
-                        "title": "Production Video",
-                        "mime_type": "text/plain",
-                        "file_size": 1000,
-                        "file_path": "youtube/prod/transcript.txt",
-                        "tags": ["python"],
-                    },
-                ]
-            }
-        ]
+    async def test_empty_exclude_tags_disables_exclusion(self):
+        repo, database = self._repo()
+        await repo.list_content(exclude_tags=[])
 
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
-
-        # Call with exclude_tags=[] (should include test content)
-        results, total = await repo.list_content(exclude_tags=[])
-
-        # Verify query does NOT have the exclude filter
-        query_call = mock_db.query.call_args[0][0]
-        assert "CONTAINSNONE" not in query_call
-
-        assert len(results) == 2
+        assert "NOT tags &&" not in database.fetch_one.call_args.args[0]
+        assert "NOT tags &&" not in database.fetch_all.call_args.args[0]
 
     @pytest.mark.asyncio
-    async def test_explicit_exclude_tags_override(self):
-        """Test that explicitly passing exclude_tags=[] works at storage layer."""
-        mock_db = MagicMock()
-        mock_db.query.return_value = [
-            {
-                "result": [
-                    {
-                        "id": "content:1",
-                        "content_type": "youtube",
-                        "title": "Test Video",
-                        "mime_type": "text/plain",
-                        "file_size": 500,
-                        "file_path": "youtube/test/transcript.txt",
-                        "tags": ["test"],
-                    }
-                ]
-            }
-        ]
+    async def test_included_tag_is_not_excluded(self):
+        repo, database = self._repo()
+        await repo.list_content(tags=["test"])
 
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
-
-        # Call with explicit exclude_tags=[] to override default
-        results, total = await repo.list_content(tags=["test"], exclude_tags=[])
-
-        # Verify exclude_tags filter was NOT applied (empty list)
-        query_call = mock_db.query.call_args[0][0]
-        assert "CONTAINSNONE" not in query_call
-
-        assert len(results) == 1
-        assert results[0].tags == ["test"]
+        sql, params = database.fetch_one.call_args.args
+        assert "tags && %s" in sql
+        assert "NOT tags &&" not in sql
+        assert params == [["test"]]

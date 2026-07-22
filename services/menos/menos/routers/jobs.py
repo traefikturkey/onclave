@@ -93,14 +93,9 @@ class DriftReportResponse(BaseModel):
 # -- Reprocess endpoint --
 
 
-def _already_completed(content_id: str, surreal_repo: SurrealDBRepository) -> bool:
-    """Return True if content processing_status is 'completed'."""
-    raw = surreal_repo.db.query(
-        "SELECT processing_status FROM content WHERE id = $id",
-        {"id": content_id},
-    )
-    parsed = surreal_repo._parse_query_result(raw)
-    return bool(parsed and parsed[0].get("processing_status") == "completed")
+def _already_completed(content_id: str, repo: SurrealDBRepository) -> bool:
+    """Return True if content processing_status is completed."""
+    return repo.get_content_processing_status(content_id) == "completed"
 
 
 def _resolve_resource_key(content, content_id: str) -> str:

@@ -6,7 +6,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from menos.services.storage import SurrealDBRepository
+from menos.services.storage import PostgresRepository
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ class LLMPricingService:
 
     def __init__(
         self,
-        repo: SurrealDBRepository,
+        repo: PostgresRepository,
         *,
         refresh_interval_seconds: int = 24 * 60 * 60,
         stale_after_seconds: int = 7 * 24 * 60 * 60,
@@ -108,12 +108,7 @@ class LLMPricingService:
             await self.refresh_snapshot()
 
     def _load_persisted_snapshot(self) -> dict[str, Any] | None:
-        record = self.repo.db.select(self.SNAPSHOT_ID)
-        if isinstance(record, list):
-            if not record:
-                return None
-            record = record[0]
-
+        record = self.repo.get_pricing_snapshot(self.SNAPSHOT_ID)
         if not isinstance(record, dict):
             return None
         if not record.get("pricing"):
@@ -131,16 +126,8 @@ class LLMPricingService:
         refreshed_at: datetime,
         source: str,
     ) -> None:
-        payload = {
-            "pricing": snapshot,
-            "refreshed_at": refreshed_at.isoformat(),
-            "source": source,
-        }
         try:
-            self.repo.db.query(
-                "UPSERT llm_pricing_snapshot:active CONTENT $payload",
-                {"payload": payload},
-            )
+            self.repo.upsert_pricing_snapshot(self.SNAPSHOT_ID, snapshot, refreshed_at, source)
         except Exception:
             logger.exception("Failed to persist LLM pricing snapshot")
 

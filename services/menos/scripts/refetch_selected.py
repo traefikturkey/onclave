@@ -70,13 +70,10 @@ async def _update_video_metadata(vid: str, item, minio, surreal, metadata_servic
     logger.info("  Updated metadata.json")
 
     try:
-        surreal.db.query(
-            "UPDATE content SET title = $title WHERE id = $id",
-            {"title": yt.title, "id": item.id},
-        )
-        logger.info("  Updated SurrealDB title")
+        await surreal.update_content_fields(str(item.id), title=yt.title)
+        logger.info("  Updated PostgreSQL title")
     except Exception as e:
-        logger.error(f"  Failed to update SurrealDB: {e}")
+        logger.error(f"  Failed to update PostgreSQL: {e}")
 
     logger.info("")
 

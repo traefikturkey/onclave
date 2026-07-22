@@ -7,7 +7,6 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from surrealdb import Surreal
 
 from menos.config import get_settings
 from menos.routers import (
@@ -23,7 +22,8 @@ from menos.routers import (
     usage,
     youtube,
 )
-from menos.services.di import get_llm_pricing_service, get_surreal_repo
+from menos.services.database import PostgresDatabase
+from menos.services.di import get_llm_pricing_service, get_postgres_repo
 from menos.services.migrator import MigrationService
 from menos.tasks import background_tasks
 
@@ -41,91 +41,50 @@ logging.getLogger("menos").addHandler(_log_handler)
 logger = logging.getLogger(__name__)
 
 
+def _new_database() -> PostgresDatabase:
+    settings = get_settings()
+    return PostgresDatabase(
+        host=settings.postgres_host,
+        port=settings.postgres_port,
+        database=settings.postgres_database,
+        user=settings.postgres_user,
+        password=settings.postgres_password,
+        min_size=settings.postgres_pool_min_size,
+        max_size=settings.postgres_pool_max_size,
+    )
+
+
 def run_migrations() -> None:
-    """Run database migrations on startup."""
-    settings = get_settings()
-    migrations_dir = Path(__file__).parent.parent / "migrations"
-
-    if not migrations_dir.exists():
-        logger.warning(f"Migrations directory not found: {migrations_dir}")
-        return
-
+    """Run PostgreSQL migrations on startup and fail closed on error."""
+    database = _new_database()
+    database.open()
     try:
-        db = Surreal(settings.surrealdb_url)
-        db.signin({"username": settings.surrealdb_user, "password": settings.surrealdb_password})
-        db.use(settings.surrealdb_namespace, settings.surrealdb_database)
-
-        migrator = MigrationService(db, migrations_dir)
-        status = migrator.status()
-
-        if not status["pending"]:
-            logger.info("Database migrations: all up to date")
-            return
-
-        logger.info(f"Running {len(status['pending'])} pending migration(s)...")
-        applied = migrator.migrate()
-        logger.info(f"Applied migrations: {', '.join(applied)}")
-
-    except Exception as e:
-        logger.error(f"Migration failed: {e} - app continuing without migration")
+        applied = MigrationService(database, Path(__file__).parent.parent / "migrations").migrate()
+        logger.info("Applied PostgreSQL migrations: %s", ", ".join(applied) or "none")
+    finally:
+        database.close()
 
 
-def _run_purge() -> None:
+async def _run_purge() -> None:
     """Purge expired pipeline job records on startup."""
-    settings = get_settings()
+    repo = await get_postgres_repo()
     try:
-        surreal_url = settings.surrealdb_url.replace("ws://", "http://").replace(
-            "wss://", "https://"
+        counts = repo.purge_expired_jobs()
+        logger.info(
+            "Purged %d expired pipeline jobs (compact=%d, full=%d)",
+            counts["compact"] + counts["full"],
+            counts["compact"],
+            counts["full"],
         )
-        db = Surreal(surreal_url)
-        db.signin(
-            {
-                "username": settings.surrealdb_user,
-                "password": settings.surrealdb_password,
-            }
-        )
-        db.use(settings.surrealdb_namespace, settings.surrealdb_database)
-
-        compact_result = db.query(
-            "DELETE FROM pipeline_job WHERE data_tier = 'compact' "
-            "AND finished_at != NONE AND finished_at < time::now() - 180d "
-            "RETURN BEFORE"
-        )
-        full_result = db.query(
-            "DELETE FROM pipeline_job WHERE data_tier = 'full' "
-            "AND finished_at != NONE AND finished_at < time::now() - 60d "
-            "RETURN BEFORE"
-        )
-
-        def _parse(result):
-            if not result or not isinstance(result, list) or len(result) == 0:
-                return []
-            first = result[0]
-            if isinstance(first, dict) and "result" in first:
-                return first["result"] or []
-            return result
-
-        compact_count = len(_parse(compact_result))
-        full_count = len(_parse(full_result))
-        total = compact_count + full_count
-        if total > 0:
-            logger.info(
-                "Purged %d expired pipeline jobs (compact=%d, full=%d)",
-                total,
-                compact_count,
-                full_count,
-            )
-        else:
-            logger.info("Pipeline job purge: no expired records")
-    except Exception as e:
-        logger.error("Pipeline job purge failed: %s - app continuing", e)
+    finally:
+        repo.close()
 
 
 async def _log_version_drift() -> None:
     """Log startup version drift report without blocking app startup on errors."""
     settings = get_settings()
     try:
-        repo = await get_surreal_repo()
+        repo = await get_postgres_repo()
         report = await repo.get_version_drift_report(settings.app_version)
 
         total_stale = int(report.get("total_stale", 0))
@@ -153,7 +112,7 @@ async def _log_version_drift() -> None:
 async def lifespan(app: FastAPI):
     """Initialize services on startup."""
     run_migrations()
-    _run_purge()
+    await _run_purge()
     await _log_version_drift()
     pricing_service = await get_llm_pricing_service()
     await pricing_service.start_scheduler()

@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives.serialization import (
 )
 from fastapi.testclient import TestClient
 
-os.environ.setdefault("SURREALDB_PASSWORD", "test-surrealdb-password")
+os.environ.setdefault("POSTGRES_PASSWORD", "test-postgres-password")
 os.environ.setdefault("S3_ACCESS_KEY", "test-s3-access-key")
 os.environ.setdefault("S3_SECRET_KEY", "test-s3-secret-key")
 
@@ -101,6 +101,15 @@ def mock_surreal_repo():
     repo.find_content_by_resource_key = AsyncMock(return_value=None)
     repo.get_chunk_counts = AsyncMock(return_value={})
     repo.find_content_by_video_id = AsyncMock(return_value=None)
+    repo.update_content_fields = AsyncMock(return_value=None)
+    repo.fetch_content_metadata = AsyncMock(return_value={})
+    repo.filter_content_ids_by_entities = AsyncMock(return_value=set())
+    repo.get_content_processing_status = MagicMock(return_value=None)
+    repo.usage_totals = MagicMock(return_value={})
+    repo.usage_breakdown = MagicMock(return_value=[])
+    repo.get_pricing_snapshot = MagicMock(return_value=None)
+    repo.upsert_pricing_snapshot = MagicMock()
+    repo.record_llm_usage = MagicMock()
     return repo
 
 

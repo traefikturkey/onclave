@@ -14,11 +14,10 @@ import logging
 from datetime import datetime
 
 from minio import Minio
-from surrealdb import Surreal
 
 from menos.config import settings
-from menos.services.di import get_unified_pipeline_provider
-from menos.services.storage import MinIOStorage, SurrealDBRepository
+from menos.services.di import get_postgres_repo, get_unified_pipeline_provider
+from menos.services.storage import MinIOStorage, PostgresRepository
 from menos.services.unified_pipeline import UnifiedPipelineService
 
 logging.basicConfig(
@@ -29,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 
 def _create_pipeline_service(
-    surreal_repo: SurrealDBRepository,
+    surreal_repo: PostgresRepository,
 ) -> UnifiedPipelineService | None:
     """Create unified pipeline service with all dependencies.
 
@@ -58,12 +57,7 @@ def _create_pipeline_service(
 
 def _is_already_processed(surreal_repo, item) -> bool:
     """Return True if content has processing_status == 'completed'."""
-    raw = surreal_repo.db.query(
-        "SELECT processing_status FROM content WHERE id = $id",
-        {"id": item.id},
-    )
-    parsed = surreal_repo._parse_query_result(raw)
-    return bool(parsed and parsed[0].get("processing_status") == "completed")
+    return surreal_repo.get_content_processing_status(item.id) == "completed"
 
 
 async def _run_pipeline(item, surreal_repo, minio_storage, pipeline_service, stats: dict) -> None:
@@ -192,21 +186,11 @@ async def main():
     )
     minio_storage = MinIOStorage(minio_client, settings.s3_bucket)
 
-    logger.info("Connecting to SurrealDB at %s", settings.surrealdb_url)
-    db = Surreal(settings.surrealdb_url)
-    surreal_repo = SurrealDBRepository(
-        db=db,
-        namespace=settings.surrealdb_namespace,
-        database=settings.surrealdb_database,
-        username=settings.surrealdb_user,
-        password=settings.surrealdb_password,
-    )
-
     try:
-        await surreal_repo.connect()
-        logger.info("Connected to SurrealDB successfully")
+        surreal_repo = await get_postgres_repo()
+        logger.info("Connected to PostgreSQL successfully")
     except Exception as e:
-        logger.error("Failed to connect to SurrealDB: %s", e)
+        logger.error("Failed to connect to PostgreSQL: %s", e)
         return
 
     pipeline_service = _create_pipeline_service(surreal_repo)

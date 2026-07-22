@@ -70,71 +70,33 @@ class TestSearchTagFiltering:
 
 
 class TestStorageTagFiltering:
-    """Tests for tag filtering in storage layer."""
+    """Tests for PostgreSQL tag filtering in the storage layer."""
+
+    @staticmethod
+    def _list(tags=None, content_type=None):
+        database = MagicMock()
+        database.fetch_one.return_value = {"count": 0}
+        database.fetch_all.return_value = []
+        repo = SurrealDBRepository(database)
+        asyncio.run(repo.list_content(tags=tags, content_type=content_type))
+        return database.fetch_all.call_args.args
 
     def test_list_content_builds_correct_query_with_single_tag(self):
-        """Should build correct WHERE clause for single tag."""
-        # Create mock db
-        mock_db = MagicMock()
-        mock_db.query = MagicMock(return_value=[])
-        repo = SurrealDBRepository(mock_db, "test", "test")
-
-        # Call list_content with single tag
-        asyncio.run(repo.list_content(tags=["python"]))
-
-        # Verify query was called with correct WHERE clause
-        call_args = mock_db.query.call_args
-        query = call_args[0][0]
-        params = call_args[0][1]
-        assert "WHERE tags CONTAINSANY $tags" in query
-        assert params["tags"] == ["python"]
+        query, params = self._list(tags=["python"])
+        assert "WHERE tags && %s" in query
+        assert params[0] == ["python"]
 
     def test_list_content_builds_correct_query_with_multiple_tags(self):
-        """Should build correct WHERE clause for multiple tags."""
-        # Create mock db
-        mock_db = MagicMock()
-        mock_db.query = MagicMock(return_value=[])
-        repo = SurrealDBRepository(mock_db, "test", "test")
+        query, params = self._list(tags=["python", "testing"])
+        assert "WHERE tags && %s" in query
+        assert params[0] == ["python", "testing"]
 
-        # Call list_content with multiple tags
-        asyncio.run(repo.list_content(tags=["python", "testing"]))
+    def test_list_content_builds_query_with_tags_and_content_type(self):
+        query, params = self._list(tags=["python"], content_type="document")
+        assert "WHERE content_type = %s AND tags && %s" in query
+        assert params[:2] == ("document", ["python"])
 
-        # Verify query was called with correct WHERE clause
-        call_args = mock_db.query.call_args
-        query = call_args[0][0]
-        params = call_args[0][1]
-        assert "WHERE tags CONTAINSANY $tags" in query
-        assert params["tags"] == ["python", "testing"]
-
-    def test_list_content_builds_correct_query_with_tags_and_content_type(self):
-        """Should combine tags and content_type filters with AND."""
-        # Create mock db
-        mock_db = MagicMock()
-        mock_db.query = MagicMock(return_value=[])
-        repo = SurrealDBRepository(mock_db, "test", "test")
-
-        # Call list_content with both filters
-        asyncio.run(repo.list_content(tags=["python"], content_type="document"))
-
-        # Verify query was called with both conditions
-        call_args = mock_db.query.call_args
-        query = call_args[0][0]
-        params = call_args[0][1]
-        assert "WHERE content_type = $content_type AND tags CONTAINSANY $tags" in query
-        assert params["content_type"] == "document"
-        assert params["tags"] == ["python"]
-
-    def test_list_content_without_tags(self):
-        """Should work without tag filtering."""
-        # Create mock db
-        mock_db = MagicMock()
-        mock_db.query = MagicMock(return_value=[])
-        repo = SurrealDBRepository(mock_db, "test", "test")
-
-        # Call list_content without tags
-        asyncio.run(repo.list_content())
-
-        # Verify query doesn't include tags filter
-        call_args = mock_db.query.call_args
-        query = call_args[0][0]
-        assert "tags CONTAINSANY" not in query
+    def test_list_content_without_tags_uses_default_exclusion_only(self):
+        query, params = self._list()
+        assert "WHERE NOT tags && %s" in query
+        assert params[0] == ["test"]

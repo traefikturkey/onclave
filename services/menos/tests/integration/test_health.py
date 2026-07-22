@@ -28,20 +28,17 @@ class TestHealthEndpoints:
         data = response.json()
         assert "status" in data
         assert "checks" in data
-        assert "surrealdb" in data["checks"]
+        assert "postgres" in data["checks"]
         assert "s3" in data["checks"]
         assert "ollama" in data["checks"]
 
 
 @pytest.mark.asyncio
-async def test_surrealdb_readiness_does_not_close_blocking_http_client(monkeypatch):
-    """The blocking HTTP client has no close implementation."""
-    db = MagicMock()
-    db.close.side_effect = Exception("close not implemented for blocking HTTP client")
-    monkeypatch.setattr(health, "Surreal", lambda _url: db)
+async def test_postgres_readiness_checks_and_closes_pool(monkeypatch):
+    database = MagicMock()
+    monkeypatch.setattr(health, "PostgresDatabase", lambda **_kwargs: database)
 
-    assert await health.check_surrealdb() == "ok"
-    db.signin.assert_called_once()
-    db.use.assert_called_once()
-    db.query.assert_called_once_with("INFO FOR DB")
-    db.close.assert_not_called()
+    assert await health.check_postgres() == "ok"
+    database.open.assert_called_once()
+    database.check.assert_called_once()
+    database.close.assert_called_once()

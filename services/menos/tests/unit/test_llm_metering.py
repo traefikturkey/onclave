@@ -37,8 +37,7 @@ def mock_provider():
 @pytest.fixture
 def mock_repo():
     repo = MagicMock()
-    repo.db = MagicMock()
-    repo.db.create = MagicMock()
+    repo.record_llm_usage = MagicMock()
     return repo
 
 
@@ -56,9 +55,8 @@ async def test_generate_logs_usage_and_returns_original_response(mock_provider, 
     response = await wrapped.generate("abcd", temperature=0.4)
 
     assert response == "hello world"
-    mock_repo.db.create.assert_called_once()
-    table_name, payload = mock_repo.db.create.call_args.args
-    assert table_name == "llm_usage"
+    mock_repo.record_llm_usage.assert_called_once()
+    payload = mock_repo.record_llm_usage.call_args.args[0]
     assert payload["provider"] == "openai"
     assert payload["model"] == "gpt-4o-mini"
     assert payload["context"] == "search:expansion"
@@ -70,7 +68,7 @@ async def test_generate_logs_usage_and_returns_original_response(mock_provider, 
 
 @pytest.mark.asyncio
 async def test_generate_handles_db_write_failure_without_breaking_call(mock_provider, mock_repo):
-    mock_repo.db.create.side_effect = RuntimeError("db write failed")
+    mock_repo.record_llm_usage.side_effect = RuntimeError("db write failed")
 
     wrapped = MeteringLLMProvider(
         provider=mock_provider,
@@ -117,5 +115,5 @@ async def test_with_context_overrides_context_for_pipeline_calls(mock_provider, 
     pipeline_wrapped = wrapped.with_context("pipeline:pipeline_job:abc123")
     await pipeline_wrapped.generate("abcd")
 
-    _, payload = mock_repo.db.create.call_args.args
+    payload = mock_repo.record_llm_usage.call_args.args[0]
     assert payload["context"] == "pipeline:pipeline_job:abc123"

@@ -94,21 +94,12 @@ async def _fetch_summary_text(minio, video_id: str) -> str:
         return "(No summary available)"
 
 
-def _fetch_pipeline_result(surreal, item_id: str) -> tuple[str | None, int | None, list | None]:
-    """Query SurrealDB for pipeline tier/quality/tags; returns (tier, quality_score, tags)."""
+def _fetch_pipeline_result(repository, item_id: str) -> tuple[str | None, int | None, list | None]:
+    """Fetch pipeline tier, quality score, and tags."""
     try:
-        raw = surreal.db.query(
-            "SELECT processing_status, "
-            "metadata.unified_result AS unified_result "
-            "FROM content WHERE id = $id",
-            {"id": item_id},
-        )
-        parsed = surreal._parse_query_result(raw)
-        if parsed:
-            rec = parsed[0]
-            unified = rec.get("unified_result")
-            if rec.get("processing_status") == "completed" and unified:
-                return unified.get("tier"), unified.get("quality_score"), unified.get("tags")
+        unified = repository.get_pipeline_result(item_id)
+        if unified:
+            return unified.get("tier"), unified.get("quality_score"), unified.get("tags")
     except Exception as e:
         logger.warning(f"  Could not fetch pipeline result: {e}")
     return None, None, None

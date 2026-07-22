@@ -13,7 +13,7 @@ class TestRequiredCredentialConfig:
 
     @pytest.mark.parametrize(
         "key",
-        ["SURREALDB_PASSWORD", "S3_ACCESS_KEY", "S3_SECRET_KEY"],
+        ["POSTGRES_PASSWORD", "S3_ACCESS_KEY", "S3_SECRET_KEY"],
     )
     def test_missing_storage_credential_is_rejected(self, monkeypatch, key):
         """Storage credentials must not fall back to development values."""

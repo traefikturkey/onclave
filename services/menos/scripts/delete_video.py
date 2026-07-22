@@ -1,4 +1,4 @@
-"""Delete a YouTube video from SurrealDB and MinIO.
+"""Delete a YouTube video from PostgreSQL and MinIO.
 
 Usage:
     PYTHONPATH=. uv run python scripts/delete_video.py VIDEO_ID
@@ -42,21 +42,14 @@ async def _delete_minio_files(minio, video_id: str, file_path: str) -> None:
 async def delete_video(video_id: str, skip_confirm: bool = False) -> int:
     """Delete a video by YouTube video ID with confirmation."""
     async with get_storage_context() as (minio, repo):
-        result = repo.db.query(
-            "SELECT * FROM content WHERE content_type = 'youtube'"
-            " AND metadata.video_id = $video_id LIMIT 1",
-            {"video_id": video_id},
-        )
-        raw_items = repo._parse_query_result(result)
-
-        if not raw_items:
-            print(f"Video '{video_id}' not found in SurrealDB")
+        item = await repo.find_content_by_video_id(video_id)
+        if item is None or item.id is None:
+            print(f"Video '{video_id}' not found in PostgreSQL")
             return 1
 
-        item = raw_items[0]
-        content_id = _extract_content_id(item.get("id"))
-        title = item.get("title", "Unknown")
-        metadata = item.get("metadata", {})
+        content_id = _extract_content_id(item.id)
+        title = item.title or "Unknown"
+        metadata = item.metadata
         channel = metadata.get("channel_title", "Unknown") if metadata else "Unknown"
 
         print("\nVideo to delete:")
@@ -77,7 +70,7 @@ async def delete_video(video_id: str, skip_confirm: bool = False) -> int:
         print("Deleting links...")
         await repo.delete_links_by_source(content_id)
         print("Deleting MinIO files...")
-        await _delete_minio_files(minio, video_id, item.get("file_path", ""))
+        await _delete_minio_files(minio, video_id, item.file_path)
         print("Deleting content record...")
         await repo.delete_content(content_id)
 
@@ -88,7 +81,7 @@ async def delete_video(video_id: str, skip_confirm: bool = False) -> int:
 def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Delete a YouTube video from SurrealDB",
+        description="Delete a YouTube video from PostgreSQL",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

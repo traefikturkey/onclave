@@ -55,27 +55,10 @@ def mock_embedding_service():
 
 @pytest.fixture
 def mock_surreal_repo():
-    """Mock SurrealDB repository with db.query method."""
+    """Mock the PostgreSQL repository boundary."""
     repo = MagicMock()
-    repo.db = MagicMock()
-    repo.db.query = MagicMock(
-        return_value=[
-            {
-                "result": [
-                    {
-                        "text": "Test chunk 1",
-                        "content_id": "content:1",
-                        "score": 0.85,
-                    },
-                    {
-                        "text": "Test chunk 2",
-                        "content_id": "content:2",
-                        "score": 0.75,
-                    },
-                ]
-            }
-        ]
-    )
+    repo.vector_search = AsyncMock(return_value=[])
+    repo.fetch_content_metadata = AsyncMock(return_value={})
     return repo
 
 
@@ -254,38 +237,17 @@ class TestAgentService:
     @pytest.mark.asyncio
     async def test_vector_search(self, agent_service, mock_embedding_service, mock_surreal_repo):
         """Test vector search executes query and parses results."""
-        # Mock content metadata query
-        mock_surreal_repo.db.query.side_effect = [
-            # First call: chunk search results
-            [
-                {
-                    "result": [
-                        {
-                            "text": "Chunk text 1",
-                            "content_id": "content:1",
-                            "score": 0.85,
-                        },
-                        {
-                            "text": "Chunk text 2",
-                            "content_id": "content:1",
-                            "score": 0.75,
-                        },
-                    ]
-                }
-            ],
-            # Second call: content metadata
-            [
-                {
-                    "result": [
-                        {
-                            "id": "content:1",
-                            "title": "Test Content",
-                            "content_type": "video",
-                        }
-                    ]
-                }
-            ],
+        mock_surreal_repo.vector_search.return_value = [
+            {"text": "Chunk text 1", "content_id": "content:1", "score": 0.85},
+            {"text": "Chunk text 2", "content_id": "content:1", "score": 0.75},
         ]
+        mock_surreal_repo.fetch_content_metadata.return_value = {
+            "content:1": {
+                "id": "content:1",
+                "title": "Test Content",
+                "content_type": "video",
+            }
+        }
 
         results = await agent_service._vector_search([0.1] * 1024, limit=10)
 
@@ -298,17 +260,9 @@ class TestAgentService:
     @pytest.mark.asyncio
     async def test_vector_search_with_content_type_filter(self, agent_service, mock_surreal_repo):
         """Test vector search includes content type filter in query."""
-        mock_surreal_repo.db.query.side_effect = [
-            [{"result": []}],  # Empty chunk results
-            [{"result": []}],  # Empty content results
-        ]
-
         await agent_service._vector_search([0.1] * 1024, limit=10, content_type="video")
 
-        # Verify filter was included in first query
-        query_call = mock_surreal_repo.db.query.call_args_list[0]
-        query_str = query_call[0][0]
-        assert "content_type = 'video'" in query_str
+        assert mock_surreal_repo.vector_search.call_args.kwargs["content_type"] == "video"
 
     @pytest.mark.asyncio
     async def test_search_with_rrf_fusion(
@@ -318,44 +272,25 @@ class TestAgentService:
         # Mock embedding service to return embeddings
         mock_embedding_service.embed_query.return_value = [0.1] * 1024
 
-        # Mock different results for each query
-        mock_surreal_repo.db.query.side_effect = [
-            # Query 1: chunk results
+        mock_surreal_repo.vector_search.side_effect = [
             [
-                {
-                    "result": [
-                        {"text": "Result A", "content_id": "content:A", "score": 0.9},
-                        {"text": "Result B", "content_id": "content:B", "score": 0.8},
-                    ]
-                }
+                {"text": "Result A", "content_id": "content:A", "score": 0.9},
+                {"text": "Result B", "content_id": "content:B", "score": 0.8},
             ],
-            # Query 1: content metadata
             [
-                {
-                    "result": [
-                        {"id": "content:A", "title": "Content A", "content_type": "video"},
-                        {"id": "content:B", "title": "Content B", "content_type": "video"},
-                    ]
-                }
+                {"text": "Result B", "content_id": "content:B", "score": 0.85},
+                {"text": "Result C", "content_id": "content:C", "score": 0.7},
             ],
-            # Query 2: chunk results
-            [
-                {
-                    "result": [
-                        {"text": "Result B", "content_id": "content:B", "score": 0.85},
-                        {"text": "Result C", "content_id": "content:C", "score": 0.7},
-                    ]
-                }
-            ],
-            # Query 2: content metadata
-            [
-                {
-                    "result": [
-                        {"id": "content:B", "title": "Content B", "content_type": "video"},
-                        {"id": "content:C", "title": "Content C", "content_type": "video"},
-                    ]
-                }
-            ],
+        ]
+        mock_surreal_repo.fetch_content_metadata.side_effect = [
+            {
+                "content:A": {"title": "Content A", "content_type": "video"},
+                "content:B": {"title": "Content B", "content_type": "video"},
+            },
+            {
+                "content:B": {"title": "Content B", "content_type": "video"},
+                "content:C": {"title": "Content C", "content_type": "video"},
+            },
         ]
 
         queries = ["query1", "query2"]
@@ -469,14 +404,11 @@ class TestAgentService:
         )
 
         mock_repo = MagicMock()
-        mock_repo.db = MagicMock()
-        mock_repo.db.query = MagicMock(
-            side_effect=[
-                # Query 1: chunks
-                [{"result": [{"text": "snippet1", "content_id": "content:1", "score": 0.8}]}],
-                # Query 1: metadata
-                [{"result": [{"id": "content:1", "title": "Result 1", "content_type": "video"}]}],
-            ]
+        mock_repo.vector_search = AsyncMock(
+            return_value=[{"text": "snippet1", "content_id": "content:1", "score": 0.8}]
+        )
+        mock_repo.fetch_content_metadata = AsyncMock(
+            return_value={"content:1": {"title": "Result 1", "content_type": "video"}}
         )
 
         service = AgentService(
@@ -503,37 +435,24 @@ class TestAgentService:
     @pytest.mark.asyncio
     async def test_full_pipeline_with_content_type_filter(self, agent_service, mock_surreal_repo):
         """Test search pipeline with content type filter."""
-        # Expansion returns both original + "default query" = 2 queries
-        # Each query needs: chunks + metadata = 2 calls
-        # Total: 4 calls
-        mock_surreal_repo.db.query.side_effect = [
-            [{"result": []}],  # Chunk results for query 1
-            [{"result": []}],  # Metadata results for query 1
-            [{"result": []}],  # Chunk results for query 2
-            [{"result": []}],  # Metadata results for query 2
-        ]
-
         await agent_service.search("test", content_type="video", limit=10)
 
-        # Verify content type filter was applied
-        query_calls = [call[0][0] for call in mock_surreal_repo.db.query.call_args_list]
-        assert any("content_type = 'video'" in query for query in query_calls)
+        assert mock_surreal_repo.vector_search.call_count == 2
+        assert all(
+            call.kwargs["content_type"] == "video"
+            for call in mock_surreal_repo.vector_search.call_args_list
+        )
 
     @pytest.mark.asyncio
     async def test_vector_search_with_tier_filter(self, agent_service, mock_surreal_repo):
         """Test vector search includes tier filter in query params."""
-        mock_surreal_repo.db.query.side_effect = [
-            [{"result": []}],
-            [{"result": []}],
-        ]
-
         await agent_service._vector_search([0.1] * 1024, limit=10, tier_min="b")
 
-        query_call = mock_surreal_repo.db.query.call_args_list[0]
-        query_str = query_call[0][0]
-        params = query_call[0][1]
-        assert "content_id.tier IN $valid_tiers" in query_str
-        assert params["valid_tiers"] == ["S", "A", "B"]
+        assert mock_surreal_repo.vector_search.call_args.kwargs["valid_tiers"] == [
+            "S",
+            "A",
+            "B",
+        ]
 
     @pytest.mark.asyncio
     async def test_search_propagates_tier_min_to_all_subqueries(self, agent_service):
@@ -550,31 +469,19 @@ class TestAgentService:
     @pytest.mark.asyncio
     async def test_reranking_reorders_results(self, agent_service, mock_reranker):
         """Test reranking changes result order based on scores."""
-        # Expansion returns 2 queries (original + "default query")
-        # Each query needs chunks + metadata = 4 total calls
-        agent_service.surreal_repo.db.query.side_effect = [
-            # Query 1: chunks
+        agent_service.surreal_repo.vector_search.side_effect = [
             [
-                {
-                    "result": [
-                        {"text": "low relevance", "content_id": "content:1", "score": 0.9},
-                        {"text": "high relevance", "content_id": "content:2", "score": 0.8},
-                    ]
-                }
+                {"text": "low relevance", "content_id": "content:1", "score": 0.9},
+                {"text": "high relevance", "content_id": "content:2", "score": 0.8},
             ],
-            # Query 1: metadata
-            [
-                {
-                    "result": [
-                        {"id": "content:1", "title": "Low", "content_type": "video"},
-                        {"id": "content:2", "title": "High", "content_type": "video"},
-                    ]
-                }
-            ],
-            # Query 2: chunks
-            [{"result": []}],
-            # Query 2: metadata
-            [{"result": []}],
+            [],
+        ]
+        agent_service.surreal_repo.fetch_content_metadata.side_effect = [
+            {
+                "content:1": {"title": "Low", "content_type": "video"},
+                "content:2": {"title": "High", "content_type": "video"},
+            },
+            {},
         ]
 
         # Reranker reverses the order
@@ -594,15 +501,6 @@ class TestAgentService:
     @pytest.mark.asyncio
     async def test_empty_search_results(self, agent_service):
         """Test pipeline handles empty search results gracefully."""
-        # Expansion returns 2 queries (original + "default query")
-        # Each query needs chunks + metadata = 4 total calls
-        agent_service.surreal_repo.db.query.side_effect = [
-            [{"result": []}],  # Chunk results for query 1
-            [{"result": []}],  # Metadata results for query 1
-            [{"result": []}],  # Chunk results for query 2
-            [{"result": []}],  # Metadata results for query 2
-        ]
-
         result = await agent_service.search("test", limit=10)
 
         assert result.answer == ""

@@ -1,118 +1,61 @@
-"""Database migration service for SurrealDB.
-
-Manages schema migrations using versioned .surql files.
-Migrations are tracked in a _migrations table to ensure idempotency.
-"""
+"""Transactional PostgreSQL schema migration service."""
 
 import logging
 import re
-from datetime import UTC, datetime
 from pathlib import Path
 
-from surrealdb import Surreal
+from menos.services.database import PostgresDatabase
 
 logger = logging.getLogger(__name__)
-
-# Pattern: YYYYMMDD-HHMMSS_migration_name.surql
-MIGRATION_PATTERN = re.compile(r"^(\d{8}-\d{6})_(.+)\.surql$")
+MIGRATION_PATTERN = re.compile(r"^(\d{8}-\d{6})_(.+)\.sql$")
 
 
 class MigrationService:
-    """Handles database schema migrations."""
+    """Apply versioned SQL files exactly once in filename order."""
 
-    def __init__(self, db: Surreal, migrations_dir: Path | str):
-        """Initialize migration service.
-
-        Args:
-            db: Connected SurrealDB instance (must be signed in and using namespace/database)
-            migrations_dir: Directory containing .surql migration files
-        """
-        self.db = db
+    def __init__(self, database: PostgresDatabase, migrations_dir: Path | str):
+        self._database = database
         self.migrations_dir = Path(migrations_dir)
 
-    def _ensure_migrations_table(self) -> None:
-        """Create _migrations table if it doesn't exist."""
-        self.db.query("""
-            DEFINE TABLE IF NOT EXISTS _migrations SCHEMAFULL;
-            DEFINE FIELD IF NOT EXISTS name ON _migrations TYPE string;
-            DEFINE FIELD IF NOT EXISTS applied_at ON _migrations TYPE datetime;
-            DEFINE INDEX IF NOT EXISTS idx_migration_name ON _migrations FIELDS name UNIQUE;
-        """)
-
-    def _get_applied_migrations(self) -> set[str]:
-        """Get set of already-applied migration names."""
-        result = self.db.query("SELECT name FROM _migrations")
-        if result and isinstance(result, list):
-            # Handle both old and new SurrealDB response formats
-            if isinstance(result[0], dict) and "result" in result[0]:
-                rows = result[0]["result"]
-            else:
-                rows = result
-            return {row["name"] for row in rows if isinstance(row, dict)}
-        return set()
-
-    def _record_migration(self, name: str) -> None:
-        """Record a migration as applied."""
-        self.db.create("_migrations", {"name": name, "applied_at": datetime.now(UTC)})
-
-    def _get_pending_migrations(self) -> list[tuple[str, Path]]:
-        """Get list of pending migrations sorted by timestamp.
-
-        Returns:
-            List of (migration_name, file_path) tuples sorted by version
-        """
+    def _migration_files(self) -> list[Path]:
         if not self.migrations_dir.exists():
-            return []
+            raise RuntimeError(f"Migrations directory not found: {self.migrations_dir}")
+        files = sorted(
+            path for path in self.migrations_dir.glob("*.sql") if MIGRATION_PATTERN.match(path.name)
+        )
+        if not files:
+            raise RuntimeError(f"No PostgreSQL migrations found in {self.migrations_dir}")
+        return files
 
-        applied = self._get_applied_migrations()
-        pending = []
-
-        for file_path in self.migrations_dir.glob("*.surql"):
-            match = MIGRATION_PATTERN.match(file_path.name)
-            if match:
-                name = file_path.stem  # filename without extension
-                if name not in applied:
-                    pending.append((name, file_path))
-
-        # Sort by filename (timestamp prefix ensures correct order)
-        return sorted(pending, key=lambda x: x[0])
+    def _applied(self) -> set[str]:
+        with self._database.connection() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                """CREATE TABLE IF NOT EXISTS schema_migration (
+                name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())"""
+            )
+            cursor.execute("SELECT name FROM schema_migration")
+            return {row["name"] for row in cursor.fetchall()}
 
     def migrate(self) -> list[str]:
-        """Run all pending migrations.
-
-        Returns:
-            List of applied migration names
-        """
-        self._ensure_migrations_table()
-        pending = self._get_pending_migrations()
-
-        if not pending:
-            logger.info("No pending migrations")
-            return []
-
-        applied = []
-        for name, file_path in pending:
-            logger.info(f"Applying migration: {name}")
+        applied = self._applied()
+        completed: list[str] = []
+        for path in self._migration_files():
+            name = path.stem
+            if name in applied:
+                continue
+            statement = path.read_text(encoding="utf-8")
+            logger.info("Applying PostgreSQL migration: %s", name)
             try:
-                sql = file_path.read_text(encoding="utf-8")
-                self.db.query(sql)
-                self._record_migration(name)
-                applied.append(name)
-                logger.info(f"Applied migration: {name}")
-            except Exception as e:
-                logger.error(f"Migration failed: {name} - {e}")
-                raise RuntimeError(f"Migration {name} failed: {e}") from e
-
-        return applied
+                with self._database.connection() as connection:
+                    with connection.transaction(), connection.cursor() as cursor:
+                        cursor.execute(statement)
+                        cursor.execute("INSERT INTO schema_migration(name) VALUES (%s)", (name,))
+            except Exception as error:
+                raise RuntimeError(f"Migration {name} failed: {error}") from error
+            completed.append(name)
+        return completed
 
     def status(self) -> dict[str, list[str]]:
-        """Get migration status.
-
-        Returns:
-            Dict with 'applied' and 'pending' migration lists
-        """
-        self._ensure_migrations_table()
-        applied = sorted(self._get_applied_migrations())
-        pending = [name for name, _ in self._get_pending_migrations()]
-
+        applied = sorted(self._applied())
+        pending = [path.stem for path in self._migration_files() if path.stem not in applied]
         return {"applied": applied, "pending": pending}

@@ -111,9 +111,7 @@ class TestReprocessEndpoint:
             file_size=100,
             file_path="youtube/vid1/transcript.txt",
         )
-        mock_surreal_repo.db = MagicMock()
-        mock_surreal_repo.db.query.return_value = [{"processing_status": "completed"}]
-        mock_surreal_repo._parse_query_result.return_value = [{"processing_status": "completed"}]
+        mock_surreal_repo.get_content_processing_status.return_value = "completed"
 
         resp = authed_client.post("/api/v1/content/c1/reprocess")
 

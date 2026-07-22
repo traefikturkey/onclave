@@ -190,27 +190,12 @@ def _extract_content_id(rid) -> str:
     return str(rid)
 
 
-def _fetch_content_metadata(
-    surreal_repo: SurrealDBRepository,
+async def _fetch_content_metadata(
+    repository: SurrealDBRepository,
     content_ids: list[str],
 ) -> dict[str, dict]:
     """Fetch title and content_type for a list of content IDs."""
-    if not content_ids:
-        return {}
-    content_refs = [f"content:{cid}" for cid in content_ids]
-    content_results = surreal_repo.db.query(
-        "SELECT * FROM content WHERE id IN $ids", {"ids": content_refs}
-    )
-    content_list = _parse_content_result(content_results)
-    id_to_meta: dict[str, dict] = {}
-    for content in content_list:
-        rid = content.get("id")
-        cid = _extract_content_id(rid)
-        id_to_meta[cid] = {
-            "title": content.get("title"),
-            "content_type": content.get("content_type", "unknown"),
-        }
-    return id_to_meta
+    return await repository.fetch_content_metadata(content_ids)
 
 
 def _build_search_results(
@@ -254,22 +239,14 @@ async def vector_search(
     """
     query_embedding = await embedding_service.embed_query(body.query)
     exclude_tags = _resolve_exclude_tags(body)
-    where_clause, params = _build_search_where_clause(body, exclude_tags)
-    params["embedding"] = query_embedding
-
-    search_results = surreal_repo.db.query(
-        f"""
-        SELECT text, content_id,
-               vector::similarity::cosine(embedding, $embedding) AS score
-        FROM chunk
-        {where_clause}
-        ORDER BY score DESC
-        LIMIT $limit
-        """,
-        params,
+    chunks = await surreal_repo.vector_search(
+        query_embedding,
+        limit=body.limit,
+        content_type=body.content_type,
+        tags=body.tags,
+        exclude_tags=exclude_tags,
+        valid_tiers=_compute_valid_tiers(body.tier_min),
     )
-
-    chunks = _parse_chunks_result(search_results)
     best_per_content = _best_chunks_per_content(chunks)
 
     if body.entities or body.entity_types or body.topics:
@@ -282,7 +259,7 @@ async def vector_search(
         )
         best_per_content = {k: v for k, v in best_per_content.items() if k in filtered_content}
 
-    id_to_meta = _fetch_content_metadata(surreal_repo, list(best_per_content.keys()))
+    id_to_meta = await _fetch_content_metadata(surreal_repo, list(best_per_content.keys()))
     results = _build_search_results(best_per_content, id_to_meta)
 
     return SearchResponse(
@@ -292,118 +269,20 @@ async def vector_search(
     )
 
 
-def _extract_cid_from_item(item: dict) -> str:
-    """Extract plain content ID string from a content_entity result item."""
-    cid = item.get("content_id")
-    if hasattr(cid, "id"):
-        return cid.id
-    return str(cid).split(":")[-1]
-
-
-def _filter_by_entity_ids(
-    surreal_repo: SurrealDBRepository,
-    matching: set[str],
-    entity_ids: list[str],
-) -> set[str]:
-    """Narrow matching set to content linked to ALL given entity IDs."""
-    for entity_ref in [f"entity:{eid}" for eid in entity_ids]:
-        result = surreal_repo.db.query(
-            """
-            SELECT content_id FROM content_entity
-            WHERE entity_id = $entity_id AND content_id IN $content_ids
-            """,
-            {
-                "entity_id": entity_ref,
-                "content_ids": [f"content:{cid}" for cid in matching],
-            },
-        )
-        raw_items = surreal_repo._parse_query_result(result)
-        matched = {_extract_cid_from_item(item) for item in raw_items}
-        matching &= matched
-    return matching
-
-
-def _filter_by_entity_types(
-    surreal_repo: SurrealDBRepository,
-    matching: set[str],
-    entity_types: list[str],
-) -> set[str]:
-    """Narrow matching set to content that has entities of the given types."""
-    result = surreal_repo.db.query(
-        """
-        SELECT content_id FROM content_entity
-        WHERE content_id IN $content_ids
-        AND entity_id.entity_type IN $entity_types
-        """,
-        {
-            "content_ids": [f"content:{cid}" for cid in matching],
-            "entity_types": entity_types,
-        },
-    )
-    raw_items = surreal_repo._parse_query_result(result)
-    matched = {_extract_cid_from_item(item) for item in raw_items}
-    return matching & matched
-
-
-def _filter_by_topic_pattern(
-    surreal_repo: SurrealDBRepository,
-    matching: set[str],
-    topic_pattern: str,
-) -> set[str]:
-    """Narrow matching set to content discussing a single topic hierarchy pattern."""
-    hierarchy = [p.strip() for p in topic_pattern.split(">")]
-    result = surreal_repo.db.query(
-        """
-        SELECT content_id FROM content_entity
-        WHERE content_id IN $content_ids
-        AND entity_id.entity_type = 'topic'
-        AND entity_id.hierarchy CONTAINSALL $hierarchy
-        """,
-        {
-            "content_ids": [f"content:{cid}" for cid in matching],
-            "hierarchy": hierarchy,
-        },
-    )
-    raw_items = surreal_repo._parse_query_result(result)
-    matched = {_extract_cid_from_item(item) for item in raw_items}
-    return matching & matched
-
-
 async def _filter_by_entities(
-    surreal_repo: SurrealDBRepository,
+    repository: SurrealDBRepository,
     content_ids: list[str],
     entity_ids: list[str] | None,
     entity_types: list[str] | None,
     topics: list[str] | None,
 ) -> set[str]:
-    """Filter content IDs by entity constraints.
-
-    Args:
-        surreal_repo: Database repository
-        content_ids: Content IDs to filter
-        entity_ids: Must be linked to ALL these entities
-        entity_types: Must have entities of these types
-        topics: Must discuss topics matching these patterns
-
-    Returns:
-        Set of content IDs that match all constraints
-    """
-    if not content_ids:
-        return set()
-
-    matching = set(content_ids)
-
-    if entity_ids:
-        matching = _filter_by_entity_ids(surreal_repo, matching, entity_ids)
-
-    if entity_types and matching:
-        matching = _filter_by_entity_types(surreal_repo, matching, entity_types)
-
-    if topics and matching:
-        for topic_pattern in topics:
-            matching = _filter_by_topic_pattern(surreal_repo, matching, topic_pattern)
-
-    return matching
+    """Filter content IDs by entity constraints."""
+    return await repository.filter_content_ids_by_entities(
+        content_ids,
+        entity_ids,
+        entity_types,
+        topics,
+    )
 
 
 @router.post("/agentic", response_model=AgenticSearchResponse)

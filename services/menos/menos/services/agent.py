@@ -241,19 +241,9 @@ class AgentService:
             return rid.id
         return str(rid)
 
-    def _fetch_content_metadata(self) -> dict[str, dict]:
-        """Fetch all content records and return a mapping of id -> metadata."""
-        content_results = self.surreal_repo.db.query("SELECT * FROM content")
-        content_list = self._parse_db_result(content_results)
-
-        id_to_meta: dict[str, dict] = {}
-        for content in content_list:
-            rid = self._normalize_record_id(content.get("id"))
-            id_to_meta[rid] = {
-                "title": content.get("title"),
-                "content_type": content.get("content_type", "unknown"),
-            }
-        return id_to_meta
+    async def _fetch_content_metadata(self, content_ids: list[str]) -> dict[str, dict]:
+        """Fetch content metadata through the repository boundary."""
+        return await self.surreal_repo.fetch_content_metadata(content_ids)
 
     async def _vector_search(
         self,
@@ -273,28 +263,15 @@ class AgentService:
         Returns:
             List of search results with id, content_type, title, score, snippet
         """
-        type_filter, tier_filter, query_params = self._build_search_filters(
-            embedding, limit, content_type, tier_min
+        chunks = await self.surreal_repo.vector_search(
+            embedding,
+            limit=limit,
+            content_type=content_type,
+            valid_tiers=_compute_valid_tiers(tier_min),
+            minimum_score=0.3,
         )
-
-        search_results = self.surreal_repo.db.query(
-            f"""
-            SELECT text, content_id,
-                   vector::similarity::cosine(embedding, $embedding) AS score
-            FROM chunk
-            WHERE embedding != NONE
-                AND vector::similarity::cosine(embedding, $embedding) > 0.3
-                {type_filter}
-                {tier_filter}
-            ORDER BY score DESC
-            LIMIT $limit
-            """,
-            query_params,
-        )
-
-        chunks = self._parse_db_result(search_results)
         best_per_content = self._group_best_chunks(chunks)
-        id_to_meta = self._fetch_content_metadata()
+        id_to_meta = await self._fetch_content_metadata(list(best_per_content))
 
         results = []
         for content_id, (score, text, _cid) in best_per_content.items():

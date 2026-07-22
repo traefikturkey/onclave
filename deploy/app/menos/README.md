@@ -15,9 +15,12 @@ docker compose \
 ## Health contract
 
 - `GET /health` on the API port returns HTTP 200 and the deployed source SHA.
-- `GET /ready` reports SurrealDB, S3-compatible storage, and Ollama status.
+- `GET /ready` reports PostgreSQL, S3-compatible storage, and Ollama status.
 - Authenticated smoke coverage must verify content access, ingest, list, and
   semantic search before cutover.
 
-The consumer owns DNS, TLS, host placement, persistent-volume implementation,
-secret rendering, public-key materialization, and backup integration.
+The PostgreSQL port remains internal to the Compose network. The consumer owns
+DNS, TLS, host placement, persistent-volume implementation, secret rendering,
+public-key materialization, and backup integration. Use `backup-postgres.sh`
+for credential-safe custom-format logical dumps and `restore-postgres.sh` for
+validated restores into an empty database.

@@ -12,6 +12,7 @@ class TestContentEndpoints:
     def test_content_list_requires_auth(self, client):
         """Test that content list requires authentication."""
         from fastapi.testclient import TestClient
+
         unauthenticated_client = TestClient(client.app)
         response = unauthenticated_client.get("/api/v1/content")
 
@@ -22,6 +23,7 @@ class TestContentEndpoints:
     def test_content_create_requires_auth(self, client):
         """Test that content creation requires authentication."""
         from fastapi.testclient import TestClient
+
         unauthenticated_client = TestClient(client.app)
         response = unauthenticated_client.post(
             "/api/v1/content",
@@ -33,6 +35,7 @@ class TestContentEndpoints:
     def test_content_delete_requires_auth(self, client):
         """Test that content deletion requires authentication."""
         from fastapi.testclient import TestClient
+
         unauthenticated_client = TestClient(client.app)
         response = unauthenticated_client.delete("/api/v1/content/123")
 
@@ -41,6 +44,7 @@ class TestContentEndpoints:
     def test_content_patch_requires_auth(self, client):
         """Test that content patch requires authentication."""
         from fastapi.testclient import TestClient
+
         unauthenticated_client = TestClient(client.app)
         response = unauthenticated_client.patch(
             "/api/v1/content/123",
@@ -67,7 +71,7 @@ class TestLinkExtraction:
         """
 
         mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
 
         # Mock methods
         repo.find_content_by_title = AsyncMock(return_value=None)
@@ -97,7 +101,7 @@ class TestLinkExtraction:
         content = "See [[Python Guide]] for details."
 
         mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
 
         # Mock Python Guide content exists
         target_content = ContentMetadata(
@@ -129,7 +133,7 @@ class TestLinkExtraction:
         content = "See [docs](./README.md) and [guide](guide.md)."
 
         mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
 
         repo.find_content_by_title = AsyncMock(return_value=None)
         repo.delete_links_by_source = AsyncMock()
@@ -154,7 +158,7 @@ class TestLinkExtraction:
         content = "Just plain text with no links."
 
         mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
 
         repo.find_content_by_title = AsyncMock(return_value=None)
         repo.delete_links_by_source = AsyncMock()
@@ -175,7 +179,7 @@ class TestLinkExtraction:
         content = "Link: [[Test]]"
 
         mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
 
         repo.find_content_by_title = AsyncMock(return_value=None)
         repo.delete_links_by_source = AsyncMock()
@@ -206,7 +210,7 @@ class TestLinkExtraction:
         """
 
         mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
 
         repo.find_content_by_title = AsyncMock(return_value=None)
         repo.delete_links_by_source = AsyncMock()
@@ -239,7 +243,7 @@ class TestLinkExtraction:
         """
 
         mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
 
         repo.find_content_by_title = AsyncMock(return_value=None)
         repo.delete_links_by_source = AsyncMock()
@@ -267,7 +271,7 @@ class TestLinksEndpoints:
         from menos.services.storage import SurrealDBRepository
 
         mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
 
         # Mock content exists
         source_content = ContentMetadata(
@@ -330,7 +334,7 @@ class TestLinksEndpoints:
         from menos.services.storage import SurrealDBRepository
 
         mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
 
         source_content = ContentMetadata(
             id="source123",
@@ -371,7 +375,7 @@ class TestLinksEndpoints:
         from menos.services.storage import SurrealDBRepository
 
         mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
 
         repo.get_content = AsyncMock(return_value=None)
 
@@ -390,7 +394,7 @@ class TestLinksEndpoints:
         from menos.services.storage import SurrealDBRepository
 
         mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
 
         # Mock content exists
         target_content = ContentMetadata(
@@ -454,7 +458,7 @@ class TestLinksEndpoints:
         from menos.services.storage import SurrealDBRepository
 
         mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
 
         repo.get_content = AsyncMock(return_value=None)
 
@@ -473,7 +477,7 @@ class TestLinksEndpoints:
         from menos.services.storage import SurrealDBRepository
 
         mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
 
         content = ContentMetadata(
             id="doc123",
@@ -500,7 +504,7 @@ class TestLinksEndpoints:
         from menos.services.storage import SurrealDBRepository
 
         mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
 
         content = ContentMetadata(
             id="doc123",
@@ -527,7 +531,7 @@ class TestLinksEndpoints:
         from menos.services.storage import SurrealDBRepository
 
         mock_db = MagicMock()
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
 
         source_content = ContentMetadata(
             id="source123",

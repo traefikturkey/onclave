@@ -1,4 +1,4 @@
-"""List YouTube videos from SurrealDB.
+"""List YouTube videos from PostgreSQL.
 
 Usage:
     PYTHONPATH=. uv run python scripts/list_videos.py
@@ -14,23 +14,15 @@ from menos.services.di import get_storage_context
 
 
 async def list_videos(limit: int = 50, offset: int = 0) -> None:
-    """List YouTube videos in SurrealDB."""
+    """List YouTube videos in PostgreSQL."""
     async with get_storage_context() as (_minio, repo):
-        # Get total count via raw query
-        count_result = repo.db.query(
-            "SELECT count() FROM content WHERE content_type = 'youtube' GROUP ALL"
-        )
-        raw_count = repo._parse_query_result(count_result)
-        total = raw_count[0]["count"] if raw_count else 0
+        videos, total = await repo.list_content(content_type="youtube", limit=limit, offset=offset)
 
         print(f"\n{'=' * 80}")
-        print("Videos in SurrealDB")
+        print("Videos in PostgreSQL")
         print(f"{'=' * 80}\n")
         print(f"Total videos: {total}")
         print(f"Showing: {offset + 1} to {min(offset + limit, total)}\n")
-
-        # Get videos
-        videos, _ = await repo.list_content(content_type="youtube", limit=limit, offset=offset)
 
         if not videos:
             print("No videos found.\n")
@@ -58,7 +50,7 @@ async def list_videos(limit: int = 50, offset: int = 0) -> None:
 
 def main() -> None:
     """Main entry point."""
-    parser = argparse.ArgumentParser(description="List YouTube videos in SurrealDB")
+    parser = argparse.ArgumentParser(description="List YouTube videos in PostgreSQL")
     parser.add_argument(
         "--limit",
         "-l",

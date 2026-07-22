@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17@sha256:d2ef61f42ef767baa5a1475393303cc235bcd92febd9d7014eddb48b41f3bad0
+    environment:
+      POSTGRES_DB: menos_test
+      POSTGRES_USER: menos_test
+      POSTGRES_PASSWORD: menos_test_password
+    ports:
+      - "127.0.0.1::5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U menos_test -d menos_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

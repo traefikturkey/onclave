@@ -5,9 +5,9 @@ import os
 import httpx
 from fastapi import APIRouter
 from minio import Minio
-from surrealdb import Surreal
 
 from menos.config import settings
+from menos.services.database import PostgresDatabase
 
 router = APIRouter(tags=["health"])
 
@@ -23,16 +23,25 @@ async def health():
     }
 
 
-async def check_surrealdb() -> str:
-    """Check SurrealDB connectivity."""
+async def check_postgres() -> str:
+    """Check PostgreSQL connectivity."""
+    database = PostgresDatabase(
+        host=settings.postgres_host,
+        port=settings.postgres_port,
+        database=settings.postgres_database,
+        user=settings.postgres_user,
+        password=settings.postgres_password,
+        min_size=1,
+        max_size=1,
+    )
     try:
-        db = Surreal(settings.surrealdb_url)
-        db.signin({"username": settings.surrealdb_user, "password": settings.surrealdb_password})
-        db.use(settings.surrealdb_namespace, settings.surrealdb_database)
-        db.query("INFO FOR DB")
+        database.open()
+        database.check()
         return "ok"
-    except Exception as e:
-        return f"error: {e}"
+    except Exception as error:
+        return f"error: {error}"
+    finally:
+        database.close()
 
 
 async def check_s3() -> str:
@@ -66,7 +75,7 @@ async def check_ollama() -> str:
 async def ready():
     """Readiness check - verifies dependencies are available."""
     checks = {
-        "surrealdb": await check_surrealdb(),
+        "postgres": await check_postgres(),
         "s3": await check_s3(),
         "ollama": await check_ollama(),
     }

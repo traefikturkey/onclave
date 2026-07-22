@@ -11,26 +11,22 @@ import pytest
 pytestmark = pytest.mark.smoke
 
 
-class TestSurrealDBConnection:
-    def test_can_connect_and_authenticate(self, surreal_db):
-        """Verify SurrealDB is reachable and accepts credentials."""
-        result = surreal_db.query("SELECT * FROM content LIMIT 1")
+class TestPostgresConnection:
+    def test_can_connect_and_authenticate(self, postgres_db):
+        postgres_db.check()
+
+    def test_can_query_content_table(self, postgres_db):
+        result = postgres_db.fetch_one("SELECT count(*) AS count FROM content")
         assert result is not None
 
-    def test_can_query_content_table(self, surreal_db):
-        result = surreal_db.query("SELECT count() FROM content GROUP ALL")
-        assert result is not None
-
-    def test_can_query_with_filter(self, surreal_db):
-        result = surreal_db.query(
-            "SELECT * FROM content WHERE content_type = 'youtube' LIMIT 1"
+    def test_can_query_with_filter(self, postgres_db):
+        result = postgres_db.fetch_all(
+            "SELECT * FROM content WHERE content_type = %s LIMIT 1", ("youtube",)
         )
         assert result is not None
 
-    def test_can_query_with_order_by(self, surreal_db):
-        result = surreal_db.query(
-            "SELECT * FROM content ORDER BY created_at DESC LIMIT 1"
-        )
+    def test_can_query_with_order_by(self, postgres_db):
+        result = postgres_db.fetch_all("SELECT * FROM content ORDER BY created_at DESC LIMIT 1")
         assert result is not None
 
 
@@ -43,9 +39,7 @@ class TestMinIOConnection:
 
     def test_can_read_a_file(self, minio_client):
         """Verify we can download a transcript file."""
-        objects = list(
-            minio_client.list_objects("menos", prefix="youtube/", recursive=False)
-        )
+        objects = list(minio_client.list_objects("menos", prefix="youtube/", recursive=False))
         assert len(objects) > 0, "No youtube/ prefixes found in bucket"
 
         # Get first video directory
@@ -76,7 +70,7 @@ class TestAPIConnection:
 
 
 class TestQueryScriptEndToEnd:
-    """Tests for query.py script (requires PYTHONPATH and SurrealDB access)."""
+    """Tests for query.py against PostgreSQL."""
 
     @staticmethod
     def _script_env() -> dict[str, str]:

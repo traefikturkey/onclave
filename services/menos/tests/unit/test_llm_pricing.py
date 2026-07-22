@@ -10,15 +10,14 @@ from menos.services.llm_pricing import LLMPricingService
 
 def _build_repo() -> MagicMock:
     repo = MagicMock()
-    repo.db = MagicMock()
+    repo.get_pricing_snapshot.return_value = None
+    repo.upsert_pricing_snapshot = MagicMock()
     return repo
 
 
 @pytest.mark.asyncio
 async def test_initialize_bootstraps_snapshot_when_none_exists():
     repo = _build_repo()
-    repo.db.select.return_value = None
-
     service = LLMPricingService(repo)
     await service.initialize()
 
@@ -31,8 +30,6 @@ async def test_initialize_bootstraps_snapshot_when_none_exists():
 @pytest.mark.asyncio
 async def test_unknown_model_returns_zero_cost_pricing():
     repo = _build_repo()
-    repo.db.select.return_value = None
-
     service = LLMPricingService(repo)
     await service.initialize()
 
@@ -44,7 +41,7 @@ async def test_unknown_model_returns_zero_cost_pricing():
 async def test_metadata_marks_snapshot_stale_after_threshold():
     repo = _build_repo()
     stale_at = datetime.now(UTC) - timedelta(days=8)
-    repo.db.select.return_value = {
+    repo.get_pricing_snapshot.return_value = {
         "refreshed_at": stale_at.isoformat(),
         "source": "persisted",
         "pricing": {"openai": {"gpt-4o-mini": {"input": 0.1, "output": 0.2}}},
@@ -63,7 +60,7 @@ async def test_metadata_marks_snapshot_stale_after_threshold():
 async def test_refresh_failure_keeps_last_good_snapshot():
     repo = _build_repo()
     old_timestamp = datetime(2026, 1, 1, tzinfo=UTC)
-    repo.db.select.return_value = {
+    repo.get_pricing_snapshot.return_value = {
         "refreshed_at": old_timestamp.isoformat(),
         "source": "persisted",
         "pricing": {"openai": {"gpt-4o-mini": {"input": 1.0, "output": 2.0}}},

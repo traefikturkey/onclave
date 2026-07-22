@@ -22,12 +22,14 @@ class Settings(BaseSettings):
     # Menos API (for client scripts)
     api_base_url: str = "http://localhost:8000"
 
-    # SurrealDB
-    surrealdb_url: str = "http://localhost:8000"
-    surrealdb_user: str = "root"
-    surrealdb_password: str
-    surrealdb_namespace: str = "menos"
-    surrealdb_database: str = "menos"
+    # PostgreSQL
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_user: str = "menos"
+    postgres_password: str
+    postgres_database: str = "menos"
+    postgres_pool_min_size: int = 1
+    postgres_pool_max_size: int = 10
 
     # S3-compatible storage
     s3_endpoint_url: str = "localhost:9000"

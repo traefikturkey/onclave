@@ -6,7 +6,7 @@ import time
 
 from menos.services.llm import LLMProvider
 from menos.services.llm_pricing import LLMPricingService
-from menos.services.storage import SurrealDBRepository
+from menos.services.storage import PostgresRepository
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ class MeteringLLMProvider:
     def __init__(
         self,
         provider: LLMProvider,
-        repo: SurrealDBRepository,
+        repo: PostgresRepository,
         context_prefix: str,
         provider_name: str,
         model_name: str,
@@ -97,7 +97,7 @@ class MeteringLLMProvider:
         await self.provider.close()
 
     async def _write_usage_record(self, usage_record: dict) -> None:
-        self.repo.db.create("llm_usage", usage_record)
+        self.repo.record_llm_usage(usage_record)
 
     def _on_write_done(self, task: asyncio.Task) -> None:
         try:

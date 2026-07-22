@@ -7,10 +7,10 @@ from urllib.parse import urlparse
 import httpx
 import pytest
 from minio import Minio
-from surrealdb import Surreal
 
 from menos.client.signer import RequestSigner
 from menos.config import settings
+from menos.services.database import PostgresDatabase
 
 
 @pytest.fixture(scope="session")
@@ -177,23 +177,26 @@ def smoke_first_entity_id(smoke_authed_get):
 
 
 @pytest.fixture(scope="session")
-def surreal_db(smoke_base_url):
-    """Direct SurrealDB connection, derived from API base URL host.
-
-    Uses SMOKE_SURREALDB_PORT (default 8080) and credentials from menos.config.
-    """
+def postgres_db(smoke_base_url):
+    """Direct PostgreSQL connection derived from the API host."""
     parsed = urlparse(smoke_base_url)
-    host = parsed.hostname
-    port = os.environ.get("SMOKE_SURREALDB_PORT", "8080")
-    surreal_url = f"http://{host}:{port}"
-
+    database = PostgresDatabase(
+        host=parsed.hostname or settings.postgres_host,
+        port=int(os.environ.get("SMOKE_POSTGRES_PORT", settings.postgres_port)),
+        database=settings.postgres_database,
+        user=settings.postgres_user,
+        password=settings.postgres_password,
+        min_size=1,
+        max_size=1,
+    )
     try:
-        db = Surreal(surreal_url)
-        db.signin({"username": settings.surrealdb_user, "password": settings.surrealdb_password})
-        db.use(settings.surrealdb_namespace, settings.surrealdb_database)
-        return db
-    except Exception as e:
-        pytest.skip(f"Cannot connect to SurrealDB at {surreal_url}: {e}")
+        database.open()
+        database.check()
+        yield database
+    except Exception as error:
+        pytest.skip(f"Cannot connect to PostgreSQL: {error}")
+    finally:
+        database.close()
 
 
 @pytest.fixture(scope="session")

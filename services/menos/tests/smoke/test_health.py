@@ -29,6 +29,6 @@ class TestHealthSmoke:
         data = response.json()
         assert "checks" in data
         assert isinstance(data["checks"], dict)
-        assert "surrealdb" in data["checks"]
-        assert "minio" in data["checks"]
+        assert "postgres" in data["checks"]
+        assert "s3" in data["checks"]
         assert "ollama" in data["checks"]

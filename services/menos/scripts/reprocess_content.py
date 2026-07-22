@@ -22,10 +22,10 @@ import logging
 from datetime import datetime
 
 from minio import Minio
-from surrealdb import Surreal
 
 from menos.config import settings
 from menos.models import LinkModel
+from menos.services.di import get_postgres_repo
 from menos.services.frontmatter import FrontmatterParser
 from menos.services.linking import LinkExtractor
 from menos.services.storage import MinIOStorage, SurrealDBRepository
@@ -412,7 +412,7 @@ def _create_pipeline_orchestrator(surreal_repo: SurrealDBRepository):
         )
 
         # Create job repository
-        job_repo = JobRepository(surreal_repo.db)
+        job_repo = JobRepository(surreal_repo)
 
         # Create callback service
         callback_service = CallbackService(settings)
@@ -468,23 +468,11 @@ async def main():
     )
     minio_storage = MinIOStorage(minio_client, settings.s3_bucket)
 
-    # Initialize SurrealDB repository
-    logger.info(f"Connecting to SurrealDB at {settings.surrealdb_url}")
-    db = Surreal(settings.surrealdb_url)
-    surreal_repo = SurrealDBRepository(
-        db=db,
-        namespace=settings.surrealdb_namespace,
-        database=settings.surrealdb_database,
-        username=settings.surrealdb_user,
-        password=settings.surrealdb_password,
-    )
-
     try:
-        await surreal_repo.connect()
-        logger.info("Connected to SurrealDB successfully")
+        surreal_repo = await get_postgres_repo()
+        logger.info("Connected to PostgreSQL successfully")
     except Exception as e:
-        logger.error(f"Failed to connect to SurrealDB: {e}")
-        logger.error("Please ensure SurrealDB is running and accessible")
+        logger.error("Failed to connect to PostgreSQL: %s", e)
         return
 
     # Create pipeline orchestrator (if not skipping entities)

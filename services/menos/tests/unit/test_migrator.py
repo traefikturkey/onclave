@@ -1,253 +1,128 @@
-"""Unit tests for migration service."""
+"""Unit tests for transactional PostgreSQL migrations."""
 
-from unittest.mock import MagicMock
+from contextlib import nullcontext
 
 import pytest
 
 from menos.services.migrator import MigrationService
 
 
-class TestMigrationDiscovery:
-    """Tests for migration discovery and ordering."""
-
-    def test_discover_valid_migration_files(self, tmp_path):
-        """Migration discovery finds .surql files matching pattern."""
-        migrations_dir = tmp_path / "migrations"
-        migrations_dir.mkdir()
-
-        # Create valid migrations
-        (migrations_dir / "20260201-100000_initial.surql").write_text("DEFINE TABLE test;")
-        (migrations_dir / "20260201-100100_add_field.surql").write_text("DEFINE FIELD;")
-
-        # Create invalid files (should be ignored)
-        (migrations_dir / "readme.txt").write_text("not a migration")
-        (migrations_dir / "invalid_name.sql").write_text("invalid")
+class _Cursor:
+    def __init__(self, rows=None, error_on=None):
+        self.rows = rows or []
+        self.error_on = error_on
+        self.executed = []
 
-        mock_db = MagicMock()
-        migrator = MigrationService(mock_db, migrations_dir)
+    def __enter__(self):
+        return self
 
-        pending = migrator._get_pending_migrations()
-        names = [name for name, _ in pending]
+    def __exit__(self, *_args):
+        return False
 
-        assert len(names) == 2
-        assert "20260201-100000_initial" in names
-        assert "20260201-100100_add_field" in names
+    def execute(self, statement, params=None):
+        self.executed.append((statement, params))
+        if self.error_on and self.error_on in statement:
+            raise ValueError("bad SQL")
 
-    def test_pending_migrations_sorted_chronologically(self, tmp_path):
-        """Pending migrations are sorted by timestamp prefix."""
-        migrations_dir = tmp_path / "migrations"
-        migrations_dir.mkdir()
+    def fetchall(self):
+        return self.rows
 
-        # Create migrations out of order
-        (migrations_dir / "20260201-100100_second.surql").write_text("DEFINE FIELD;")
-        (migrations_dir / "20260201-100000_first.surql").write_text("DEFINE TABLE;")
-        (migrations_dir / "20260201-100200_third.surql").write_text("DEFINE INDEX;")
 
-        mock_db = MagicMock()
-        migrator = MigrationService(mock_db, migrations_dir)
+class _Connection:
+    def __init__(self, cursor):
+        self._cursor = cursor
 
-        pending = migrator._get_pending_migrations()
-        names = [name for name, _ in pending]
+    def __enter__(self):
+        return self
 
-        assert names == [
-            "20260201-100000_first",
-            "20260201-100100_second",
-            "20260201-100200_third",
-        ]
+    def __exit__(self, *_args):
+        return False
 
-    def test_get_applied_migrations_empty(self, tmp_path):
-        """_get_applied_migrations returns empty set when no rows."""
-        migrations_dir = tmp_path / "migrations"
-        migrations_dir.mkdir()
+    def cursor(self):
+        return self._cursor
 
-        mock_db = MagicMock()
-        mock_db.query.return_value = []
+    def transaction(self):
+        return nullcontext()
 
-        migrator = MigrationService(mock_db, migrations_dir)
-        applied = migrator._get_applied_migrations()
 
-        assert applied == set()
+class _Database:
+    def __init__(self, cursor):
+        self._connection = _Connection(cursor)
 
-    def test_get_applied_migrations_old_format(self, tmp_path):
-        """_get_applied_migrations handles old SurrealDB response format."""
-        migrations_dir = tmp_path / "migrations"
-        migrations_dir.mkdir()
+    def connection(self):
+        return self._connection
 
-        mock_db = MagicMock()
-        mock_db.query.return_value = [
-            {
-                "result": [
-                    {"name": "20260201-100000_initial"},
-                    {"name": "20260201-100100_add_field"},
-                ]
-            }
-        ]
 
-        migrator = MigrationService(mock_db, migrations_dir)
-        applied = migrator._get_applied_migrations()
+def _migration(directory, name, sql="SELECT 1;"):
+    path = directory / f"{name}.sql"
+    path.write_text(sql, encoding="utf-8")
+    return path
 
-        assert applied == {"20260201-100000_initial", "20260201-100100_add_field"}
 
-    def test_get_applied_migrations_new_format(self, tmp_path):
-        """_get_applied_migrations handles new SurrealDB response format."""
-        migrations_dir = tmp_path / "migrations"
-        migrations_dir.mkdir()
+def test_migration_files_are_filtered_and_sorted(tmp_path):
+    _migration(tmp_path, "20260201-100100_second")
+    _migration(tmp_path, "20260201-100000_first")
+    (tmp_path / "invalid.sql").write_text("SELECT 1;", encoding="utf-8")
+    service = MigrationService(_Database(_Cursor()), tmp_path)
+    assert [p.stem for p in service._migration_files()] == [
+        "20260201-100000_first",
+        "20260201-100100_second",
+    ]
 
-        mock_db = MagicMock()
-        mock_db.query.return_value = [
-            {"name": "20260201-100000_initial"},
-            {"name": "20260201-100100_add_field"},
-        ]
 
-        migrator = MigrationService(mock_db, migrations_dir)
-        applied = migrator._get_applied_migrations()
+@pytest.mark.parametrize("create_directory", [False, True])
+def test_missing_or_empty_migration_directory_is_fatal(tmp_path, create_directory):
+    directory = tmp_path / "migrations"
+    if create_directory:
+        directory.mkdir()
+    with pytest.raises(RuntimeError, match="migration"):
+        MigrationService(_Database(_Cursor()), directory)._migration_files()
 
-        assert applied == {"20260201-100000_initial", "20260201-100100_add_field"}
 
-    def test_pending_excludes_applied_migrations(self, tmp_path):
-        """Pending migrations exclude already-applied ones."""
-        migrations_dir = tmp_path / "migrations"
-        migrations_dir.mkdir()
+def test_applied_creates_tracking_table_and_reads_names(tmp_path):
+    cursor = _Cursor(rows=[{"name": "20260201-100000_initial"}])
+    service = MigrationService(_Database(cursor), tmp_path)
+    assert service._applied() == {"20260201-100000_initial"}
+    assert "CREATE TABLE IF NOT EXISTS schema_migration" in cursor.executed[0][0]
+    assert cursor.executed[1] == ("SELECT name FROM schema_migration", None)
 
-        (migrations_dir / "20260201-100000_initial.surql").write_text("DEFINE TABLE;")
-        (migrations_dir / "20260201-100100_add_field.surql").write_text("DEFINE FIELD;")
 
-        mock_db = MagicMock()
-        mock_db.query.return_value = [{"name": "20260201-100000_initial"}]
+def test_migrate_applies_pending_in_order_and_records_each(tmp_path, monkeypatch):
+    _migration(tmp_path, "20260201-100100_second", "SELECT 2;")
+    _migration(tmp_path, "20260201-100000_first", "SELECT 1;")
+    cursor = _Cursor()
+    service = MigrationService(_Database(cursor), tmp_path)
+    monkeypatch.setattr(service, "_applied", lambda: set())
 
-        migrator = MigrationService(mock_db, migrations_dir)
-        pending = migrator._get_pending_migrations()
-        names = [name for name, _ in pending]
+    assert service.migrate() == ["20260201-100000_first", "20260201-100100_second"]
+    inserts = [call for call in cursor.executed if call[0].startswith("INSERT INTO")]
+    assert [call[1][0] for call in inserts] == [
+        "20260201-100000_first",
+        "20260201-100100_second",
+    ]
 
-        assert names == ["20260201-100100_add_field"]
 
-    def test_pending_migrations_empty_directory(self, tmp_path):
-        """_get_pending_migrations returns empty list for missing directory."""
-        migrations_dir = tmp_path / "migrations"
+def test_migrate_skips_applied_files(tmp_path, monkeypatch):
+    _migration(tmp_path, "20260201-100000_initial")
+    service = MigrationService(_Database(_Cursor()), tmp_path)
+    monkeypatch.setattr(service, "_applied", lambda: {"20260201-100000_initial"})
+    assert service.migrate() == []
 
-        mock_db = MagicMock()
-        migrator = MigrationService(mock_db, migrations_dir)
 
-        pending = migrator._get_pending_migrations()
-
-        assert pending == []
-
-
-class TestMigrationExecution:
-    """Tests for migration execution and error handling."""
-
-    def test_migrate_executes_pending(self, tmp_path):
-        """migrate() executes all pending migrations."""
-        migrations_dir = tmp_path / "migrations"
-        migrations_dir.mkdir()
-
-        (migrations_dir / "20260201-100000_initial.surql").write_text("DEFINE TABLE test;")
-        (migrations_dir / "20260201-100100_add_field.surql").write_text("DEFINE FIELD name;")
-
-        mock_db = MagicMock()
-        mock_db.query.return_value = []
-
-        migrator = MigrationService(mock_db, migrations_dir)
-        applied = migrator.migrate()
-
-        assert len(applied) == 2
-        assert "20260201-100000_initial" in applied
-        assert "20260201-100100_add_field" in applied
-
-    def test_migrate_records_applied(self, tmp_path):
-        """migrate() records applied migrations."""
-        migrations_dir = tmp_path / "migrations"
-        migrations_dir.mkdir()
-
-        (migrations_dir / "20260201-100000_initial.surql").write_text("DEFINE TABLE test;")
-
-        mock_db = MagicMock()
-        mock_db.query.return_value = []
-
-        migrator = MigrationService(mock_db, migrations_dir)
-        migrator.migrate()
-
-        mock_db.create.assert_called_once()
-        call_args = mock_db.create.call_args
-        assert call_args[0][0] == "_migrations"
-        assert call_args[0][1]["name"] == "20260201-100000_initial"
-
-    def test_migrate_no_pending(self, tmp_path):
-        """migrate() returns empty list when no pending migrations."""
-        migrations_dir = tmp_path / "migrations"
-        migrations_dir.mkdir()
-
-        (migrations_dir / "20260201-100000_initial.surql").write_text("DEFINE TABLE test;")
-
-        mock_db = MagicMock()
-        mock_db.query.return_value = [{"name": "20260201-100000_initial"}]
-
-        migrator = MigrationService(mock_db, migrations_dir)
-        applied = migrator.migrate()
-
-        assert applied == []
-
-    def test_migrate_failure_raises_runtime_error(self, tmp_path):
-        """migrate() raises RuntimeError on migration failure."""
-        migrations_dir = tmp_path / "migrations"
-        migrations_dir.mkdir()
-
-        (migrations_dir / "20260201-100000_initial.surql").write_text("INVALID SQL;")
-
-        mock_db = MagicMock()
-        mock_db.query.side_effect = [
-            None,  # _ensure_migrations_table query
-            [],  # _get_applied_migrations query
-            Exception("SQL syntax error"),  # migration query fails
-        ]
-
-        migrator = MigrationService(mock_db, migrations_dir)
-
-        with pytest.raises(RuntimeError, match="Migration.*failed"):
-            migrator.migrate()
-
-    def test_migrate_failure_does_not_record(self, tmp_path):
-        """Failed migration is not recorded; subsequent migrations skipped."""
-        migrations_dir = tmp_path / "migrations"
-        migrations_dir.mkdir()
-
-        (migrations_dir / "20260201-100000_initial.surql").write_text("INVALID SQL;")
-        (migrations_dir / "20260201-100100_other.surql").write_text("VALID SQL;")
-
-        mock_db = MagicMock()
-        mock_db.query.side_effect = [
-            None,  # _ensure_migrations_table query
-            [],  # _get_applied_migrations query
-            Exception("SQL syntax error"),  # migration query fails
-        ]
-
-        migrator = MigrationService(mock_db, migrations_dir)
-
-        with pytest.raises(RuntimeError):
-            migrator.migrate()
-
-        mock_db.create.assert_not_called()
-
-    def test_status_returns_applied_and_pending(self, tmp_path):
-        """status() returns sorted applied and pending lists."""
-        migrations_dir = tmp_path / "migrations"
-        migrations_dir.mkdir()
-
-        (migrations_dir / "20260201-100000_initial.surql").write_text("DEFINE TABLE;")
-        (migrations_dir / "20260201-100100_add_field.surql").write_text("DEFINE FIELD;")
-        (migrations_dir / "20260201-100200_index.surql").write_text("DEFINE INDEX;")
-
-        mock_db = MagicMock()
-        mock_db.query.return_value = [
-            {"name": "20260201-100100_add_field"},
-            {"name": "20260201-100000_initial"},
-        ]
-
-        migrator = MigrationService(mock_db, migrations_dir)
-        status = migrator.status()
-
-        assert status["applied"] == [
-            "20260201-100000_initial",
-            "20260201-100100_add_field",
-        ]
-        assert status["pending"] == ["20260201-100200_index"]
+def test_migrate_wraps_sql_failure(tmp_path, monkeypatch):
+    _migration(tmp_path, "20260201-100000_initial", "INVALID SQL;")
+    service = MigrationService(_Database(_Cursor(error_on="INVALID")), tmp_path)
+    monkeypatch.setattr(service, "_applied", lambda: set())
+    with pytest.raises(RuntimeError, match="20260201-100000_initial failed"):
+        service.migrate()
+
+
+def test_status_sorts_applied_and_identifies_pending(tmp_path, monkeypatch):
+    _migration(tmp_path, "20260201-100000_first")
+    _migration(tmp_path, "20260201-100100_second")
+    service = MigrationService(_Database(_Cursor()), tmp_path)
+    monkeypatch.setattr(service, "_applied", lambda: {"20260201-100000_first"})
+    assert service.status() == {
+        "applied": ["20260201-100000_first"],
+        "pending": ["20260201-100100_second"],
+    }

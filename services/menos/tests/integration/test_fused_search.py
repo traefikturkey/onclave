@@ -13,8 +13,7 @@ class TestVectorSearchFilters:
         self, authed_client, mock_surreal_repo, mock_embedding_service
     ):
         mock_embedding_service.embed_query = AsyncMock(return_value=[0.1] * 8)
-        mock_surreal_repo.db = MagicMock()
-        mock_surreal_repo.db.query = MagicMock(return_value=[{"result": []}])
+        mock_surreal_repo.vector_search = AsyncMock(return_value=[])
 
         response = authed_client.post(
             "/api/v1/search",
@@ -22,16 +21,17 @@ class TestVectorSearchFilters:
         )
 
         assert response.status_code == 200
-        query_str, params = mock_surreal_repo.db.query.call_args[0]
-        assert "content_id.tier IN $valid_tiers" in query_str
-        assert params["valid_tiers"] == ["S", "A", "B"]
+        assert mock_surreal_repo.vector_search.call_args.kwargs["valid_tiers"] == [
+            "S",
+            "A",
+            "B",
+        ]
 
     def test_vector_search_combines_tier_tags_and_content_type(
         self, authed_client, mock_surreal_repo, mock_embedding_service
     ):
         mock_embedding_service.embed_query = AsyncMock(return_value=[0.1] * 8)
-        mock_surreal_repo.db = MagicMock()
-        mock_surreal_repo.db.query = MagicMock(return_value=[{"result": []}])
+        mock_surreal_repo.vector_search = AsyncMock(return_value=[])
 
         response = authed_client.post(
             "/api/v1/search",
@@ -45,10 +45,7 @@ class TestVectorSearchFilters:
         )
 
         assert response.status_code == 200
-        query_str, params = mock_surreal_repo.db.query.call_args[0]
-        assert "content_id.tags CONTAINSANY $tags" in query_str
-        assert "content_id.content_type = $content_type" in query_str
-        assert "content_id.tier IN $valid_tiers" in query_str
+        params = mock_surreal_repo.vector_search.call_args.kwargs
         assert params["tags"] == ["python", "llm"]
         assert params["content_type"] == "youtube"
         assert params["valid_tiers"] == ["S", "A"]

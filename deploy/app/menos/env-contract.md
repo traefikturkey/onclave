@@ -7,7 +7,7 @@ credentials, public authorization keys, networking, and persistent storage.
 ## Required images
 
 - `MENOS_API_IMAGE`
-- `SURREALDB_IMAGE`
+- `POSTGRES_IMAGE`
 - `MINIO_IMAGE`
 - `OLLAMA_IMAGE`
 - `SEARXNG_IMAGE`
@@ -17,7 +17,7 @@ Production values should use `tag@sha256:digest` references.
 
 ## Required credentials
 
-- `SURREALDB_PASSWORD`
+- `POSTGRES_PASSWORD`
 - `S3_ACCESS_KEY`
 - `S3_SECRET_KEY`
 - `SEARXNG_SECRET`
@@ -27,6 +27,7 @@ Production values should use `tag@sha256:digest` references.
 - `OPENROUTER_API_KEY`
 - `ANTHROPIC_API_KEY`
 
+`POSTGRES_DATABASE` and `POSTGRES_USER` default to `menos`.
 `OPENAI_API_KEY`, `CALLBACK_URL`, and `CALLBACK_SECRET` are optional.
 
 ## Public authorization keys

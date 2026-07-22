@@ -65,26 +65,18 @@ class TestGetContentStatsRepository:
     @pytest.mark.asyncio
     async def test_get_content_stats_aggregates(self):
         mock_db = MagicMock()
-        mock_db.query.side_effect = [
+        mock_db.fetch_all.side_effect = [
             [
-                {
-                    "result": [
-                        {"count": 5, "status": "completed"},
-                        {"count": 3, "status": "pending"},
-                    ]
-                }
+                {"count": 5, "status": "completed"},
+                {"count": 3, "status": "pending"},
             ],
             [
-                {
-                    "result": [
-                        {"count": 4, "content_type": "document"},
-                        {"count": 4, "content_type": "youtube"},
-                    ]
-                }
+                {"count": 4, "content_type": "document"},
+                {"count": 4, "content_type": "youtube"},
             ],
         ]
 
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
         result = await repo.get_content_stats()
 
         assert result["total"] == 8
@@ -94,12 +86,12 @@ class TestGetContentStatsRepository:
     @pytest.mark.asyncio
     async def test_get_content_stats_none_status(self):
         mock_db = MagicMock()
-        mock_db.query.side_effect = [
-            [{"result": [{"count": 2, "status": None}]}],
-            [{"result": []}],
+        mock_db.fetch_all.side_effect = [
+            [{"count": 2, "status": "none"}],
+            [],
         ]
 
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
         result = await repo.get_content_stats()
 
         assert result["total"] == 2
@@ -109,9 +101,9 @@ class TestGetContentStatsRepository:
     @pytest.mark.asyncio
     async def test_get_content_stats_empty(self):
         mock_db = MagicMock()
-        mock_db.query.side_effect = [[], []]
+        mock_db.fetch_all.side_effect = [[], []]
 
-        repo = SurrealDBRepository(mock_db, "test-ns", "test-db")
+        repo = SurrealDBRepository(mock_db)
         result = await repo.get_content_stats()
 
         assert result["total"] == 0
@@ -139,9 +131,7 @@ class TestContentEntitiesEndpoint:
             edge_type=EdgeType.USES,
             confidence=0.9,
         )
-        mock_surreal_repo.get_entities_for_content = AsyncMock(
-            return_value=[(entity, edge)]
-        )
+        mock_surreal_repo.get_entities_for_content = AsyncMock(return_value=[(entity, edge)])
 
         resp = authed_client.get("/api/v1/content/c1/entities")
         assert resp.status_code == 200
@@ -154,9 +144,7 @@ class TestContentEntitiesEndpoint:
         assert item["edge_type"] == "uses"
         assert item["confidence"] == 0.9
 
-    def test_entities_404_missing_content(
-        self, authed_client, mock_surreal_repo
-    ):
+    def test_entities_404_missing_content(self, authed_client, mock_surreal_repo):
         mock_surreal_repo.get_content.return_value = None
 
         resp = authed_client.get("/api/v1/content/missing/entities")
@@ -164,9 +152,7 @@ class TestContentEntitiesEndpoint:
 
     def test_entities_empty(self, authed_client, mock_surreal_repo):
         mock_surreal_repo.get_content.return_value = _make_content()
-        mock_surreal_repo.get_entities_for_content = AsyncMock(
-            return_value=[]
-        )
+        mock_surreal_repo.get_entities_for_content = AsyncMock(return_value=[])
 
         resp = authed_client.get("/api/v1/content/c1/entities")
         assert resp.status_code == 200
@@ -178,9 +164,7 @@ class TestContentEntitiesEndpoint:
 class TestContentChunksEndpoint:
     """Tests for GET /api/v1/content/{content_id}/chunks."""
 
-    def test_chunks_happy_path_no_embeddings(
-        self, authed_client, mock_surreal_repo
-    ):
+    def test_chunks_happy_path_no_embeddings(self, authed_client, mock_surreal_repo):
         mock_surreal_repo.get_content.return_value = _make_content()
 
         chunk = ChunkModel(
@@ -202,9 +186,7 @@ class TestContentChunksEndpoint:
         assert item["text"] == "Some chunk text"
         assert item["embedding"] is None
 
-    def test_chunks_with_embeddings(
-        self, authed_client, mock_surreal_repo
-    ):
+    def test_chunks_with_embeddings(self, authed_client, mock_surreal_repo):
         mock_surreal_repo.get_content.return_value = _make_content()
 
         embedding = [0.1] * 10
@@ -225,9 +207,7 @@ class TestContentChunksEndpoint:
         data = resp.json()
         assert data["items"][0]["embedding"] == embedding
 
-    def test_chunks_404_missing_content(
-        self, authed_client, mock_surreal_repo
-    ):
+    def test_chunks_404_missing_content(self, authed_client, mock_surreal_repo):
         mock_surreal_repo.get_content.return_value = None
 
         resp = authed_client.get("/api/v1/content/missing/chunks")

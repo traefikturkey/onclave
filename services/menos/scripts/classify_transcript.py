@@ -7,11 +7,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from minio import Minio
-from surrealdb import Surreal
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from menos.config import settings  # noqa: E402
+from menos.services.di import get_storage_context  # noqa: E402
 from menos.services.llm import OllamaLLMProvider  # noqa: E402
 from menos.services.llm_providers import AnthropicProvider, OpenRouterProvider  # noqa: E402
 
@@ -106,20 +106,19 @@ def parse_results(result):
     return [_stringify_record_ids(dict(item)) for item in raw_items]
 
 
-def get_latest_youtube() -> dict:
-    """Fetch the most recent YouTube content record from SurrealDB."""
-    url = settings.surrealdb_url.replace("ws://", "http://").replace("wss://", "https://")
-    db = Surreal(url)
-    db.signin({"username": settings.surrealdb_user, "password": settings.surrealdb_password})
-    db.use(settings.surrealdb_namespace, settings.surrealdb_database)
-    result = db.query(
-        "SELECT * FROM content WHERE content_type = 'youtube' ORDER BY created_at DESC LIMIT 1"
-    )
-    rows = parse_results(result)
+async def get_latest_youtube() -> dict:
+    """Fetch the most recent YouTube content record from PostgreSQL."""
+    async with get_storage_context() as (_storage, repository):
+        rows, _total = await repository.list_content(
+            content_type="youtube",
+            limit=1,
+            order_by="created_at DESC",
+            exclude_tags=[],
+        )
     if not rows:
         print("No YouTube content found in database.", file=sys.stderr)
         sys.exit(1)
-    return rows[0]
+    return rows[0].model_dump(mode="json")
 
 
 def download_transcript(file_path: str) -> str:
@@ -203,8 +202,8 @@ timestamp: {timestamp}
 
 async def main():
     # Step 1: Get latest YouTube content
-    print("Fetching latest YouTube content from SurrealDB...")
-    record = get_latest_youtube()
+    print("Fetching latest YouTube content from PostgreSQL...")
+    record = await get_latest_youtube()
     title = record.get("title", "Unknown")
     video_id = record.get("source_id", record.get("id", "unknown"))
     file_path = record.get("file_path", "")

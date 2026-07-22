@@ -8,7 +8,7 @@ COPY pyproject.toml uv.lock ./
 COPY menos/ menos/
 COPY migrations/ migrations/
 
-RUN uv sync --locked --exclude-newer P3D --no-dev --no-editable
+RUN uv sync --locked --no-dev --no-editable
 
 ARG GIT_SHA=unknown
 ARG BUILD_DATE=unknown

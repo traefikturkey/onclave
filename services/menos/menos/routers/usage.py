@@ -59,77 +59,6 @@ def _to_usage_query(
     )
 
 
-def _build_filters(query: UsageQuery) -> tuple[str, dict[str, Any]]:
-    filters: list[str] = []
-    params: dict[str, Any] = {}
-
-    if query.start_date is not None:
-        filters.append("created_at >= $start_date")
-        params["start_date"] = query.start_date
-    if query.end_date is not None:
-        filters.append("created_at <= $end_date")
-        params["end_date"] = query.end_date
-    if query.provider:
-        filters.append("provider = $provider")
-        params["provider"] = query.provider
-    if query.model:
-        filters.append("model = $model")
-        params["model"] = query.model
-
-    where_clause = ""
-    if filters:
-        where_clause = " WHERE " + " AND ".join(filters)
-
-    return where_clause, params
-
-
-def _parse_query_result(result: Any) -> list[dict[str, Any]]:
-    if not result or not isinstance(result, list):
-        return []
-    first = result[0]
-    if isinstance(first, dict) and "result" in first:
-        rows = first["result"]
-        if isinstance(rows, list):
-            return rows
-        return []
-    return [row for row in result if isinstance(row, dict)]
-
-
-def _fetch_totals(surreal_repo: SurrealDBRepository, where_clause: str, params: dict) -> dict:
-    result = surreal_repo.db.query(
-        f"""
-        SELECT
-            count() AS total_calls,
-            math::sum(input_tokens) AS total_input_tokens,
-            math::sum(output_tokens) AS total_output_tokens,
-            math::sum(estimated_cost) AS estimated_total_cost
-        FROM llm_usage{where_clause}
-        """,
-        params,
-    )
-    rows = _parse_query_result(result)
-    return rows[0] if rows else {}
-
-
-def _fetch_breakdown(surreal_repo: SurrealDBRepository, where_clause: str, params: dict) -> list:
-    result = surreal_repo.db.query(
-        f"""
-        SELECT
-            provider,
-            model,
-            count() AS calls,
-            math::sum(input_tokens) AS input_tokens,
-            math::sum(output_tokens) AS output_tokens,
-            math::sum(estimated_cost) AS estimated_cost
-        FROM llm_usage{where_clause}
-        GROUP BY provider, model
-        ORDER BY estimated_cost DESC
-        """,
-        params,
-    )
-    return _parse_query_result(result)
-
-
 def _to_breakdown_item(item: dict) -> UsageBreakdownItem:
     return UsageBreakdownItem(
         provider=str(item.get("provider") or ""),
@@ -150,9 +79,12 @@ async def get_usage(
 ):
     """Return aggregated LLM usage totals and provider/model breakdown."""
     del key_id
-    where_clause, params = _build_filters(query)
-    totals = _fetch_totals(surreal_repo, where_clause, params)
-    breakdown_rows = _fetch_breakdown(surreal_repo, where_clause, params)
+    totals = surreal_repo.usage_totals(
+        query.start_date, query.end_date, query.provider, query.model
+    )
+    breakdown_rows = surreal_repo.usage_breakdown(
+        query.start_date, query.end_date, query.provider, query.model
+    )
     return UsageResponse(
         total_calls=int(totals.get("total_calls") or 0),
         total_input_tokens=int(totals.get("total_input_tokens") or 0),

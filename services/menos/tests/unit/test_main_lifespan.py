@@ -22,7 +22,7 @@ async def test_log_version_drift_logs_stale_items(monkeypatch):
 
     mock_logger = MagicMock()
     monkeypatch.setattr(main, "get_settings", lambda: settings)
-    monkeypatch.setattr(main, "get_surreal_repo", AsyncMock(return_value=repo))
+    monkeypatch.setattr(main, "get_postgres_repo", AsyncMock(return_value=repo))
     monkeypatch.setattr(main, "logger", mock_logger)
 
     await main._log_version_drift()
@@ -49,7 +49,7 @@ async def test_log_version_drift_logs_no_stale_content(monkeypatch):
 
     mock_logger = MagicMock()
     monkeypatch.setattr(main, "get_settings", lambda: settings)
-    monkeypatch.setattr(main, "get_surreal_repo", AsyncMock(return_value=repo))
+    monkeypatch.setattr(main, "get_postgres_repo", AsyncMock(return_value=repo))
     monkeypatch.setattr(main, "logger", mock_logger)
 
     await main._log_version_drift()
@@ -67,7 +67,7 @@ async def test_log_version_drift_warns_and_continues_on_error(monkeypatch):
     mock_logger = MagicMock()
 
     monkeypatch.setattr(main, "get_settings", lambda: settings)
-    monkeypatch.setattr(main, "get_surreal_repo", AsyncMock(side_effect=RuntimeError("boom")))
+    monkeypatch.setattr(main, "get_postgres_repo", AsyncMock(side_effect=RuntimeError("boom")))
     monkeypatch.setattr(main, "logger", mock_logger)
 
     await main._log_version_drift()
@@ -85,7 +85,9 @@ async def test_lifespan_runs_drift_log_after_migration_and_purge(monkeypatch):
     mock_pricing.stop_scheduler = AsyncMock(side_effect=lambda: call_order.append("stop_scheduler"))
 
     monkeypatch.setattr(main, "run_migrations", lambda: call_order.append("migrations"))
-    monkeypatch.setattr(main, "_run_purge", lambda: call_order.append("purge"))
+    monkeypatch.setattr(
+        main, "_run_purge", AsyncMock(side_effect=lambda: call_order.append("purge"))
+    )
     monkeypatch.setattr(
         main, "_log_version_drift", AsyncMock(side_effect=lambda: call_order.append("drift"))
     )

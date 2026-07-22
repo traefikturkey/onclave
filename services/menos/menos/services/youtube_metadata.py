@@ -216,12 +216,16 @@ class YouTubeMetadataService:
         else:
             raise ValueError("channel must be an @handle or https://www.youtube.com/@handle")
 
-        response = youtube.search().list(
-            part="snippet",
-            q=handle,
-            type="channel",
-            maxResults=1,
-        ).execute()
+        response = (
+            youtube.search()
+            .list(
+                part="snippet",
+                q=handle,
+                type="channel",
+                maxResults=1,
+            )
+            .execute()
+        )
         if not response.get("items"):
             raise ValueError(f"No channel found for @{handle}")
         return response["items"][0]["snippet"]["channelId"]
@@ -230,10 +234,14 @@ class YouTubeMetadataService:
         """Fetch recent uploads for a YouTube @handle or channel URL."""
         youtube = self._get_client()
         channel_id = self.resolve_channel_id(channel)
-        channels_response = youtube.channels().list(
-            part="contentDetails",
-            id=channel_id,
-        ).execute()
+        channels_response = (
+            youtube.channels()
+            .list(
+                part="contentDetails",
+                id=channel_id,
+            )
+            .execute()
+        )
         if not channels_response.get("items"):
             raise ValueError(f"No channel found with ID: {channel_id}")
         playlist_id = channels_response["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
@@ -243,12 +251,16 @@ class YouTubeMetadataService:
         titles: dict[str, str] = {}
         page_token = None
         while len(video_ids) < limit:
-            response = youtube.playlistItems().list(
-                part="snippet,contentDetails",
-                playlistId=playlist_id,
-                maxResults=min(50, limit - len(video_ids)),
-                pageToken=page_token,
-            ).execute()
+            response = (
+                youtube.playlistItems()
+                .list(
+                    part="snippet,contentDetails",
+                    playlistId=playlist_id,
+                    maxResults=min(50, limit - len(video_ids)),
+                    pageToken=page_token,
+                )
+                .execute()
+            )
             for item in response.get("items", []):
                 video_id = item["contentDetails"]["videoId"]
                 video_ids.append(video_id)
@@ -260,11 +272,15 @@ class YouTubeMetadataService:
 
         videos: list[YouTubeChannelVideo] = []
         for index in range(0, len(video_ids), 50):
-            batch = video_ids[index:index + 50]
-            details = youtube.videos().list(
-                part="snippet,statistics,contentDetails",
-                id=",".join(batch),
-            ).execute()
+            batch = video_ids[index : index + 50]
+            details = (
+                youtube.videos()
+                .list(
+                    part="snippet,statistics,contentDetails",
+                    id=",".join(batch),
+                )
+                .execute()
+            )
             by_id: dict[str, dict[str, Any]] = {
                 item["id"]: item for item in details.get("items", [])
             }
@@ -281,15 +297,17 @@ class YouTubeMetadataService:
                     duration_seconds = parse_duration_to_seconds(duration_iso)
                     stats = item.get("statistics", {})
                     view_count = int(stats["viewCount"]) if "viewCount" in stats else None
-                videos.append(YouTubeChannelVideo(
-                    video_id=video_id,
-                    title=title,
-                    url=f"https://www.youtube.com/watch?v={video_id}",
-                    published_at=published[video_id],
-                    duration=duration,
-                    duration_seconds=duration_seconds,
-                    view_count=view_count,
-                ))
+                videos.append(
+                    YouTubeChannelVideo(
+                        video_id=video_id,
+                        title=title,
+                        url=f"https://www.youtube.com/watch?v={video_id}",
+                        published_at=published[video_id],
+                        duration=duration,
+                        duration_seconds=duration_seconds,
+                        view_count=view_count,
+                    )
+                )
         return videos
 
     def fetch_metadata_safe(self, video_id: str) -> tuple[YouTubeMetadata | None, str | None]:

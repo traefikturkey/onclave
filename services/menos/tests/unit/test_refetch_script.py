@@ -75,11 +75,11 @@ def mock_minio():
 
 @pytest.fixture
 def mock_surreal():
-    """Mock SurrealDB repository with list_content and db.query."""
-    s = MagicMock()
-    s.list_content = AsyncMock(return_value=([], 0))
-    s.db = MagicMock()
-    return s
+    """Mock the PostgreSQL repository boundary."""
+    repository = MagicMock()
+    repository.list_content = AsyncMock(return_value=([], 0))
+    repository.update_content_fields = AsyncMock()
+    return repository
 
 
 @pytest.fixture
@@ -137,7 +137,7 @@ class TestRefetchAll:
 
         assert mocks["metadata_service"].fetch_metadata.call_count == 2
         assert mocks["minio"].upload.call_count == 2  # 2 metadata.json
-        assert mocks["surreal"].db.query.call_count == 2
+        assert mocks["surreal"].update_content_fields.await_count == 2
 
     @pytest.mark.asyncio
     async def test_skips_items_without_video_id(self, patched_refetch, caplog):
@@ -280,10 +280,8 @@ class TestRefetchAll:
         assert data["channel_title"] == yt.channel_title
 
     @pytest.mark.asyncio
-    async def test_updates_title_in_surrealdb(self, patched_refetch):
-        """surreal.db.query should be called with UPDATE statement."""
-        from surrealdb import RecordID
-
+    async def test_updates_title_in_postgres(self, patched_refetch):
+        """Metadata updates should use the repository boundary."""
         mocks = patched_refetch
         item = make_content_item(item_id="content:db_up")
         mocks["surreal"].list_content.return_value = ([item], 1)
@@ -294,33 +292,28 @@ class TestRefetchAll:
 
         await refetch_all()
 
-        mocks["surreal"].db.query.assert_called_once()
-        call_args = mocks["surreal"].db.query.call_args
-        assert "UPDATE content SET" in call_args[0][0]
-        params = call_args[0][1]
-        assert params["title"] == yt.title
-        assert params["tags"] == yt.tags
-        # ID should be a RecordID object with table_name and id
-        assert isinstance(params["id"], RecordID)
-        assert params["id"].table_name == "content"
-        assert params["id"].id == "db_up"
-        assert params["metadata"]["channel_title"] == yt.channel_title
-        assert params["metadata"]["published_at"] == yt.published_at
+        mocks["surreal"].update_content_fields.assert_awaited_once()
+        call = mocks["surreal"].update_content_fields.call_args
+        assert call.args[0] == "db_up"
+        assert call.kwargs["title"] == yt.title
+        assert call.kwargs["tags"] == yt.tags
+        assert call.kwargs["metadata"]["channel_title"] == yt.channel_title
+        assert call.kwargs["metadata"]["published_at"] == yt.published_at
 
     @pytest.mark.asyncio
-    async def test_handles_surrealdb_update_failure(self, patched_refetch, caplog):
-        """SurrealDB update failure should be logged but not crash."""
+    async def test_handles_postgres_update_failure(self, patched_refetch, caplog):
+        """PostgreSQL update failure should be logged but not crash."""
         mocks = patched_refetch
         item = make_content_item()
         mocks["surreal"].list_content.return_value = ([item], 1)
-        mocks["surreal"].db.query.side_effect = Exception("DB down")
+        mocks["surreal"].update_content_fields.side_effect = Exception("DB down")
 
         from scripts.refetch_metadata import refetch_all
 
         with caplog.at_level(logging.ERROR):
             await refetch_all()
 
-        assert "Failed to update SurrealDB" in caplog.text
+        assert "Failed to update PostgreSQL" in caplog.text
 
     @pytest.mark.asyncio
     async def test_empty_video_list(self, patched_refetch):
@@ -335,13 +328,11 @@ class TestRefetchAll:
         mocks["metadata_service"].fetch_metadata.assert_not_called()
         mocks["minio"].download.assert_not_called()
         mocks["minio"].upload.assert_not_called()
-        mocks["surreal"].db.query.assert_not_called()
+        mocks["surreal"].update_content_fields.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_normalizes_recordid_with_table_prefix(self, patched_refetch):
-        """Item ID with 'content:' prefix should be split, RecordID created."""
-        from surrealdb import RecordID
-
+    async def test_normalizes_id_with_table_prefix(self, patched_refetch):
+        """A legacy content prefix should be removed before update."""
         mocks = patched_refetch
         # Item ID includes the table prefix
         item = make_content_item(item_id="content:abc123xyz")
@@ -351,21 +342,12 @@ class TestRefetchAll:
 
         await refetch_all()
 
-        # Verify that db.query was called with a RecordID object
-        mocks["surreal"].db.query.assert_called_once()
-        call_args = mocks["surreal"].db.query.call_args
-        params = call_args[0][1]
-
-        # The "id" parameter must be a RecordID object with correct parts
-        assert isinstance(params["id"], RecordID)
-        assert params["id"].table_name == "content"
-        assert params["id"].id == "abc123xyz"
+        mocks["surreal"].update_content_fields.assert_awaited_once()
+        assert mocks["surreal"].update_content_fields.call_args.args[0] == "abc123xyz"
 
     @pytest.mark.asyncio
-    async def test_normalizes_recordid_without_prefix(self, patched_refetch):
-        """Item ID without prefix should still work with RecordID."""
-        from surrealdb import RecordID
-
+    async def test_preserves_plain_id(self, patched_refetch):
+        """A plain PostgreSQL content ID should be preserved."""
         mocks = patched_refetch
         # Item ID without the table prefix
         item = make_content_item(item_id="plain_id_456")
@@ -375,12 +357,5 @@ class TestRefetchAll:
 
         await refetch_all()
 
-        # Verify that db.query was called with a RecordID object
-        mocks["surreal"].db.query.assert_called_once()
-        call_args = mocks["surreal"].db.query.call_args
-        params = call_args[0][1]
-
-        # The "id" parameter must be a RecordID object
-        assert isinstance(params["id"], RecordID)
-        assert params["id"].table_name == "content"
-        assert params["id"].id == "plain_id_456"
+        mocks["surreal"].update_content_fields.assert_awaited_once()
+        assert mocks["surreal"].update_content_fields.call_args.args[0] == "plain_id_456"

@@ -95,7 +95,7 @@ class TestGetUnifiedPipelineService:
 
         with (
             patch("menos.services.di.settings", mock_settings),
-            patch("menos.services.di.get_surreal_repo", AsyncMock(return_value=mock_repo)),
+            patch("menos.services.di.get_postgres_repo", AsyncMock(return_value=mock_repo)),
         ):
             service = await get_unified_pipeline_service()
 
@@ -142,7 +142,7 @@ class TestDIBoundary:
 
         with (
             patch("menos.services.di.settings", mock_settings),
-            patch("menos.services.di.get_surreal_repo", AsyncMock(return_value=mock_repo)),
+            patch("menos.services.di.get_postgres_repo", AsyncMock(return_value=mock_repo)),
             patch(
                 "menos.services.di.get_llm_pricing_service", AsyncMock(return_value=mock_pricing)
             ),
@@ -192,7 +192,7 @@ class TestDIBoundary:
 
         with (
             patch("menos.services.di.settings", mock_settings),
-            patch("menos.services.di.get_surreal_repo", AsyncMock(return_value=mock_repo)),
+            patch("menos.services.di.get_postgres_repo", AsyncMock(return_value=mock_repo)),
             patch(
                 "menos.services.di.get_llm_pricing_service", AsyncMock(return_value=mock_pricing)
             ),

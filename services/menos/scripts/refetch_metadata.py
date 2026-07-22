@@ -18,39 +18,23 @@ import json
 import logging
 import time
 
-from surrealdb import RecordID
-
 from menos.services.di import get_storage_context
 from menos.services.youtube_metadata import YouTubeMetadataService
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
-# Re-authenticate before JWT expires (SurrealDB default: 1 hour)
-REAUTH_INTERVAL_SECONDS = 45 * 60
 
-
-def _reauth_if_needed(surreal, last_auth_time: float) -> float:
-    """Re-authenticate SurrealDB if JWT is approaching expiry. Returns updated timestamp."""
-    if time.monotonic() - last_auth_time > REAUTH_INTERVAL_SECONDS:
-        logger.info("  Re-authenticating SurrealDB (JWT refresh)...")
-        surreal.db.signin({"username": surreal.username, "password": surreal.password})
-        surreal.db.use(surreal.namespace, surreal.database)
-        return time.monotonic()
-    return last_auth_time
-
-
-def _surreal_update_content(surreal, item, title: str, tags: list, metadata: dict) -> None:
-    """Update content title, tags, and metadata in SurrealDB."""
-    raw_id = str(item.id).split(":")[-1]
-    surreal.db.query(
-        "UPDATE content SET title = $title, tags = $tags, metadata = $metadata WHERE id = $id",
-        {"title": title, "tags": tags, "metadata": metadata, "id": RecordID("content", raw_id)},
-    )
+async def _update_content(repository, item, title: str, tags: list, metadata: dict) -> None:
+    """Update content title, tags, and metadata in PostgreSQL."""
+    content_id = str(item.id)
+    if content_id.startswith("content:"):
+        content_id = content_id.split(":", 1)[1]
+    await repository.update_content_fields(content_id, title=title, tags=tags, metadata=metadata)
 
 
 async def _process_db_only(video_id: str, item, minio, surreal, counts: dict) -> None:
-    """Update SurrealDB from existing MinIO metadata.json (no YouTube API call)."""
+    """Update PostgreSQL from existing MinIO metadata.json (no YouTube API call)."""
     try:
         meta_bytes = await minio.download(f"youtube/{video_id}/metadata.json")
         meta_json = json.loads(meta_bytes.decode("utf-8"))
@@ -74,16 +58,16 @@ async def _process_db_only(video_id: str, item, minio, surreal, counts: dict) ->
         }
     )
     try:
-        _surreal_update_content(
+        await _update_content(
             surreal,
             item,
             meta_json.get("title", f"YouTube: {video_id}"),
             meta_json.get("tags", []),
             existing_meta,
         )
-        logger.info("  Updated SurrealDB (title, tags, metadata)")
+        logger.info("  Updated PostgreSQL (title, tags, metadata)")
     except Exception as e:
-        logger.error(f"  Failed to update SurrealDB: {e}")
+        logger.error(f"  Failed to update PostgreSQL: {e}")
         counts["db_fail"] += 1
     counts["success"] += 1
     logger.info("")
@@ -92,7 +76,7 @@ async def _process_db_only(video_id: str, item, minio, surreal, counts: dict) ->
 async def _upload_yt_metadata(
     video_id: str, item, minio, surreal, yt, transcript_text: str, counts: dict
 ) -> None:
-    """Write metadata.json to MinIO and backfill SurrealDB."""
+    """Write metadata.json to MinIO and backfill PostgreSQL."""
     metadata_dict = {
         "id": item.id,
         "video_id": video_id,
@@ -137,17 +121,17 @@ async def _upload_yt_metadata(
         }
     )
     try:
-        _surreal_update_content(surreal, item, yt.title, yt.tags, existing_meta)
-        logger.info("  Updated SurrealDB (title, tags, metadata)")
+        await _update_content(surreal, item, yt.title, yt.tags, existing_meta)
+        logger.info("  Updated PostgreSQL (title, tags, metadata)")
     except Exception as e:
-        logger.error(f"  Failed to update SurrealDB: {e}")
+        logger.error(f"  Failed to update PostgreSQL: {e}")
         counts["db_fail"] += 1
 
 
 async def _process_full(
     video_id: str, item, minio, surreal, metadata_service, counts: dict, delay: int
 ) -> None:
-    """Fetch from YouTube API and update MinIO + SurrealDB."""
+    """Fetch from YouTube API and update MinIO and PostgreSQL."""
     try:
         yt = metadata_service.fetch_metadata(video_id)
         logger.info(f"  Title: {yt.title}")
@@ -180,7 +164,6 @@ async def refetch_all(limit: int = 1000, delay: int = 30, db_only: bool = False)
         logger.info(f"Found {len(items)} YouTube videos to process\n")
 
         counts = {"success": 0, "skip": 0, "fail": 0, "db_fail": 0}
-        last_auth_time = time.monotonic()
 
         for i, item in enumerate(items):
             video_id = item.metadata.get("video_id", "") if item.metadata else ""
@@ -189,7 +172,6 @@ async def refetch_all(limit: int = 1000, delay: int = 30, db_only: bool = False)
                 counts["skip"] += 1
                 continue
 
-            last_auth_time = _reauth_if_needed(surreal, last_auth_time)
             logger.info(f"[{i + 1}/{len(items)}] Processing {video_id}...")
 
             if db_only:

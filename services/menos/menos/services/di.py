@@ -5,10 +5,10 @@ from contextlib import asynccontextmanager
 from functools import lru_cache
 
 from minio import Minio
-from surrealdb import Surreal
 
 from menos.config import settings
 from menos.services.agent import AgentService
+from menos.services.database import PostgresDatabase
 from menos.services.docling import DoclingClient
 from menos.services.embeddings import get_embedding_service
 from menos.services.llm import LLMProvider, OllamaLLMProvider
@@ -27,7 +27,7 @@ from menos.services.reranker import (
     RerankerLibraryProvider,
     RerankerProvider,
 )
-from menos.services.storage import S3Storage, SurrealDBRepository
+from menos.services.storage import PostgresRepository, S3Storage
 
 _llm_pricing_service: LLMPricingService | None = None
 
@@ -50,7 +50,7 @@ def _provider_model(provider: LLMProvider) -> str:
 
 def _wrap_provider_with_metering(
     provider: LLMProvider,
-    repo: SurrealDBRepository,
+    repo: PostgresRepository,
     pricing_service: LLMPricingService,
     context_prefix: str,
 ) -> LLMProvider:
@@ -89,14 +89,21 @@ def _wrap_provider_with_metering(
     )
 
 
-@asynccontextmanager
-async def get_storage_context() -> AsyncGenerator[tuple[S3Storage, SurrealDBRepository], None]:
-    """Create and manage storage service instances.
+def _new_database() -> PostgresDatabase:
+    return PostgresDatabase(
+        host=settings.postgres_host,
+        port=settings.postgres_port,
+        database=settings.postgres_database,
+        user=settings.postgres_user,
+        password=settings.postgres_password,
+        min_size=settings.postgres_pool_min_size,
+        max_size=settings.postgres_pool_max_size,
+    )
 
-    Yields:
-        Tuple of (S3Storage, SurrealDBRepository)
-    """
-    # Initialize S3-compatible storage
+
+@asynccontextmanager
+async def get_storage_context() -> AsyncGenerator[tuple[S3Storage, PostgresRepository], None]:
+    """Create and manage storage service instances."""
     s3_client = Minio(
         settings.s3_endpoint_url,
         access_key=settings.s3_access_key,
@@ -104,25 +111,12 @@ async def get_storage_context() -> AsyncGenerator[tuple[S3Storage, SurrealDBRepo
         secure=settings.s3_secure,
         region=settings.s3_region,
     )
-    s3_storage = S3Storage(s3_client, settings.s3_bucket)
-
-    # Initialize SurrealDB (blocking HTTP client needs http:// not ws://)
-    surreal_url = settings.surrealdb_url.replace("ws://", "http://").replace("wss://", "https://")
-    db = Surreal(surreal_url)
-    surreal_repo = SurrealDBRepository(
-        db,
-        settings.surrealdb_namespace,
-        settings.surrealdb_database,
-        settings.surrealdb_user,
-        settings.surrealdb_password,
-    )
-
+    repo = PostgresRepository(_new_database())
+    await repo.connect()
     try:
-        await surreal_repo.connect()
-        yield s3_storage, surreal_repo
+        yield S3Storage(s3_client, settings.s3_bucket), repo
     finally:
-        # SurrealDB blocking HTTP client doesn't implement close()
-        pass
+        repo.close()
 
 
 async def get_s3_storage() -> S3Storage:
@@ -141,19 +135,14 @@ async def get_s3_storage() -> S3Storage:
 get_minio_storage = get_s3_storage
 
 
-async def get_surreal_repo() -> SurrealDBRepository:
-    """Get SurrealDB repository instance for dependency injection."""
-    surreal_url = settings.surrealdb_url.replace("ws://", "http://").replace("wss://", "https://")
-    db = Surreal(surreal_url)
-    repo = SurrealDBRepository(
-        db,
-        settings.surrealdb_namespace,
-        settings.surrealdb_database,
-        settings.surrealdb_user,
-        settings.surrealdb_password,
-    )
+async def get_postgres_repo() -> PostgresRepository:
+    """Get a connected PostgreSQL repository for dependency injection."""
+    repo = PostgresRepository(_new_database())
     await repo.connect()
     return repo
+
+
+get_surreal_repo = get_postgres_repo
 
 
 async def get_llm_pricing_service() -> LLMPricingService:
@@ -163,7 +152,7 @@ async def get_llm_pricing_service() -> LLMPricingService:
     if _llm_pricing_service is not None:
         return _llm_pricing_service
 
-    repo = await get_surreal_repo()
+    repo = await get_postgres_repo()
     service = LLMPricingService(repo)
     await service.initialize()
     _llm_pricing_service = service
@@ -306,22 +295,22 @@ async def get_agent_service() -> AgentService:
     - synthesis_provider from get_synthesis_provider()
     - reranker from get_reranker()
     - embedding_service from get_embedding_service()
-    - surreal_repo from get_surreal_repo()
+    - postgres_repo from get_postgres_repo()
 
     Returns:
         Configured AgentService instance
     """
-    surreal_repo = await get_surreal_repo()
+    postgres_repo = await get_postgres_repo()
     pricing_service = await get_llm_pricing_service()
     expansion_provider = _wrap_provider_with_metering(
         get_expansion_provider(),
-        surreal_repo,
+        postgres_repo,
         pricing_service,
         "search:expansion",
     )
     synthesis_provider = _wrap_provider_with_metering(
         get_synthesis_provider(),
-        surreal_repo,
+        postgres_repo,
         pricing_service,
         "search:synthesis",
     )
@@ -333,7 +322,7 @@ async def get_agent_service() -> AgentService:
         reranker=reranker,
         synthesis_provider=synthesis_provider,
         embedding_service=embedding_service,
-        surreal_repo=surreal_repo,
+        surreal_repo=postgres_repo,
     )
 
 
@@ -370,7 +359,7 @@ async def get_unified_pipeline_service():
     """Get UnifiedPipelineService instance for dependency injection."""
     from menos.services.unified_pipeline import UnifiedPipelineService
 
-    repo = await get_surreal_repo()
+    repo = await get_postgres_repo()
     pricing_service = await get_llm_pricing_service()
     provider = _wrap_provider_with_metering(
         get_unified_pipeline_provider(),
@@ -389,8 +378,8 @@ async def get_job_repository():
     """Get JobRepository instance for dependency injection."""
     from menos.services.jobs import JobRepository
 
-    repo = await get_surreal_repo()
-    return JobRepository(repo.db)
+    repo = await get_postgres_repo()
+    return JobRepository(repo)
 
 
 async def get_pipeline_orchestrator():
@@ -399,7 +388,7 @@ async def get_pipeline_orchestrator():
 
     pipeline = await get_unified_pipeline_service()
     job_repo = await get_job_repository()
-    repo = await get_surreal_repo()
+    repo = await get_postgres_repo()
     callback = get_callback_service()
     return PipelineOrchestrator(pipeline, job_repo, repo, settings, callback)
 

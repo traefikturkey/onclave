@@ -1,4 +1,4 @@
-"""Semantic search for YouTube videos in SurrealDB.
+"""Semantic search for YouTube videos in PostgreSQL.
 
 Usage:
     PYTHONPATH=. uv run python scripts/search_videos.py "machine learning tutorial"
@@ -78,19 +78,12 @@ async def search_videos(query: str, limit: int = 10) -> None:
         await embedding_service.close()
 
     async with get_storage_context() as (_minio, repo):
-        search_results = repo.db.query(
-            """
-            SELECT text, content_id,
-                   vector::similarity::cosine(embedding, $embedding) AS score
-            FROM chunk
-            WHERE vector::similarity::cosine(embedding, $embedding) > 0.3
-            ORDER BY score DESC
-            LIMIT $limit
-            """,
-            {"embedding": query_embedding, "limit": limit * 3},
+        chunks = await repo.vector_search(
+            query_embedding,
+            limit=limit * 3,
+            content_type="youtube",
+            minimum_score=0.3,
         )
-
-        chunks = repo._parse_query_result(search_results)
         if not chunks:
             print(f"No results found for '{query}'\n")
             return
@@ -101,7 +94,7 @@ async def search_videos(query: str, limit: int = 10) -> None:
 
 def main() -> None:
     """Main entry point."""
-    parser = argparse.ArgumentParser(description="Semantic search for YouTube videos in SurrealDB")
+    parser = argparse.ArgumentParser(description="Semantic search for YouTube videos in PostgreSQL")
     parser.add_argument(
         "query",
         help="Search query string (e.g., 'machine learning tutorial')",

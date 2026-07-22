@@ -43,7 +43,7 @@ def _print_filter_results(description_urls: list, blocked: list, remaining: list
             print(f"    [-] {url} ({reason})")
 
 
-def _save_filter_results(
+async def _save_filter_results(
     repo, content_id: str, description_urls: list, blocked: list, remaining: list
 ) -> None:
     """Persist URL filter results to the content metadata."""
@@ -54,10 +54,12 @@ def _save_filter_results(
         "blocked_reasons": {url: reason for url, reason in blocked},
         "filter_version": "v1_heuristic",
     }
-    repo.db.query(
-        "UPDATE content SET metadata.url_filter_results = $data,"
-        " updated_at = time::now() WHERE id = $id",
-        {"data": url_filter_results, "id": f"content:{content_id}"},
+    content = await repo.get_content(content_id)
+    if content is None:
+        return
+    await repo.update_content_fields(
+        content_id,
+        metadata={**content.metadata, "url_filter_results": url_filter_results},
     )
 
 
@@ -71,22 +73,15 @@ async def process_single_video(
     Returns:
         Dict with processing results.
     """
-    result = repo.db.query(
-        "SELECT * FROM content WHERE content_type = 'youtube'"
-        " AND metadata.video_id = $video_id LIMIT 1",
-        {"video_id": video_id},
-    )
-    raw_items = repo._parse_query_result(result)
-
-    if not raw_items:
+    item = await repo.find_content_by_video_id(video_id)
+    if item is None or item.id is None:
         return {"success": False, "message": f"Video not found: {video_id}"}
 
-    item = raw_items[0]
-    title = item.get("title", "Unknown")
-    metadata = item.get("metadata", {}) or {}
+    title = item.title or "Unknown"
+    metadata = item.metadata
     channel = metadata.get("channel_title", "Unknown")
     description = metadata.get("description", "")
-    content_id = _extract_content_id(item.get("id"))
+    content_id = _extract_content_id(item.id)
 
     description_urls = metadata.get("description_urls", [])
     if not description_urls and description:
@@ -106,7 +101,7 @@ async def process_single_video(
     _print_filter_results(description_urls, blocked, remaining)
 
     if not dry_run:
-        _save_filter_results(repo, content_id, description_urls, blocked, remaining)
+        await _save_filter_results(repo, content_id, description_urls, blocked, remaining)
         print("\n  Content metadata updated.")
     else:
         print("\n  [DRY RUN] Content metadata NOT updated.")

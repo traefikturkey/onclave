@@ -9,7 +9,6 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import AnyHttpUrl, BaseModel, field_validator
-from surrealdb import RecordID
 
 from menos.auth.dependencies import AuthenticatedKeyId
 from menos.models import ContentMetadata
@@ -17,12 +16,12 @@ from menos.services.di import (
     get_docling_client,
     get_minio_storage,
     get_pipeline_orchestrator,
-    get_surreal_repo,
+    get_postgres_repo,
 )
 from menos.services.docling import DoclingClient
 from menos.services.pipeline_orchestrator import PipelineOrchestrator
 from menos.services.resource_key import generate_resource_key
-from menos.services.storage import MinIOStorage, SurrealDBRepository
+from menos.services.storage import MinIOStorage, PostgresRepository, SurrealDBRepository
 from menos.services.url_detector import URLDetector
 from menos.services.youtube import YouTubeService, get_youtube_service
 from menos.services.youtube_metadata import (
@@ -84,7 +83,7 @@ async def ingest_url(
     youtube_service: YouTubeService = Depends(get_youtube_service),
     metadata_service: YouTubeMetadataService = Depends(get_youtube_metadata_service),
     minio_storage: MinIOStorage = Depends(get_minio_storage),
-    surreal_repo: SurrealDBRepository = Depends(get_surreal_repo),
+    surreal_repo: PostgresRepository = Depends(get_postgres_repo),
     orchestrator: PipelineOrchestrator = Depends(get_pipeline_orchestrator),
 ):
     """Ingest YouTube or web URLs through a single endpoint."""
@@ -216,13 +215,8 @@ async def _resolve_existing_youtube(
     if existing is None:
         existing = await surreal_repo.find_content_by_video_id(video_id)
         if existing:
-            surreal_repo.db.query(
-                "UPDATE content SET metadata.resource_key = $resource_key WHERE id = $id",
-                {
-                    "resource_key": resource_key,
-                    "id": RecordID("content", str(existing.id).split(":")[-1]),
-                },
-            )
+            updated_metadata = {**existing.metadata, "resource_key": resource_key}
+            await surreal_repo.update_content_fields(existing.id, metadata=updated_metadata)
     return existing
 
 
@@ -313,20 +307,16 @@ async def _backfill_youtube_metadata(
     title = yt_metadata.title
     updated_metadata = _build_updated_metadata(existing_meta, yt_metadata)
 
-    # Note: WHERE id = $id requires RecordID object, not plain string (see gotchas.md)
     try:
-        surreal_repo.db.query(
-            "UPDATE content SET title = $title, tags = $tags, metadata = $metadata WHERE id = $id",
-            {
-                "title": title,
-                "tags": yt_metadata.tags,
-                "metadata": updated_metadata,
-                "id": RecordID("content", existing.id),
-            },
+        await surreal_repo.update_content_fields(
+            existing.id,
+            title=title,
+            tags=yt_metadata.tags,
+            metadata=updated_metadata,
         )
         logger.info("Updated metadata for video %s in database", video_id)
     except Exception as e:
-        logger.error("Failed to update SurrealDB for %s: %s", video_id, e)
+        logger.error("Failed to update PostgreSQL for %s: %s", video_id, e)
         return _existing_ingest_response(existing, video_id)
 
     transcript_length = await _read_transcript_length(minio_storage, existing.file_path)
