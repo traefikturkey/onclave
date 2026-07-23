@@ -1,6 +1,6 @@
 """Unit tests for embedding service."""
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -16,6 +16,19 @@ class TestEmbeddingService:
 
         assert service.base_url == "http://localhost:11434"
         assert service.model == "mxbai-embed-large"
+
+    @pytest.mark.asyncio
+    async def test_client_uses_bounded_embedding_timeout(self):
+        service = EmbeddingService("http://localhost:11434", "mxbai-embed-large")
+
+        with patch("menos.services.embeddings.httpx.AsyncClient") as client_class:
+            await service._get_client()
+
+        timeout = client_class.call_args.kwargs["timeout"]
+        assert timeout.connect == 10.0
+        assert timeout.read == 180.0
+        assert timeout.write == 180.0
+        assert timeout.pool == 180.0
 
     @pytest.mark.asyncio
     async def test_embed(self):

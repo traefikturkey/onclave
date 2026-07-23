@@ -24,7 +24,8 @@ class EmbeddingService:
     async def _get_client(self) -> httpx.AsyncClient:
         """Lazy initialize HTTP client."""
         if self.client is None:
-            self.client = httpx.AsyncClient(base_url=self.base_url)
+            timeout = httpx.Timeout(180.0, connect=10.0)
+            self.client = httpx.AsyncClient(base_url=self.base_url, timeout=timeout)
         return self.client
 
     async def embed(self, text: str) -> list[float]:
