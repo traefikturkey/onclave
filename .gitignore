@@ -36,3 +36,4 @@ temp/
 tmp/
 
 .specs/
+scripts/__pycache__/
