@@ -70,9 +70,7 @@ class TestOpenAIProviderGenerate:
         p = OpenAIProvider(api_key="sk-test", model="gpt-4o-mini")
 
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": "Hello from OpenAI"}}]
-        }
+        mock_resp.json.return_value = {"choices": [{"message": {"content": "Hello from OpenAI"}}]}
         mock_resp.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
@@ -91,9 +89,7 @@ class TestOpenAIProviderGenerate:
         p = OpenAIProvider(api_key="sk-test")
 
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": "ok"}}]
-        }
+        mock_resp.json.return_value = {"choices": [{"message": {"content": "ok"}}]}
         mock_resp.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
@@ -118,18 +114,14 @@ class TestOpenAIProviderGenerate:
         p = OpenAIProvider(api_key="sk-test")
 
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": "ok"}}]
-        }
+        mock_resp.json.return_value = {"choices": [{"message": {"content": "ok"}}]}
         mock_resp.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
         mock_client.post.return_value = mock_resp
         p.client = mock_client
 
-        await p.generate(
-            "p", max_tokens=50, temperature=0.1, timeout=5.0
-        )
+        await p.generate("p", max_tokens=50, temperature=0.1, timeout=5.0)
 
         call = mock_client.post.call_args
         assert call.kwargs["json"]["max_tokens"] == 50
@@ -142,9 +134,7 @@ class TestOpenAIProviderGenerate:
         p = OpenAIProvider(api_key="sk-test")
 
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": "recovered"}}]
-        }
+        mock_resp.json.return_value = {"choices": [{"message": {"content": "recovered"}}]}
         mock_resp.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
@@ -251,9 +241,7 @@ class TestAnthropicProviderGenerate:
         p = AnthropicProvider(api_key="sk-ant-test")
 
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "content": [{"text": "Hello from Anthropic"}]
-        }
+        mock_resp.json.return_value = {"content": [{"text": "Hello from Anthropic"}]}
         mock_resp.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
@@ -265,9 +253,7 @@ class TestAnthropicProviderGenerate:
 
         payload = mock_client.post.call_args.kwargs["json"]
         assert "system" not in payload
-        assert payload["messages"] == [
-            {"role": "user", "content": "Say hi"}
-        ]
+        assert payload["messages"] == [{"role": "user", "content": "Say hi"}]
 
     @pytest.mark.asyncio
     async def test_success_with_system_prompt(self):
@@ -275,9 +261,7 @@ class TestAnthropicProviderGenerate:
         p = AnthropicProvider(api_key="sk-ant-test")
 
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "content": [{"text": "ok"}]
-        }
+        mock_resp.json.return_value = {"content": [{"text": "ok"}]}
         mock_resp.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
@@ -378,9 +362,7 @@ class TestOpenRouterProviderGenerate:
         p = OpenRouterProvider(api_key="or-test", model="meta/llama-3")
 
         mock_resp = MagicMock()
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": "Hello from OR"}}]
-        }
+        mock_resp.json.return_value = {"choices": [{"message": {"content": "Hello from OR"}}]}
         mock_resp.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
