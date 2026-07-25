@@ -844,8 +844,9 @@ class PostgresRepository:
         result_dict: dict,
         pipeline_version: str,
         chunks: list[ChunkModel],
+        relationships: list[ContentEntityEdge],
     ) -> None:
-        """Atomically replace chunks and mark content processing complete."""
+        """Atomically replace chunks and relationships, then mark content complete."""
         if not chunks:
             raise ValueError("completed content requires at least one chunk")
 
@@ -865,6 +866,25 @@ class PostgresRepository:
                 )
             )
 
+        relationship_values = []
+        for edge in relationships:
+            if edge.content_id != content_id:
+                raise ValueError("relationship content ID does not match completed content")
+            edge.id = edge.id or _new_id()
+            edge.created_at = edge.created_at or now
+            relationship_values.append(
+                (
+                    edge.id,
+                    edge.content_id,
+                    edge.entity_id,
+                    edge.edge_type.value,
+                    edge.confidence,
+                    edge.mention_count,
+                    edge.source.value,
+                    edge.created_at,
+                )
+            )
+
         with self._database.connection() as connection, connection.cursor() as cursor:
             cursor.execute("DELETE FROM chunk WHERE content_id=%s", (content_id,))
             cursor.executemany(
@@ -872,6 +892,14 @@ class PostgresRepository:
                 VALUES (%s,%s,%s,%s,%s::vector,%s)""",
                 chunk_values,
             )
+            cursor.execute("DELETE FROM content_entity WHERE content_id=%s", (content_id,))
+            if relationship_values:
+                cursor.executemany(
+                    """INSERT INTO content_entity
+                    (id,content_id,entity_id,edge_type,confidence,mention_count,source,created_at)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    relationship_values,
+                )
             cursor.execute(
                 """UPDATE content SET metadata=jsonb_set(metadata,'{unified_result}',%s),
                 processing_status='completed',processed_at=now(),pipeline_version=%s,updated_at=now()

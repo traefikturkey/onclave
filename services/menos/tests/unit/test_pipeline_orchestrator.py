@@ -4,7 +4,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from menos.models import JobStatus, PipelineJob
+from menos.models import (
+    EdgeType,
+    EntityModel,
+    EntityType,
+    ExtractedEntity,
+    JobStatus,
+    PipelineJob,
+    UnifiedResult,
+)
 from menos.services.pipeline_orchestrator import PipelineOrchestrator
 from menos.services.unified_pipeline import PipelineStageError
 
@@ -39,6 +47,17 @@ def mock_surreal_repo():
     repo = MagicMock()
     repo.update_content_processing_status = AsyncMock()
     repo.complete_content_processing = AsyncMock()
+    repo.find_or_create_entity = AsyncMock(
+        return_value=(
+            EntityModel(
+                id="entity1",
+                entity_type=EntityType.TOPIC,
+                name="Databases",
+                normalized_name="databases",
+            ),
+            True,
+        )
+    )
     return repo
 
 
@@ -150,8 +169,19 @@ class TestRunPipeline:
     async def test_completes_successfully(
         self, orchestrator, mock_pipeline_service, mock_job_repo, mock_surreal_repo
     ):
-        mock_result = MagicMock()
-        mock_result.model_dump.return_value = {"tier": "A", "quality_score": 80}
+        mock_result = UnifiedResult(
+            tier="A",
+            quality_score=80,
+            topics=[
+                ExtractedEntity(
+                    entity_type=EntityType.TOPIC,
+                    name="Databases",
+                    confidence="high",
+                    edge_type=EdgeType.DISCUSSES,
+                    hierarchy=["Technology", "Databases"],
+                )
+            ],
+        )
         mock_pipeline_service.process.return_value = mock_result
 
         job = PipelineJob(id="job1", resource_key="yt:abc", content_id="abc")
@@ -161,15 +191,25 @@ class TestRunPipeline:
         mock_job_repo.update_job_status.assert_any_call("job1", JobStatus.PROCESSING)
         mock_job_repo.update_job_status.assert_any_call("job1", JobStatus.COMPLETED)
         mock_surreal_repo.complete_content_processing.assert_awaited_once()
-        content_id, result_dict, version, chunks = (
+        content_id, result_dict, version, chunks, relationships = (
             mock_surreal_repo.complete_content_processing.await_args.args
         )
         assert content_id == "abc"
-        assert result_dict == {"tier": "A", "quality_score": 80}
+        assert result_dict["tier"] == "A"
+        assert result_dict["quality_score"] == 80
         assert version == "1.0.0"
         assert [chunk.text for chunk in chunks] == ["chunk one", "chunk two"]
         assert [chunk.chunk_index for chunk in chunks] == [0, 1]
         assert all(len(chunk.embedding or []) == 1024 for chunk in chunks)
+        assert len(relationships) == 1
+        assert relationships[0].entity_id == "entity1"
+        assert relationships[0].edge_type == EdgeType.DISCUSSES
+        assert relationships[0].confidence == 0.9
+        mock_surreal_repo.find_or_create_entity.assert_awaited_once_with(
+            "Databases",
+            EntityType.TOPIC,
+            hierarchy=["Technology", "Databases"],
+        )
 
     @pytest.mark.asyncio
     async def test_embedding_failure_marks_job_failed(

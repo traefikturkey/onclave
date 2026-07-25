@@ -4,7 +4,7 @@ import asyncio
 import logging
 
 from menos.config import Settings
-from menos.models import ChunkModel, JobStatus, PipelineJob
+from menos.models import ChunkModel, ContentEntityEdge, JobStatus, PipelineJob
 from menos.services.callbacks import CallbackService
 from menos.services.chunking import ChunkingService
 from menos.services.embeddings import EmbeddingService
@@ -132,6 +132,40 @@ class PipelineOrchestrator:
             for index, (text, embedding) in enumerate(zip(texts, embeddings, strict=True))
         ]
 
+    async def _resolve_relationships(self, content_id: str, result) -> list[ContentEntityEdge]:
+        """Resolve extracted entities and build a deduplicated edge set."""
+        edges: dict[tuple[str, object], ContentEntityEdge] = {}
+        for extracted in [*result.topics, *result.additional_entities]:
+            entity, _created = await self.surreal_repo.find_or_create_entity(
+                extracted.name,
+                extracted.entity_type,
+                hierarchy=extracted.hierarchy,
+            )
+            if not entity.id:
+                raise RuntimeError(f"resolved entity has no ID: {extracted.name}")
+            confidence = {"high": 0.9, "medium": 0.7, "low": 0.5}.get(
+                extracted.confidence.lower(), 0.6
+            )
+            edge = ContentEntityEdge(
+                content_id=content_id,
+                entity_id=entity.id,
+                edge_type=extracted.edge_type,
+                confidence=confidence,
+            )
+            edges[(edge.entity_id, edge.edge_type)] = edge
+
+        for validation in result.pre_detected_validations:
+            if not validation.confirmed:
+                continue
+            entity_id = validation.entity_id.removeprefix("entity:")
+            edge = ContentEntityEdge(
+                content_id=content_id,
+                entity_id=entity_id,
+                edge_type=validation.edge_type,
+            )
+            edges[(edge.entity_id, edge.edge_type)] = edge
+        return list(edges.values())
+
     async def _handle_result(
         self,
         job: PipelineJob,
@@ -143,11 +177,13 @@ class PipelineOrchestrator:
         """Persist a successful pipeline result and fire the callback."""
         result_dict = result.model_dump(mode="json")
         chunks = await self._build_chunks(content_id, content_text)
+        relationships = await self._resolve_relationships(content_id, result)
         await self.surreal_repo.complete_content_processing(
             content_id,
             result_dict,
             self.settings.app_version,
             chunks,
+            relationships,
         )
         updated_job = await self.job_repo.update_job_status(job_id, JobStatus.COMPLETED)
         logger.info("Pipeline completed for job %s with %d chunks", job_id, len(chunks))

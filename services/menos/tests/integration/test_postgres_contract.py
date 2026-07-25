@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 from psycopg.errors import ForeignKeyViolation, UniqueViolation
 
-from menos.models import ChunkModel, ContentMetadata
+from menos.models import (
+    ChunkModel,
+    ContentEntityEdge,
+    ContentMetadata,
+    EdgeType,
+    EntityType,
+)
 from menos.services.database import PostgresDatabase
 from menos.services.migrator import MigrationService
 from menos.services.storage import PostgresRepository
@@ -123,8 +129,23 @@ async def test_complete_content_processing_replaces_chunks_atomically(repository
         )
         for index in range(2)
     ]
+    entity, _created = await repository.find_or_create_entity(
+        "Databases", EntityType.TOPIC, hierarchy=["Technology", "Databases"]
+    )
+    initial_relationships = [
+        ContentEntityEdge(
+            content_id="pipeline-content",
+            entity_id=entity.id or "",
+            edge_type=EdgeType.DISCUSSES,
+            confidence=0.9,
+        )
+    ]
     await repository.complete_content_processing(
-        "pipeline-content", {"tier": "A"}, "1.0.0", initial_chunks
+        "pipeline-content",
+        {"tier": "A"},
+        "1.0.0",
+        initial_chunks,
+        initial_relationships,
     )
 
     with pytest.raises(ValueError, match="exactly 1024"):
@@ -140,6 +161,7 @@ async def test_complete_content_processing_replaces_chunks_atomically(repository
                     embedding=[0.0],
                 )
             ],
+            [],
         )
     assert [chunk.text for chunk in await repository.get_chunks("pipeline-content")] == [
         "chunk 0",
@@ -152,14 +174,28 @@ async def test_complete_content_processing_replaces_chunks_atomically(repository
         chunk_index=0,
         embedding=[1.0] + [0.0] * 1023,
     )
+    replacement_relationship = ContentEntityEdge(
+        content_id="pipeline-content",
+        entity_id=entity.id or "",
+        edge_type=EdgeType.MENTIONS,
+        confidence=0.7,
+    )
     await repository.complete_content_processing(
-        "pipeline-content", {"tier": "S"}, "1.0.1", [replacement]
+        "pipeline-content",
+        {"tier": "S"},
+        "1.0.1",
+        [replacement],
+        [replacement_relationship],
     )
 
     chunks = await repository.get_chunks("pipeline-content")
     assert [(chunk.chunk_index, chunk.text) for chunk in chunks] == [(0, "replacement")]
     assert repository.get_content_processing_status("pipeline-content") == "completed"
     assert repository.get_pipeline_result("pipeline-content") == {"tier": "S"}
+    relationships = await repository.get_entities_for_content("pipeline-content")
+    assert len(relationships) == 1
+    assert relationships[0][1].edge_type == EdgeType.MENTIONS
+    assert relationships[0][1].confidence == 0.7
 
 
 def test_foreign_keys_and_uniqueness(database):
