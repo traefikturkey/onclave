@@ -102,6 +102,66 @@ async def test_exact_cosine_lexical_filters_and_ordering(repository):
     assert lexical[0]["content_id"] == "c1"
 
 
+@pytest.mark.asyncio
+async def test_complete_content_processing_replaces_chunks_atomically(repository):
+    await repository.create_content(
+        ContentMetadata(
+            id="pipeline-content",
+            content_type="document",
+            title="Pipeline content",
+            mime_type="text/plain",
+            file_size=1,
+            file_path="pipeline-content.txt",
+        )
+    )
+    initial_chunks = [
+        ChunkModel(
+            content_id="pipeline-content",
+            text=f"chunk {index}",
+            chunk_index=index,
+            embedding=[float(index)] + [0.0] * 1023,
+        )
+        for index in range(2)
+    ]
+    await repository.complete_content_processing(
+        "pipeline-content", {"tier": "A"}, "1.0.0", initial_chunks
+    )
+
+    with pytest.raises(ValueError, match="exactly 1024"):
+        await repository.complete_content_processing(
+            "pipeline-content",
+            {"tier": "B"},
+            "1.0.1",
+            [
+                ChunkModel(
+                    content_id="pipeline-content",
+                    text="invalid",
+                    chunk_index=0,
+                    embedding=[0.0],
+                )
+            ],
+        )
+    assert [chunk.text for chunk in await repository.get_chunks("pipeline-content")] == [
+        "chunk 0",
+        "chunk 1",
+    ]
+
+    replacement = ChunkModel(
+        content_id="pipeline-content",
+        text="replacement",
+        chunk_index=0,
+        embedding=[1.0] + [0.0] * 1023,
+    )
+    await repository.complete_content_processing(
+        "pipeline-content", {"tier": "S"}, "1.0.1", [replacement]
+    )
+
+    chunks = await repository.get_chunks("pipeline-content")
+    assert [(chunk.chunk_index, chunk.text) for chunk in chunks] == [(0, "replacement")]
+    assert repository.get_content_processing_status("pipeline-content") == "completed"
+    assert repository.get_pipeline_result("pipeline-content") == {"tier": "S"}
+
+
 def test_foreign_keys_and_uniqueness(database):
     with pytest.raises(ForeignKeyViolation):
         database.execute(

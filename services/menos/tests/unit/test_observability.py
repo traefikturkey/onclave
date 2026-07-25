@@ -109,11 +109,13 @@ class TestOrchestratorErrorStage:
         )
 
         orch = PipelineOrchestrator(
-            pipeline_service,
-            job_repo,
-            surreal_repo,
-            settings,
-            callback_service,
+            pipeline_service=pipeline_service,
+            job_repo=job_repo,
+            surreal_repo=surreal_repo,
+            settings=settings,
+            chunking_service=MagicMock(),
+            embedding_service=MagicMock(),
+            callback_service=callback_service,
         )
         job = PipelineJob(id="job-1", resource_key="test:key", content_id="c1")
 
@@ -135,11 +137,13 @@ class TestOrchestratorErrorStage:
         pipeline_service.process = AsyncMock(side_effect=RuntimeError("boom"))
 
         orch = PipelineOrchestrator(
-            pipeline_service,
-            job_repo,
-            surreal_repo,
-            settings,
-            callback_service,
+            pipeline_service=pipeline_service,
+            job_repo=job_repo,
+            surreal_repo=surreal_repo,
+            settings=settings,
+            chunking_service=MagicMock(),
+            embedding_service=MagicMock(),
+            callback_service=callback_service,
         )
         job = PipelineJob(id="job-1", resource_key="test:key", content_id="c1")
 

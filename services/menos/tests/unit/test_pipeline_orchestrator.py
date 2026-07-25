@@ -38,8 +38,22 @@ def mock_job_repo():
 def mock_surreal_repo():
     repo = MagicMock()
     repo.update_content_processing_status = AsyncMock()
-    repo.update_content_processing_result = AsyncMock()
+    repo.complete_content_processing = AsyncMock()
     return repo
+
+
+@pytest.fixture
+def mock_chunking_service():
+    service = MagicMock()
+    service.chunk_text.return_value = ["chunk one", "chunk two"]
+    return service
+
+
+@pytest.fixture
+def mock_embedding_service():
+    service = MagicMock()
+    service.embed_batch = AsyncMock(return_value=[[0.1] * 1024, [0.2] * 1024])
+    return service
 
 
 @pytest.fixture
@@ -52,12 +66,21 @@ def mock_settings():
 
 
 @pytest.fixture
-def orchestrator(mock_pipeline_service, mock_job_repo, mock_surreal_repo, mock_settings):
+def orchestrator(
+    mock_pipeline_service,
+    mock_job_repo,
+    mock_surreal_repo,
+    mock_settings,
+    mock_chunking_service,
+    mock_embedding_service,
+):
     return PipelineOrchestrator(
         pipeline_service=mock_pipeline_service,
         job_repo=mock_job_repo,
         surreal_repo=mock_surreal_repo,
         settings=mock_settings,
+        chunking_service=mock_chunking_service,
+        embedding_service=mock_embedding_service,
     )
 
 
@@ -137,7 +160,42 @@ class TestRunPipeline:
 
         mock_job_repo.update_job_status.assert_any_call("job1", JobStatus.PROCESSING)
         mock_job_repo.update_job_status.assert_any_call("job1", JobStatus.COMPLETED)
-        mock_surreal_repo.update_content_processing_result.assert_called_once()
+        mock_surreal_repo.complete_content_processing.assert_awaited_once()
+        content_id, result_dict, version, chunks = (
+            mock_surreal_repo.complete_content_processing.await_args.args
+        )
+        assert content_id == "abc"
+        assert result_dict == {"tier": "A", "quality_score": 80}
+        assert version == "1.0.0"
+        assert [chunk.text for chunk in chunks] == ["chunk one", "chunk two"]
+        assert [chunk.chunk_index for chunk in chunks] == [0, 1]
+        assert all(len(chunk.embedding or []) == 1024 for chunk in chunks)
+
+    @pytest.mark.asyncio
+    async def test_embedding_failure_marks_job_failed(
+        self,
+        orchestrator,
+        mock_pipeline_service,
+        mock_embedding_service,
+        mock_job_repo,
+        mock_surreal_repo,
+    ):
+        mock_result = MagicMock()
+        mock_result.model_dump.return_value = {"tier": "A"}
+        mock_pipeline_service.process.return_value = mock_result
+        mock_embedding_service.embed_batch.side_effect = RuntimeError("embedding unavailable")
+        job = PipelineJob(id="job1", resource_key="yt:abc", content_id="abc")
+
+        await orchestrator._run_pipeline(job, "text", "youtube", "Title")
+
+        mock_job_repo.update_job_status.assert_any_call(
+            "job1",
+            JobStatus.FAILED,
+            error_code="EMBEDDING_ERROR",
+            error_message="embedding unavailable",
+            error_stage="embedding",
+        )
+        mock_surreal_repo.complete_content_processing.assert_not_awaited()
 
 
 class TestRunPipelineFailure:

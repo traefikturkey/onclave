@@ -8,6 +8,7 @@ from minio import Minio
 
 from menos.config import settings
 from menos.services.agent import AgentService
+from menos.services.chunking import ChunkingService
 from menos.services.database import PostgresDatabase
 from menos.services.docling import DoclingClient
 from menos.services.embeddings import get_embedding_service
@@ -390,7 +391,15 @@ async def get_pipeline_orchestrator():
     job_repo = await get_job_repository()
     repo = await get_postgres_repo()
     callback = get_callback_service()
-    return PipelineOrchestrator(pipeline, job_repo, repo, settings, callback)
+    return PipelineOrchestrator(
+        pipeline_service=pipeline,
+        job_repo=job_repo,
+        surreal_repo=repo,
+        settings=settings,
+        chunking_service=ChunkingService(),
+        embedding_service=get_embedding_service(),
+        callback_service=callback,
+    )
 
 
 def get_callback_service():

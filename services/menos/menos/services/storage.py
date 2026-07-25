@@ -838,6 +838,49 @@ class PostgresRepository:
             (Jsonb(result_dict), pipeline_version, content_id),
         )
 
+    async def complete_content_processing(
+        self,
+        content_id: str,
+        result_dict: dict,
+        pipeline_version: str,
+        chunks: list[ChunkModel],
+    ) -> None:
+        """Atomically replace chunks and mark content processing complete."""
+        if not chunks:
+            raise ValueError("completed content requires at least one chunk")
+
+        now = datetime.now(UTC)
+        chunk_values = []
+        for chunk in chunks:
+            chunk.id = chunk.id or _new_id()
+            chunk.created_at = chunk.created_at or now
+            chunk_values.append(
+                (
+                    chunk.id,
+                    content_id,
+                    chunk.text,
+                    chunk.chunk_index,
+                    _vector_literal(chunk.embedding or []),
+                    chunk.created_at,
+                )
+            )
+
+        with self._database.connection() as connection, connection.cursor() as cursor:
+            cursor.execute("DELETE FROM chunk WHERE content_id=%s", (content_id,))
+            cursor.executemany(
+                """INSERT INTO chunk (id,content_id,text,chunk_index,embedding,created_at)
+                VALUES (%s,%s,%s,%s,%s::vector,%s)""",
+                chunk_values,
+            )
+            cursor.execute(
+                """UPDATE content SET metadata=jsonb_set(metadata,'{unified_result}',%s),
+                processing_status='completed',processed_at=now(),pipeline_version=%s,updated_at=now()
+                WHERE id=%s""",
+                (Jsonb(result_dict), pipeline_version, content_id),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError(f"content not found while completing processing: {content_id}")
+
     async def find_potential_duplicates(self, max_distance: int = 1) -> list[list[EntityModel]]:
         from menos.services.normalization import find_near_duplicates
 

@@ -396,7 +396,9 @@ def _create_pipeline_orchestrator(surreal_repo: SurrealDBRepository):
 
     try:
         from menos.services.callbacks import CallbackService
+        from menos.services.chunking import ChunkingService
         from menos.services.di import get_unified_pipeline_provider
+        from menos.services.embeddings import get_embedding_service
         from menos.services.jobs import JobRepository
         from menos.services.pipeline_orchestrator import PipelineOrchestrator
         from menos.services.unified_pipeline import UnifiedPipelineService
@@ -419,11 +421,13 @@ def _create_pipeline_orchestrator(surreal_repo: SurrealDBRepository):
 
         # Create orchestrator
         return PipelineOrchestrator(
-            pipeline_service,
-            job_repo,
-            surreal_repo,
-            settings,
-            callback_service,
+            pipeline_service=pipeline_service,
+            job_repo=job_repo,
+            surreal_repo=surreal_repo,
+            settings=settings,
+            chunking_service=ChunkingService(),
+            embedding_service=get_embedding_service(),
+            callback_service=callback_service,
         )
 
     except Exception as e:

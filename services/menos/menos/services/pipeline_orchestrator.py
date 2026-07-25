@@ -4,8 +4,10 @@ import asyncio
 import logging
 
 from menos.config import Settings
-from menos.models import JobStatus, PipelineJob
+from menos.models import ChunkModel, JobStatus, PipelineJob
 from menos.services.callbacks import CallbackService
+from menos.services.chunking import ChunkingService
+from menos.services.embeddings import EmbeddingService
 from menos.services.jobs import JobRepository
 from menos.services.storage import SurrealDBRepository
 from menos.services.unified_pipeline import PipelineStageError, UnifiedPipelineService
@@ -32,12 +34,16 @@ class PipelineOrchestrator:
         job_repo: JobRepository,
         surreal_repo: SurrealDBRepository,
         settings: Settings,
+        chunking_service: ChunkingService,
+        embedding_service: EmbeddingService,
         callback_service: CallbackService | None = None,
     ):
         self.pipeline_service = pipeline_service
         self.job_repo = job_repo
         self.surreal_repo = surreal_repo
         self.settings = settings
+        self.chunking_service = chunking_service
+        self.embedding_service = embedding_service
         self.callback_service = callback_service
 
     async def submit(
@@ -98,14 +104,53 @@ class PipelineOrchestrator:
         except Exception as inner_e:
             logger.error("Failed to update job status for %s: %s", job_id, inner_e)
 
-    async def _handle_result(self, job: PipelineJob, job_id: str, content_id: str, result) -> None:
+    async def _build_chunks(self, content_id: str, content_text: str) -> list[ChunkModel]:
+        """Create searchable chunks and embeddings for completed content."""
+        texts = self.chunking_service.chunk_text(content_text)
+        if not texts:
+            raise PipelineStageError("chunking", "CHUNKING_EMPTY", "Content produced no chunks")
+
+        try:
+            embeddings = await self.embedding_service.embed_batch(texts)
+        except RuntimeError as error:
+            raise PipelineStageError("embedding", "EMBEDDING_ERROR", str(error)) from error
+
+        if len(embeddings) != len(texts) or any(len(embedding) != 1024 for embedding in embeddings):
+            raise PipelineStageError(
+                "embedding",
+                "EMBEDDING_DIMENSION_ERROR",
+                "Embedding output did not match the chunk count and required dimension",
+            )
+
+        return [
+            ChunkModel(
+                content_id=content_id,
+                text=text,
+                chunk_index=index,
+                embedding=embedding,
+            )
+            for index, (text, embedding) in enumerate(zip(texts, embeddings, strict=True))
+        ]
+
+    async def _handle_result(
+        self,
+        job: PipelineJob,
+        job_id: str,
+        content_id: str,
+        content_text: str,
+        result,
+    ) -> None:
         """Persist a successful pipeline result and fire the callback."""
         result_dict = result.model_dump(mode="json")
-        await self.surreal_repo.update_content_processing_result(
-            content_id, result_dict, self.settings.app_version
+        chunks = await self._build_chunks(content_id, content_text)
+        await self.surreal_repo.complete_content_processing(
+            content_id,
+            result_dict,
+            self.settings.app_version,
+            chunks,
         )
         updated_job = await self.job_repo.update_job_status(job_id, JobStatus.COMPLETED)
-        logger.info("Pipeline completed for job %s", job_id)
+        logger.info("Pipeline completed for job %s with %d chunks", job_id, len(chunks))
         await self._fire_callback(updated_job or job, result_dict)
 
     async def _handle_no_result(self, job: PipelineJob, job_id: str, content_id: str) -> None:
@@ -144,7 +189,7 @@ class PipelineOrchestrator:
             job_id=job_id,
         )
         if result:
-            await self._handle_result(job, job_id, content_id, result)
+            await self._handle_result(job, job_id, content_id, content_text, result)
         else:
             await self._handle_no_result(job, job_id, content_id)
 
