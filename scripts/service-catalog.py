@@ -102,7 +102,7 @@ def deploy(service: dict) -> None:
     deployment = service["deployment"]
     if deployment["mode"] != "temporary-direct":
         raise ValueError(
-            f"{service['id']} deployment is external; follow docs/infra-alignment-plan.md"
+            f"{service['id']} deployment is external; use the consuming platform workflow"
         )
     command = [
         "docker",

@@ -31,10 +31,9 @@ The non-secret project ID and server URLs live in the private values
 repository under `values/inventory/group_vars/all.yml`.
 
 Onclave requires `RABBITMQ_DEFAULT_USER` and `RABBITMQ_DEFAULT_PASS`.
-Menos requires `SURREALDB_PASSWORD`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`,
-`SEARXNG_SECRET`, Webshare credentials, and the YouTube, OpenRouter, and
-Anthropic API keys. The renderer also emits temporary `MINIO_*` aliases so
-that the pre-absorption Compose file remains restart-safe until cutover.
+Menos production deployment and secret management are external to this
+harness. Its provider-neutral runtime contract is documented in
+`../deploy/app/menos/env-contract.md`.
 
 ## Usage
 
@@ -51,9 +50,8 @@ just deploy onclave   # temporary direct path; approval required
 ```
 
 The deployment playbook refuses dirty working trees and verifies service
-health after `docker compose up`. Menos deployment follows
-`docs/infra-alignment-plan.md`; its direct legacy playbook remains reference
-material only.
+health after `docker compose up`. Menos is deployed by the consuming platform;
+its direct legacy playbook remains reference material only.
 
 The validation container stays root because it normalizes read-only SSH key
 mount permissions. Repository and values mounts are read-only, and the harness
