@@ -288,7 +288,7 @@ class OpenRouterProvider:
                 }
 
                 response = await client.post(
-                    "/chat/completions",
+                    "chat/completions",
                     json=payload,
                     timeout=timeout,
                 )

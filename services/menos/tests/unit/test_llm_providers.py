@@ -364,6 +364,8 @@ class TestOpenRouterProviderGetClient:
         client = await p._get_client()
         assert client.headers["authorization"] == "Bearer or-abc"
         assert client.headers["http-referer"] == "menos"
+        request = client.build_request("POST", "chat/completions")
+        assert str(request.url) == "https://openrouter.ai/api/v1/chat/completions"
         await p.close()
 
 
@@ -389,7 +391,7 @@ class TestOpenRouterProviderGenerate:
         assert result == "Hello from OR"
 
         call_args = mock_client.post.call_args
-        assert call_args.args[0] == "/chat/completions"
+        assert call_args.args[0] == "chat/completions"
         assert call_args.kwargs["json"]["model"] == "meta/llama-3"
 
     @pytest.mark.asyncio
