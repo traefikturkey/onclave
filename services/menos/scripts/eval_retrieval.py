@@ -24,7 +24,7 @@ from pathlib import Path
 import httpx
 import yaml
 
-SIGNING_MODULE = Path.home() / ".claude" / "commands" / "yt" / "signing.py"
+SIGNING_MODULE = Path.home() / ".dotfiles" / "tools" / "menos-youtube" / "signing.py"
 MENOS_BASE = "http://192.0.2.241:8000"
 KEY_FILE = Path.home() / ".ssh" / "id_ed25519"
 
