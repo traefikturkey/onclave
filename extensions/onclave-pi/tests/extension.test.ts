@@ -50,19 +50,22 @@ describe("Onclave v2 adapter registration", () => {
 });
 
 describe("Onclave v2 footer status", () => {
-  it("publishes connection and peer state through the footer status API", () => {
+  it.each([
+    ["connected", "\x1b[32m"],
+    ["disconnected", "\x1b[31m"],
+  ])("colors the client name for the %s state", (state, color) => {
     const setStatus = vi.fn();
 
     refreshFooterStatus({
       aliveAgents: 0,
       card: { agent_id: "dev-wks-mglenn-.dotfiles-main" },
-      state: "disconnected",
+      state,
       ui: { setStatus },
     } as never);
 
     expect(setStatus).toHaveBeenCalledWith(
       "onclave-v2",
-      "onclave v2 disconnected | dev-wks-mglenn-.dotfiles-main | peers alive: 0"
+      `Onclave: ${color}dev-wks-mglenn-.dotfiles-main\x1b[0m | Peers: 0`
     );
   });
 });

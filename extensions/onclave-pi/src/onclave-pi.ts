@@ -42,6 +42,9 @@ const MAX_WAIT_TIMEOUT_MS = 300_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_AMQP_URL = "amqp://onclave:onclave-dev@localhost:5672/onclave";
 const FOOTER_STATUS_KEY = "onclave-v2";
+const ANSI_GREEN = "\x1b[32m";
+const ANSI_RED = "\x1b[31m";
+const ANSI_RESET = "\x1b[0m";
 
 type AdapterRuntime = {
   card: AgentCard;
@@ -441,10 +444,10 @@ async function shutdownAdapter(
 type FooterStatusRuntime = Pick<AdapterRuntime, "aliveAgents" | "card" | "state" | "ui">;
 
 export function refreshFooterStatus(runtime: FooterStatusRuntime): void {
+  const clientColor = runtime.state === "connected" ? ANSI_GREEN : ANSI_RED;
   const line =
-    `onclave v2 ${runtime.state}` +
-    ` | ${runtime.card.agent_id}` +
-    ` | peers alive: ${runtime.aliveAgents}`;
+    `Onclave: ${clientColor}${runtime.card.agent_id}${ANSI_RESET}` +
+    ` | Peers: ${runtime.aliveAgents}`;
   runtime.ui.setStatus?.(FOOTER_STATUS_KEY, line);
 }
 

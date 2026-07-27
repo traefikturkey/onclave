@@ -331,7 +331,7 @@ one.
 | Risk | Impact | Mitigation |
 |------|--------|------------|
 | Broker host is a single point of failure | All agent comms down when unreachable | Conscious homelab trade; compose restart policies; adapter degrades visibly and resumes cleanly |
-| amqplib reconnect edge cases in a TUI process | Stuck consumers after network blips | Reconnect state machine with tests; heartbeat gap detection; footer status surfaces disconnected state |
+| amqplib reconnect edge cases in a TUI process | Stuck consumers after network blips | Reconnect state machine with tests; heartbeat gap detection; footer client name turns red when disconnected |
 | Inert `inform` weakened by prompt-level workarounds | Injection surface returns | Enforce in delivery code path, never via prompt text; test with adversarial inform bodies |
 | Confirmation fatigue on cross-host requests | Operators enable blanket auto-accept | Scope confirmation to cross-host origin only; per-origin opt-in; local flow frictionless |
 | Budget bookkeeping depends on adapter-reported tokens | Skewed budgets | Exchange-count budget is the hard stop; token budget advisory until usage reporting is proven |
