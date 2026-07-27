@@ -164,13 +164,20 @@ is actually wanted.
 
 ## Discovery
 
-Where a service needs to be discoverable, the mechanism is a DNS SRV record
-served by the existing resolver chain, not a discovery protocol. Gossip stays
-where it earns its keep, replicating records between joyride nodes.
+Clients resolve services by name through the existing DNS chain, not through a
+discovery protocol. Gossip stays where it earns its keep, replicating records
+between joyride nodes.
 
-This fixes the mechanism, not the coverage. Exactly one service is in scope
-today. Whether others need SRV records is an open question below, and adding
-them is a per-service decision rather than a rollout.
+Concretely, a client derives a service URL from a domain plus the deployed
+hostname convention (`<service>.<domain>`, HTTPS on 443 behind Caddy). The A
+records already exist; nothing new is published.
+
+A DNS SRV record was specified first and then withdrawn on 2026-07-27 after
+adversarial review. The A record already existed, every SRV-specific capability
+(port flexibility, priority, weight) was unused because the design fixes port
+443 with one instance, and the SRV machinery carried most of the defect surface.
+SRV becomes correct if a service ever needs a non-default port or multiple
+weighted instances; the research supporting it is preserved in the child PRD.
 
 See [menos service discovery](2026-07-26-menos-service-discovery-PRD.md).
 
@@ -299,8 +306,9 @@ governing document should not live in the repository losing ground.
 
 ## Open Questions
 
-- Does anything besides menos need SRV in the first pass? The onclave broker is
-  the obvious candidate, since finding the broker is the Pi bootstrap problem.
+- Should the onclave broker use the same convention? Finding the broker is the
+  Pi bootstrap problem, and it would be the second consumer of whatever pattern
+  menos establishes.
 - When `onramp-vNext` can receive workloads, what is the migration order for the
   three evicted services?
 - Does menos becoming a memory and telemetry sink change its placement? It is

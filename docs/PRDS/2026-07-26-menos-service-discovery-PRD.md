@@ -1,50 +1,89 @@
-# PRD: menos Service Discovery via DNS SRV
+# PRD: menos Service Discovery
 
 Parent PRD: [Homelab Platform Architecture](2026-07-26-homelab-platform-architecture-PRD.md)
 
-Status: draft, 2026-07-26.
+Status: draft. Created 2026-07-26, revised 2026-07-27 after adversarial review.
 
 ## Purpose
 
-A Pi instance should find menos without being configured with its address.
+A client should reach menos without being configured with its address.
 
 ## Decision
 
-Publish one DNS SRV record and have the menos client resolve it.
+The client derives the menos URL from a domain plus the existing hostname
+convention:
 
 ```text
-_menos._tcp.<domain>.  300  IN  SRV  0 0 443 menos.<domain>.
+https://menos.<domain>/api/v1
 ```
 
-Client resolution:
+Resolution order in the client:
 
 1. If `MENOS_API_BASE` is set, use it and stop.
-2. SRV lookup for the fully qualified `_menos._tcp.<domain>.`
-3. Build `https://<target>:<port>/api/v1`.
-4. On lookup failure, raise an error naming both the query attempted and
-   `MENOS_API_BASE`.
+2. Otherwise build `https://menos.<MENOS_DISCOVERY_DOMAIN>/api/v1`.
+3. If `MENOS_DISCOVERY_DOMAIN` is also unset, raise an error naming both
+   variables.
 
-Two details that are not obvious and that a naive implementation gets wrong:
+**No DNS record is created and no DNS tooling changes.** The A record for
+`menos.<domain>` already exists in the private `values/dns-records.local.json`,
+and `menos_server_name` is already the deployed convention, served by Caddy on
+port 443.
+
+Two details a naive implementation gets wrong:
 
 **The API base includes a path.** `.dotfiles/.env.example:18` documents
 `MENOS_API_BASE=https://menos.example.net/api/v1`, and
-`.dotfiles/tools/menos-youtube/list_videos.py:68-70` signs the path
-`/api/v1/content` while requesting `{api_base}/content`. A discovered base
-without `/api/v1` would request `/content` while the RFC 9421 signature covers
-`/api/v1/content`, and every request would fail signature verification even
-though DNS succeeded. The client appends `/api/v1` as a constant. It is a
-property of the menos API version, not of the deployment, so it does not belong
-in DNS.
+`.dotfiles/tools/menos-youtube/list_videos.py:68-70` signs `/api/v1/content`
+while requesting `{api_base}/content`. A base without `/api/v1` would request
+`/content` while the RFC 9421 signature covers `/api/v1/content`, and every
+request would fail signature verification.
 
-**Query the fully qualified name, do not rely on the search suffix.** The
-primary workstation's global DNS suffix search list contains four entries: two
-employer domains, the tailnet domain, and the homelab domain, in that order. A
-bare `_menos._tcp` lookup would be tried against the employer domains first,
-sending queries for an internal service name to employer DNS servers before
-reaching the right suffix. The client therefore needs the domain as an explicit
-value rather than an inherited one.
+**Do not put an explicit port in the URL.** `signing.py:62` signs
+`"@authority"` derived from `urlparse(base).netloc`. With `:443` present that
+yields `menos.example.internal:443`, while httpx strips the default port and
+sends `Host: menos.example.internal`. Verified: the signed authority and the
+transmitted Host would not match, and every request would fail. Omit the port.
 
-Scheme is convention: port 443 means https.
+## Why not SRV
+
+An earlier revision of this document specified a DNS SRV record
+(`_menos._tcp.<domain>`), which required extending
+`homelab-infra/infra/ansible/scripts/apply-technitium-dns.py` with a new record
+type, a separate service-name validator for underscore labels, a four-field
+idempotency comparison, and a `dnspython` dependency in the client.
+
+Adversarial review rejected it, correctly:
+
+- **The A record already exists.** Discovery in the DNS sense is already solved.
+  The SRV work would have added a second record pointing at the same host.
+- **Every SRV degree of freedom is unused.** Port flexibility is moot because
+  the design fixes port 443. Priority and weight are moot with one instance;
+  the proposed schema hardcoded both to zero. That is a config knob for values
+  that do not vary, which this project's constraints explicitly forbid.
+- **It carried most of the risk.** Roughly two thirds of the defects the review
+  found existed only because of the SRV machinery, including a live-mutation
+  hazard where declaring the record would have caused the next routine
+  `just apply` to push it without any DNS-specific review gate.
+
+The research behind SRV was not wasted and is preserved below, because it
+answers questions that will recur.
+
+## Why not broadcast
+
+The original idea was a UDP broadcast where a client asks and menos answers. It
+was rejected because it is subnet-bound by construction and the client runs on a
+laptop that leaves the subnet.
+
+DNS keeps working away from home: the workstation's tailnet interface carries
+the tailnet domain, the homelab domain is in the machine's global suffix search
+list rather than bound to the Ethernet interface, and the operator's existing
+Tailscale configuration already resolves homelab names over the tailnet.
+Broadcast could never do this.
+
+Note the client builds a fully qualified name rather than relying on the suffix
+search list. The workstation's list places two employer domains ahead of the
+homelab domain, so a partially qualified lookup would query an internal service
+name against employer DNS first.
 
 ## Change site
 
@@ -60,264 +99,109 @@ if not value:
     )
 ```
 
-The change replaces the raise with an SRV lookup and keeps the raise as the
-final fallback when that also fails. `MENOS_API_BASE` stays the override and
-keeps precedence, so existing setups are unaffected.
+The change inserts the convention path before the raise. `MENOS_API_BASE` keeps
+precedence, so existing setups are unaffected.
 
-Note this puts the client-side work in the `.dotfiles` repo, not in `onclave`,
-even though this PRD lives with menos.
+Note `get_api_host()` at lines 48-51 calls `get_api_base()` again, so the
+function runs twice per invocation. Harmless now that no network lookup is
+involved, but worth knowing if that ever changes.
 
-### Dependency
-
-Python's standard library cannot perform SRV lookups; `socket.getaddrinfo`
-resolves A and AAAA only. `dnspython` is not currently present in
-`.dotfiles/tools/menos-youtube/pyproject.toml:6-11`, whose dependencies are
-`youtube-transcript-api`, `google-api-python-client`, `httpx`, and
-`cryptography`.
-
-Options:
-
-- Add `dnspython` to that `pyproject.toml`. One pure-Python dependency, works
-  the same on Windows, Git Bash, WSL, Linux, and macOS.
-- Shell out to `nslookup -type=SRV` or `dig SRV`. No dependency, but the output
-  format and tool availability differ across the platforms this repo supports.
-
-`dnspython` is the recommended option given the cross-platform requirement.
-
-## Why DNS and not gossip
-
-The original idea was a UDP broadcast where a Pi instance asks and menos
-answers. It was rejected because it is subnet-bound by construction and the
-client runs on a laptop that leaves the subnet.
-
-DNS keeps working away from home. The workstation's tailnet interface carries
-the tailnet domain, the homelab domain is in the machine's global suffix search
-list rather than being bound to the Ethernet interface, and the operator's
-existing Tailscale configuration already resolves homelab names over the
-tailnet. Broadcast could never do this.
-
-Two supporting points, stated at the strength the evidence supports:
-
-- Every `*_vlan_id` in `homelab-infra` private `values/terraform.tfvars` is
-  currently `null` and managed hosts are configured within a single `/24`. That
-  removes topology as an objection to broadcast on the managed hosts. It does
-  not establish that every relevant client shares one broadcast domain, since
-  workstation firewalls, wireless isolation, VPN interfaces, and container
-  networking all affect this and none were tested.
-- `joyride/plugins/docker-cluster/discovery.go:14-23,109-143` implements
-  broadcast peer discovery between joyride nodes. That is peer discovery among
-  equals, not client-to-service discovery, so it demonstrates familiarity with
-  the technique rather than a working precedent for this use case. Gossip is the
-  right tool for peers with no authority; DNS is the right tool when there is an
-  authority, which here is Technitium.
+This puts the work in `.dotfiles`, not in `onclave`, even though this PRD lives
+with menos.
 
 ## Scope
 
 In scope:
 
-- SRV record support in `homelab-infra`'s DNS sync tooling. Decided 2026-07-27:
-  extend the script rather than place the record by hand. A hand-placed record
-  in an otherwise declarative DNS setup exists nowhere in git and will not
-  survive review or rebuild.
-- One SRV record declared in the DNS records file.
-- SRV resolution in the menos client, with `MENOS_API_BASE` override.
-- An actionable error on resolution failure.
-
-### Tooling change
-
-`homelab-infra/infra/ansible/scripts/apply-technitium-dns.py` currently supports
-three record types: `FWD` at line 267, `A` at 289, and `CNAME` at 307. There is
-no SRV path.
-
-The records file uses type-specific top-level keys rather than a generic record
-list. `scaffold/dns-records.local.json` has `settings`, `zones`, `a_records`,
-and CNAME equivalents, where `a_records` maps a name directly to an address
-string.
-
-SRV cannot reuse that shape, because a record carries priority, weight, port,
-and target rather than a single value. Keeping the existing convention of a map
-keyed by fully qualified name, the addition is:
-
-```json
-"srv_records": {
-  "_menos._tcp.example.internal": {
-    "priority": 0,
-    "weight": 0,
-    "port": 443,
-    "target": "menos.example.internal"
-  }
-}
-```
-
-Work required:
-
-- a `srv_records` key whose values are objects rather than strings;
-- an ensure function following the existing `A` and `CNAME` pattern, including
-  the `record_matches` idempotency check at line 213. Note that check compares a
-  single field, so SRV needs it extended to compare four;
-- validation that rejects malformed entries rather than passing them to the API.
-
-The four object keys map one-to-one onto the Technitium API parameters, so no
-translation layer is needed. See Zone behavior below for the API contract.
-
-This is modest and localized, but it is real work and roughly doubles the size
-of this PRD compared with the record-only version.
+- Convention-based URL derivation in `get_api_base()`, with `MENOS_API_BASE`
+  keeping precedence.
+- `MENOS_DISCOVERY_DOMAIN` documented in `.env.example`.
+- An actionable error naming both variables when neither is set.
+- Unit tests that actually run in the repo's test command.
 
 Out of scope:
 
-- Tailscale and tailnet routing. The operator runs a separate Tailscale instance
-  outside this work; the `tailscale_client` LXC in `homelab-infra` is declared
-  with `tailscale_client_enabled = false` and is not being configured here.
-- Backup and restore for menos or any other component. Deferred until the stack
-  stabilizes.
+- Any DNS record change. Nothing is added to `dns-records.local.json`.
+- Any change to `apply-technitium-dns.py`.
+- Tailscale and tailnet routing. A separate instance runs outside this work.
+- Backup and restore for menos or anything else.
 - Storage architecture.
-- Telemetry transport. Telemetry will exist; how it ships is an open question.
-- A general service registry with health, tags, or liveness.
+- Telemetry transport.
+- A general service registry.
 - Changes to joyride.
-
-## Zone behavior: resolved
-
-**Locally declared records inside a Forwarder zone are served locally.** In
-Technitium forwarder zones, a request is forwarded to the server named in the
-FWD record only when no matching record exists in the zone. Adding a record to
-the zone therefore answers it directly, and everything else keeps forwarding to
-joyride.
-
-This matches what the repository already does: `apply-technitium-dns.py:244`
-creates zones with `{"type": "Forwarder"}` and then adds `A` and `CNAME`
-records into them, which works in production today. SRV is the same mechanism
-with a different record type.
-
-**SRV is supported by the Technitium API.** `/api/zones/records/add` accepts
-`type=SRV` with four parameters beyond the common ones:
-
-| Parameter | Meaning |
-|---|---|
-| `priority` | Lower is tried first |
-| `weight` | Share of traffic among equal-priority targets |
-| `port` | Service port |
-| `target` | Hostname providing the service |
-
-The API takes a fully qualified `domain` plus a separate `zone`, which is the
-shape `apply-technitium-dns.py:208` already uses. That convention needs no
-change.
-
-**Do not create a more specific Primary zone.** An earlier draft proposed a
-Primary zone for `_menos._tcp.<domain>` as a fallback if records in a Forwarder
-zone were not served. That is wrong and would break forwarding: a Primary zone
-is authoritative and answers NXDOMAIN for names it does not hold rather than
-falling through. Technitium's guidance is to keep one conditional forwarder zone
-per domain and add records to it.
-
-Nothing blocks implementation. One live confirmation is still cheap and worth
-doing before writing the client:
-
-```text
-dig SRV _test._tcp.<domain> @<technitium-address>
-```
-
-Sources: [Technitium help](https://technitium.com/dns/help.html),
-[DnsServer discussion #818](https://github.com/TechnitiumSoftware/DnsServer/discussions/818),
-[Technitium API docs](https://github.com/TechnitiumSoftware/DnsServer/blob/master/APIDOCS.md).
 
 ## Acceptance criteria
 
-1. A client with no menos configuration resolves menos and completes a signed
-   API call.
-   - Verify: unset `MENOS_API_BASE` in the environment, and confirm it is absent
-     from **both** `~/.dotfiles/.env` and `~/.dotfiles/.secrets`. Then run
-     `/yt list` and observe a successful request.
+1. A client with no `MENOS_API_BASE` derives the URL and completes a signed API
+   call.
+   - Verify: unset `MENOS_API_BASE` and confirm it is absent from **both**
+     `~/.dotfiles/.env` and `~/.dotfiles/.secrets`, set
+     `MENOS_DISCOVERY_DOMAIN`, then run the `/yt` listing command.
    - `api_config.py:15-21` falls back to `.secrets` when `.env` is absent, so
      clearing only `.env` does not produce an unconfigured client and the test
-     would pass without exercising discovery at all.
-   - This criterion exercises RFC 9421 signing, not just DNS. A discovered base
-     missing `/api/v1` resolves correctly and still fails here, which is the
-     point.
-2. `MENOS_API_BASE` overrides discovery.
-   - Verify: set it to a deliberately wrong value, confirm the client uses it and
-     fails there rather than falling back to SRV.
-3. Discovery failure is actionable.
-   - Verify: query a domain with no SRV record; the error names the query
-     attempted and `MENOS_API_BASE`.
-   - The existing message at `api_config.py:42-44` names only the variable. It
-     does not satisfy this criterion and must be extended.
-4. The DNS tooling change is idempotent.
-   - Verify: run the Technitium sync twice against an unchanged records file and
-     confirm the second run reports no changes, matching the behavior of the
-     existing `A` and `CNAME` paths.
+     would pass without exercising the new path.
+   - This exercises RFC 9421 signing, not just URL construction. A base missing
+     `/api/v1`, or carrying an explicit `:443`, fails here. That is the point.
+2. `MENOS_API_BASE` still takes precedence.
+   - Verify: set it to a deliberately wrong value and confirm the client uses it
+     and fails there rather than falling back to the convention.
+3. With neither variable set, the error names both.
+   - Verify: unit test.
+   - The current message at `api_config.py:42-44` names only `MENOS_API_BASE`.
 
 ## Later, not now
 
-If more services need discovery, joyride emitting SRV from Docker labels is the
-natural path, since its gossip already replicates the record store. That would
-first require record lifecycle handling, because a stale SRV is worse than a
-stale A record. Two known gaps:
+If a service ever needs to be reachable on a port other than 443, or if more
+than one menos instance needs priority or weight, DNS SRV becomes the right
+mechanism and the research below applies. Until then the hostname convention
+carries the same information for less machinery.
 
-- `joyride/plugins/docker-cluster/delegate.go:74-115` - `FullState` carries no
-  tombstones, so a dropped remove can never converge. Anti-entropy only
-  exchanges records that exist.
-- Records are not reaped when the publishing node fails; membership failure does
-  not remove what that node published.
+### Preserved SRV research
 
-Neither matters for a static record.
+Verified 2026-07-27, retained so it is not re-derived:
 
-## Cleanup to fold into the plan
-
-Not built here, recorded so the implementation plan can pick it up:
-
-- `homelab-infra` private `values/` holds roughly 2.42 GiB of backup tarballs in
-  git history across 101 tracked files. Largest single blob is a 1.1 GB Forgejo
-  state archive; there are also several 92-98 MB Hermes state archives including
-  near-duplicates. On-disk `values/` is 8.7 GB, mostly `migration-staging/`
-  (3.4 G) and `service-backups/` (1.8 G).
-- Decision taken: stop the growth, leave the existing packfile alone. No history
-  rewrite.
+- **Technitium Forwarder zones serve locally declared records.** A request is
+  forwarded to the FWD target only when no matching record exists in the zone.
+  The repo already relies on this by adding A and CNAME records into Forwarder
+  zones in production.
+  Sources: [Technitium help](https://technitium.com/dns/help.html),
+  [DnsServer discussion #818](https://github.com/TechnitiumSoftware/DnsServer/discussions/818).
+- **Technitium's API supports SRV** at `/api/zones/records/add` with `priority`,
+  `weight`, `port`, and `target`, taking a fully qualified `domain` plus a
+  separate `zone`, matching the shape `apply-technitium-dns.py:208` already
+  uses.
+  Source: [Technitium APIDOCS.md](https://github.com/TechnitiumSoftware/DnsServer/blob/master/APIDOCS.md).
+- **Do not create a more specific Primary zone.** A Primary zone is
+  authoritative and answers NXDOMAIN for names it does not hold rather than
+  falling through to the forwarder. Technitium's guidance is one conditional
+  forwarder zone per domain.
+- **`DNS_NAME_RE` at `apply-technitium-dns.py:15` rejects underscore labels.**
+  Verified: `_menos._tcp.example.internal` fails, `menos.example.internal`
+  passes. SRV would need a separate service-name validator; loosening the shared
+  regex would weaken A and CNAME validation.
+- **There is no DNS-specific review gate.** `just plan` runs `tofu plan` only
+  and never shows DNS records. `technitium-dns.yml` runs unconditionally for
+  enabled services during `just apply`. Any future DNS record change goes live
+  on the next routine apply for any reason, with no separate review.
 
 ## Sources
 
-Repository facts in this document were read directly during the 2026-07-26
-session. Paths are given relative to each repository root.
-
 | Claim | Source |
 |---|---|
-| Broadcast discovery exists in joyride | `joyride/plugins/docker-cluster/discovery.go:14-23,109-143` |
-| Gossip is `hashicorp/memberlist` v0.5.4, not Serf | `joyride/go.mod:8-10`, `joyride/plugins/docker-cluster/cluster.go:8-10` |
-| Gossip payload is A-record only | `joyride/plugins/docker-cluster/message.go:17-26` |
-| Nodes advertise no metadata | `joyride/plugins/docker-cluster/delegate.go:42-45` |
-| No tombstones in full-state sync | `joyride/plugins/docker-cluster/delegate.go:74-115` |
-| Three-node gossip test harness exists | `joyride/docker-compose.cluster-test.yml` (`coredns-node1..3`) |
-| Cluster-test healthchecks target the wrong port | `joyride/docker-compose.cluster-test.yml:29,54,82` use `:8080`; `joyride/Corefile.cluster:39` serves `health :5454`. Unrelated latent bug, not fixed here |
-| Flat network, no VLANs in use | `homelab-infra` private `values/terraform.tfvars`, all `*_vlan_id = null` |
-| Tailscale client declared but disabled | `homelab-infra` private `values/terraform.tfvars:67` |
-| menos exposed via shared Caddy on the onramp host | `homelab-infra/infra/ansible/roles/menos_onramp/tasks/main.yml:262-277` and `roles/menos_onramp/templates/menos.caddy.j2:1-9` (implementation, more durable than the prose contract, whose line numbers shifted during the 2026-07-26 reconciliation) |
-| menos app definition and services | `onclave/deploy/app/menos/compose.yaml` |
-| `MENOS_API_BASE` is the existing convention and is currently required | `.dotfiles/tools/menos-youtube/api_config.py:37-45` |
-| `MENOS_BASE` in `eval_retrieval.py:28` is a module constant with a placeholder IP, not an env var | `onclave/services/menos/scripts/eval_retrieval.py:28` |
-| Workstation DNS suffix search list contains the homelab domain globally, plus the tailnet domain on the Tailscale interface | `Get-DnsClientGlobalSetting` and `Get-DnsClient` on the primary workstation, 2026-07-27. This is machine state, not repository state, and is not guaranteed on another machine |
-| Technitium DNS sync supports only FWD, A, and CNAME | `homelab-infra/infra/ansible/scripts/apply-technitium-dns.py:267,289,307` |
-| Forwarder zones serve locally declared records and forward only unmatched names | Technitium documentation and maintainer guidance, retrieved 2026-07-27: [help](https://technitium.com/dns/help.html), [discussion #818](https://github.com/TechnitiumSoftware/DnsServer/discussions/818). Corroborated by this repo already adding A and CNAME records into Forwarder zones in production |
-| Technitium API accepts `type=SRV` with `priority`, `weight`, `port`, `target` | [Technitium APIDOCS.md](https://github.com/TechnitiumSoftware/DnsServer/blob/master/APIDOCS.md), retrieved 2026-07-27 |
-| A more specific Primary zone is the wrong fallback; it answers NXDOMAIN rather than falling through | Same Technitium sources. This corrects an earlier draft of this document |
-| Homelab zones are Forwarder zones pointing at joyride | `apply-technitium-dns.py:244` and the `zones` map in `scaffold/dns-records.local.json` |
-| API base includes the `/api/v1` path | `.dotfiles/.env.example:18`, `.dotfiles/tools/menos-youtube/list_videos.py:68-70` |
-| Client falls back to `.secrets` when `.env` is absent | `.dotfiles/tools/menos-youtube/api_config.py:15-21` |
-| values/ size and largest blobs | `git count-objects -vH` and `git rev-list --objects --all` in `homelab-infra/values` |
+| menos A record already exists | private `values/dns-records.local.json`, `a_records`, verified 2026-07-27 |
+| menos hostname convention and Caddy on 443 | `homelab-infra/scaffold/ansible/inventory/local.yml` (`menos_server_name`), `roles/menos_onramp/templates/menos.caddy.j2` |
+| API base includes `/api/v1` | `.dotfiles/.env.example:18`, `.dotfiles/tools/menos-youtube/list_videos.py:68-70` |
+| Explicit `:443` breaks signing | `.dotfiles/tools/menos-youtube/signing.py:62` signs `@authority` from `urlparse(base).netloc`; httpx strips the default port from the Host header. Verified empirically |
+| Client falls back to `.secrets` | `.dotfiles/tools/menos-youtube/api_config.py:15-21` |
+| `get_api_base()` runs twice | `api_config.py:48-51` |
+| Technitium DNS sync supports only FWD, A, CNAME | `homelab-infra/infra/ansible/scripts/apply-technitium-dns.py:267,289,307` |
+| No DNS dry-run gate | `homelab-infra/scripts/plan-infra.sh` (tofu only), `scripts/apply-ansible-services.py`, `infra/ansible/playbooks/technitium-dns.yml` |
+| Workstation suffix search list ordering | `Get-DnsClientGlobalSetting` on the primary workstation, 2026-07-27. Machine state, not repository state |
 
-Related decisions from the same session, recorded outside this document:
+## Revision note
 
-- Service roles: `homelab-infra` provisions all Proxmox guests; `onramp-vNext`
-  is the service catalog; `onclave` is the AI incubator with a promotion path
-  into the vNext catalog. The substrate-versus-app half of this was already in
-  `homelab-infra/docs/onramp-app-platform-contract.md` and had not been acted
-  on. The provisioning, catalog, and secret-backend halves were added to that
-  document during the 2026-07-26 session and are uncommitted, so treat them as
-  new rather than as prior art.
-- Secrets: Bitwarden Secrets Manager is the only secret source in use. Infisical
-  remains a deployed service but is not a secret source. A provider interface is
-  future work. Services declare required secret names rather than their
-  location.
-- Ingress: Caddy is the target; the Traefik-labeled service corpus in the
-  original `onramp` repo is ported after the stack stabilizes, not now. Roughly
-  280 definitions sit at the top level of `services-available/`, but the count
-  is unstable across the repository's own documentation and should be measured
-  rather than quoted.
+The 2026-07-26 revision specified DNS SRV. A seven-reviewer adversarial panel on
+2026-07-27 found that the A record already existed, that every SRV-specific
+capability was unused, and that the SRV machinery carried most of the plan's
+defect surface including a live-mutation hazard. This revision adopts the
+hostname convention instead. The DNS-over-broadcast decision is unchanged.
