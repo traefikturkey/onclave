@@ -41,6 +41,7 @@ const MAX_MESSAGE_LENGTH = 100_000;
 const MAX_WAIT_TIMEOUT_MS = 300_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const DEFAULT_AMQP_URL = "amqp://onclave:onclave-dev@localhost:5672/onclave";
+const FOOTER_STATUS_KEY = "onclave-v2";
 
 type AdapterRuntime = {
   card: AgentCard;
@@ -160,11 +161,11 @@ async function startAdapter(
         runtime.registered = false;
         void options.audit("adapter_disconnect", { detail: detail ?? "" });
       }
-      refreshWidget(runtime);
+      refreshFooterStatus(runtime);
     },
   });
   runtime.link.start();
-  refreshWidget(runtime);
+  refreshFooterStatus(runtime);
   return runtime;
 }
 
@@ -198,7 +199,7 @@ async function onChannelReady(
     void consumeMessage(pi, runtime, channel, message, options);
   });
   await options.audit("adapter_connect", { agent_id: runtime.card.agent_id });
-  refreshWidget(runtime);
+  refreshFooterStatus(runtime);
 }
 
 async function consumeMessage(
@@ -417,7 +418,7 @@ async function heartbeatTick(runtime: AdapterRuntime | null): Promise<void> {
       (agent) => agent.alive === true
     ).length;
   }
-  refreshWidget(runtime);
+  refreshFooterStatus(runtime);
 }
 
 async function shutdownAdapter(
@@ -433,16 +434,18 @@ async function shutdownAdapter(
     // broker may already be gone; shutdown continues
   }
   await runtime.link.stop();
-  runtime.ui.setWidget?.("onclave-v2", undefined);
+  runtime.ui.setStatus?.(FOOTER_STATUS_KEY, undefined);
   runtime.correlation.clear();
 }
 
-function refreshWidget(runtime: AdapterRuntime): void {
+type FooterStatusRuntime = Pick<AdapterRuntime, "aliveAgents" | "card" | "state" | "ui">;
+
+export function refreshFooterStatus(runtime: FooterStatusRuntime): void {
   const line =
     `onclave v2 ${runtime.state}` +
     ` | ${runtime.card.agent_id}` +
     ` | peers alive: ${runtime.aliveAgents}`;
-  runtime.ui.setWidget?.("onclave-v2", [line], { placement: "belowEditor" });
+  runtime.ui.setStatus?.(FOOTER_STATUS_KEY, line);
 }
 
 function statusText(runtime: AdapterRuntime | null): string {

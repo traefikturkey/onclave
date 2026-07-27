@@ -303,7 +303,7 @@ one.
    - Verify: stop the broker mid-session, send attempts fail visibly, restart
      the broker.
    - Pass: adapter reconnects with backoff, re-registers, resumes consuming;
-     queued messages arrive; status widget reflected the outage.
+     queued messages arrive; footer status reflected the outage.
    - Fail: stuck consumer or silent message loss.
 
 9. [ ] Policy changes apply without session restarts.
@@ -331,7 +331,7 @@ one.
 | Risk | Impact | Mitigation |
 |------|--------|------------|
 | Broker host is a single point of failure | All agent comms down when unreachable | Conscious homelab trade; compose restart policies; adapter degrades visibly and resumes cleanly |
-| amqplib reconnect edge cases in a TUI process | Stuck consumers after network blips | Reconnect state machine with tests; heartbeat gap detection; widget surfaces disconnected state |
+| amqplib reconnect edge cases in a TUI process | Stuck consumers after network blips | Reconnect state machine with tests; heartbeat gap detection; footer status surfaces disconnected state |
 | Inert `inform` weakened by prompt-level workarounds | Injection surface returns | Enforce in delivery code path, never via prompt text; test with adversarial inform bodies |
 | Confirmation fatigue on cross-host requests | Operators enable blanket auto-accept | Scope confirmation to cross-host origin only; per-origin opt-in; local flow frictionless |
 | Budget bookkeeping depends on adapter-reported tokens | Skewed budgets | Exchange-count budget is the hard stop; token budget advisory until usage reporting is proven |

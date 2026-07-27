@@ -47,7 +47,7 @@ core audit log. Exit code 0 means all checks passed.
    ```
 
 2. In either session run `/onclave` and the `onclave_agents` tool: both
-   agents should list with `alive=true`, and the widget line should show
+   agents should list with `alive=true`, and the footer status line should show
    `connected`.
 
 3. Request/reply: from session 1 call `onclave_send` targeting session 2's
@@ -65,7 +65,7 @@ core audit log. Exit code 0 means all checks passed.
    docker compose -f docker/compose.yaml stop rabbitmq
    ```
 
-   The widget flips to `disconnected` and `onclave_send` fails visibly.
+   The footer status flips to `disconnected` and `onclave_send` fails visibly.
    Queue a message from a third machine or after restart:
 
    ```bash

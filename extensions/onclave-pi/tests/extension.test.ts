@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import onclavePi from "../src/onclave-pi";
+import { describe, expect, it, vi } from "vitest";
+import onclavePi, { refreshFooterStatus } from "../src/onclave-pi";
 
 type RegisteredTool = { name: string; parameters?: unknown };
 type RegisteredCommand = { name: string };
@@ -46,6 +46,24 @@ describe("Onclave v2 adapter registration", () => {
     expect(serialized).toContain("request");
     expect(serialized).toContain("query");
     expect(serialized).not.toContain("inform");
+  });
+});
+
+describe("Onclave v2 footer status", () => {
+  it("publishes connection and peer state through the footer status API", () => {
+    const setStatus = vi.fn();
+
+    refreshFooterStatus({
+      aliveAgents: 0,
+      card: { agent_id: "dev-wks-mglenn-.dotfiles-main" },
+      state: "disconnected",
+      ui: { setStatus },
+    } as never);
+
+    expect(setStatus).toHaveBeenCalledWith(
+      "onclave-v2",
+      "onclave v2 disconnected | dev-wks-mglenn-.dotfiles-main | peers alive: 0"
+    );
   });
 });
 

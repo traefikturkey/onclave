@@ -244,7 +244,7 @@ Tasks:
    (performative parameter, defaults `request`), `onclave_get` /
    `onclave_await` (correlation store fed by consumed replies),
    `onclave_inform` (explicit inert broadcast/point-to-point), `/onclave`
-   status command; peer widget showing broker connectivity and live agents.
+   status command; footer status showing broker connectivity and live agents.
 5. Remote-origin confirmation: `origin.host != os.hostname()` -> 
    `ctx.ui.confirm` before turn trigger; decline publishes `refuse`-style
    `failure` reply and audits.
@@ -300,7 +300,7 @@ pnpm exec tsx scripts/onclave-v2-acceptance.ts # end-to-end acceptance
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| amqplib reconnect edge cases in a TUI process | stuck consumers after network blips | reconnect state machine with tests; heartbeat gap detection; widget surfaces disconnected state |
+| amqplib reconnect edge cases in a TUI process | stuck consumers after network blips | reconnect state machine with tests; heartbeat gap detection; footer status surfaces disconnected state |
 | Workspace conversion breaks v1 tooling | v1 regression on the branch | phase 0 gate requires v1 suites green before any v2 code lands |
 | Budget bookkeeping depends on adapter-reported tokens | inflated/missing usage skews budgets | treat exchange-count budget as the hard stop; token budget advisory until usage reporting is proven |
 | Docker-host broker is a single point of failure | all agent comms down | out of scope by design (homelab trade recorded in PRD); compose restart policy; adapter degrades gracefully with clear status |
