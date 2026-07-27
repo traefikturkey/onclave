@@ -49,6 +49,10 @@ class YouTubeTranscript:
         return "\n".join(lines)
 
 
+class TranscriptUpstreamUnavailable(RuntimeError):
+    """YouTube transcript retrieval is temporarily unavailable."""
+
+
 class YouTubeService:
     """Service for fetching YouTube transcripts."""
 
@@ -86,10 +90,10 @@ class YouTubeService:
                 return match.group(1)
         raise ValueError(f"Could not extract video ID from: {url_or_id}")
 
-    def _map_transcript_error(self, video_id: str, exc: Exception) -> ValueError:
-        """Convert a youtube_transcript_api exception to a descriptive ValueError."""
+    def _map_transcript_error(self, video_id: str, exc: Exception) -> Exception:
+        """Convert a transcript client exception to a service-domain error."""
         if isinstance(exc, RequestBlocked):
-            return ValueError(
+            return TranscriptUpstreamUnavailable(
                 f"YouTube is blocking requests for video {video_id} despite using "
                 f"Webshare proxy. Ensure you have purchased 'Residential' proxies "
                 f"(not 'Proxy Server' or 'Static Residential'). "
@@ -97,7 +101,7 @@ class YouTubeService:
                 f"Original error: {exc}"
             )
         if isinstance(exc, YouTubeRequestFailed):
-            return ValueError(
+            return TranscriptUpstreamUnavailable(
                 f"YouTube request failed for video {video_id}. This may indicate a "
                 f"proxy connection issue. Check WEBSHARE_PROXY_USERNAME and "
                 f"WEBSHARE_PROXY_PASSWORD in .env. Original error: {exc}"

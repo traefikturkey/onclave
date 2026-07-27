@@ -8,7 +8,11 @@ from menos.models import ContentMetadata
 from menos.routers.ingest import _has_incomplete_metadata, canonicalize_web_url
 from menos.services.docling import DoclingResult
 from menos.services.url_detector import DetectedURL
-from menos.services.youtube import TranscriptSegment, YouTubeTranscript
+from menos.services.youtube import (
+    TranscriptSegment,
+    TranscriptUpstreamUnavailable,
+    YouTubeTranscript,
+)
 from menos.services.youtube_metadata import YouTubeMetadata
 
 
@@ -126,6 +130,27 @@ def test_ingest_youtube_gracefully_handles_metadata_failure(
     assert call_args.metadata["published_at"] is None
     assert call_args.metadata["channel_id"] is None
     assert call_args.tags == []
+
+
+def test_ingest_youtube_maps_blocked_transcript_to_service_unavailable(
+    authed_client,
+    mock_surreal_repo,
+    mock_youtube_service,
+    mock_minio_storage,
+    mock_pipeline_orchestrator,
+):
+    mock_youtube_service.fetch_transcript.side_effect = TranscriptUpstreamUnavailable(
+        "proxy exits blocked"
+    )
+    mock_surreal_repo.find_content_by_video_id = AsyncMock(return_value=None)
+
+    response = authed_client.post("/api/v1/ingest", json={"url": "https://youtu.be/dQw4w9WgXcQ"})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "YouTube transcript service is temporarily unavailable"}
+    mock_minio_storage.upload.assert_not_awaited()
+    mock_surreal_repo.create_content.assert_not_awaited()
+    mock_pipeline_orchestrator.submit.assert_not_awaited()
 
 
 def test_ingest_routes_web_urls_to_docling_flow(

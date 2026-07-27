@@ -4,7 +4,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from menos.services.youtube import TranscriptSegment, YouTubeService, YouTubeTranscript
+from menos.services.youtube import (
+    TranscriptSegment,
+    TranscriptUpstreamUnavailable,
+    YouTubeService,
+    YouTubeTranscript,
+)
 
 
 class TestYouTubeService:
@@ -73,7 +78,7 @@ class TestYouTubeService:
         mock_api = mock_api_cls.return_value
         mock_api.fetch.side_effect = RequestBlocked("test123")
 
-        with pytest.raises(ValueError, match="WEBSHARE_PROXY_USERNAME"):
+        with pytest.raises(TranscriptUpstreamUnavailable, match="WEBSHARE_PROXY_USERNAME"):
             service.fetch_transcript("test123")
 
     @patch("menos.services.youtube.YouTubeTranscriptApi")
@@ -86,7 +91,7 @@ class TestYouTubeService:
         mock_api = mock_api_cls.return_value
         mock_api.fetch.side_effect = YouTubeRequestFailed("test123", HTTPError("503"))
 
-        with pytest.raises(ValueError, match="proxy connection issue"):
+        with pytest.raises(TranscriptUpstreamUnavailable, match="proxy connection issue"):
             service.fetch_transcript("test123")
 
 

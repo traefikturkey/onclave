@@ -23,7 +23,11 @@ from menos.services.pipeline_orchestrator import PipelineOrchestrator
 from menos.services.resource_key import generate_resource_key
 from menos.services.storage import MinIOStorage, PostgresRepository, SurrealDBRepository
 from menos.services.url_detector import URLDetector
-from menos.services.youtube import YouTubeService, get_youtube_service
+from menos.services.youtube import (
+    TranscriptUpstreamUnavailable,
+    YouTubeService,
+    get_youtube_service,
+)
 from menos.services.youtube_metadata import (
     YouTubeMetadata,
     YouTubeMetadataService,
@@ -94,16 +98,27 @@ async def ingest_url(
     if detected.url_type == "youtube":
         video_id = detected.extracted_id or youtube_service.extract_video_id(raw_url)
         resource_key = generate_resource_key("youtube", video_id)
-        return await _ingest_youtube(
-            video_id=video_id,
-            key_id=key_id,
-            resource_key=resource_key,
-            svc=(youtube_service, metadata_service, minio_storage, surreal_repo),
-            orchestrator=orchestrator,
-            tags=tags,
-            transcript_text=body.transcript_text,
-            client_metadata=body.metadata,
-        )
+        try:
+            return await _ingest_youtube(
+                video_id=video_id,
+                key_id=key_id,
+                resource_key=resource_key,
+                svc=(youtube_service, metadata_service, minio_storage, surreal_repo),
+                orchestrator=orchestrator,
+                tags=tags,
+                transcript_text=body.transcript_text,
+                client_metadata=body.metadata,
+            )
+        except TranscriptUpstreamUnavailable as error:
+            logger.warning(
+                "YouTube transcript upstream unavailable for video %s: %s",
+                video_id,
+                error,
+            )
+            raise HTTPException(
+                status_code=503,
+                detail="YouTube transcript service is temporarily unavailable",
+            ) from error
 
     return await _ingest_web(
         url=raw_url,
