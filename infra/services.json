@@ -21,7 +21,7 @@
       "appDefinition": "deploy/app/menos/compose.yaml",
       "sampleEnv": "deploy/app/menos/.env.example",
       "stateOrder": [
-        "surrealdb",
+        "postgres",
         "minio",
         "ollama",
         "searxng",

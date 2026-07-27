@@ -31,7 +31,7 @@ STACKS = {
     },
     "menos": {
         "required": [
-            "SURREALDB_PASSWORD",
+            "POSTGRES_PASSWORD",
             "S3_ACCESS_KEY",
             "S3_SECRET_KEY",
             "SEARXNG_SECRET",
@@ -43,13 +43,13 @@ STACKS = {
         ],
         "optional": [
             "OPENAI_API_KEY",
+            "CALLBACK_URL",
             "CALLBACK_SECRET",
             "SEMANTIC_SCHOLAR_API_KEY",
         ],
         "defaults": {
-            "SURREALDB_USER": "root",
-            "SURREALDB_NAMESPACE": "menos",
-            "SURREALDB_DATABASE": "menos",
+            "POSTGRES_USER": "menos",
+            "POSTGRES_DATABASE": "menos",
             "S3_BUCKET": "menos",
             "S3_REGION": "us-east-1",
         },
