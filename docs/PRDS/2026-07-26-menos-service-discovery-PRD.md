@@ -20,8 +20,8 @@ https://menos.<domain>/api/v1
 Resolution order in the client:
 
 1. If `MENOS_API_BASE` is set, use it and stop.
-2. Otherwise build `https://menos.<MENOS_DISCOVERY_DOMAIN>/api/v1`.
-3. If `MENOS_DISCOVERY_DOMAIN` is also unset, raise an error naming both
+2. Otherwise build `https://menos.<HOST_DOMAIN>/api/v1`.
+3. If `HOST_DOMAIN` is also unset, raise an error naming both
    variables.
 
 **No DNS record is created and no DNS tooling changes.** The A record for
@@ -115,7 +115,7 @@ In scope:
 
 - Convention-based URL derivation in `get_api_base()`, with `MENOS_API_BASE`
   keeping precedence.
-- `MENOS_DISCOVERY_DOMAIN` documented in `.env.example`.
+- `HOST_DOMAIN` documented in `.env.example`.
 - An actionable error naming both variables when neither is set.
 - Unit tests that actually run in the repo's test command.
 
@@ -136,7 +136,7 @@ Out of scope:
    call.
    - Verify: unset `MENOS_API_BASE` and confirm it is absent from **both**
      `~/.dotfiles/.env` and `~/.dotfiles/.secrets`, set
-     `MENOS_DISCOVERY_DOMAIN`, then run the `/yt` listing command.
+     `HOST_DOMAIN`, then run the `/yt` listing command.
    - `api_config.py:15-21` falls back to `.secrets` when `.env` is absent, so
      clearing only `.env` does not produce an unconfigured client and the test
      would pass without exercising the new path.
