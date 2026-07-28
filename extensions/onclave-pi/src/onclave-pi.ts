@@ -28,6 +28,7 @@ import {
   type TokenUsage,
 } from "@onclave/envelope";
 import { appendAdapterAuditEvent, type AdapterAuditEventName, type AdapterAuditMetadata } from "./lib/audit";
+import { loadBrokerUrlFromBws } from "./lib/bws";
 import { BrokerLink, type ConnectionState } from "./lib/connection";
 import { CorrelationStore, INBOUND_CUSTOM_TYPE } from "./lib/correlation";
 import { SeenIds } from "./lib/dedup";
@@ -146,7 +147,7 @@ async function startAdapter(
     aliveAgents: 0,
     registered: false,
   };
-  const url = amqpUrl(pi);
+  const url = await amqpUrl(pi);
   runtime.link = new BrokerLink({
     url,
     connectFn: connect as unknown as ConstructorParameters<typeof BrokerLink>[0]["connectFn"],
@@ -486,8 +487,10 @@ function sanitizeAgentId(value: string): string {
   return cleaned.slice(0, 64) || "onclave-agent";
 }
 
-function amqpUrl(pi: ExtensionAPI): string {
-  return readStringFlag(pi, "onclave-url") ?? process.env.ONCLAVE_AMQP_URL ?? DEFAULT_AMQP_URL;
+async function amqpUrl(pi: ExtensionAPI): Promise<string> {
+  const explicitUrl = readStringFlag(pi, "onclave-url") ?? process.env.ONCLAVE_AMQP_URL;
+  if (explicitUrl) return explicitUrl;
+  return (await loadBrokerUrlFromBws()) ?? DEFAULT_AMQP_URL;
 }
 
 function readStringFlag(pi: ExtensionAPI, name: string): string | undefined {
