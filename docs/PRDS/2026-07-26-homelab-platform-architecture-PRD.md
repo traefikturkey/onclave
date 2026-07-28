@@ -184,36 +184,23 @@ The domain variable is `HOST_DOMAIN`, reusing the convention already in use in
 
 See [menos service discovery](2026-07-26-menos-service-discovery-PRD.md).
 
-### Credential-bearing connections do not converge yet
+### Credential-bearing connections use the secret plane
 
-The hostname convention only covers services whose connection needs a host and
-nothing else. menos qualifies: it authenticates with RFC 9421 request signing
-using an ed25519 key, so no secret appears in the URL.
+The Onclave broker connection uses a non-default port and RabbitMQ credentials.
+The operator configuration therefore stores only the non-secret AMQP endpoint
+and the Bitwarden Secrets Manager project ID. At startup, the adapter reads
+`RABBITMQ_DEFAULT_USER` and `RABBITMQ_DEFAULT_PASS` from BWS and assembles the
+credential-bearing URL in memory.
 
-The onclave broker does not. Its connection string is
-`amqp://<user>:<password>@rabbitmq.<domain>:5672/onclave`, which differs in two
-ways that matter:
+The local bootstrap boundary is `BITWARDEN_ACCESS_KEY` in the encrypted dotfiles
+private store. Deployment controllers receive that key through their process
+environment, use it to resolve the Onclave project, and do not copy it to managed
+hosts. Runtime environment files may contain the resolved service credentials
+when required by Compose, but they are generated deployment artifacts rather
+than a source of truth.
 
-- **A non-default port.** 443 can be omitted by convention; 5672 cannot.
-- **Embedded credentials.** Deriving the host buys nothing when the password is
-  still required in the same string. You would end up with a derived hostname
-  and a secret environment variable, which is worse than one variable holding
-  the whole URL.
-
-So the current arrangement is correct and should not be changed yet:
-`ONCLAVE_AMQP_URL` lives in the operator's private secrets file, because a
-credential-bearing string belongs with credentials.
-
-Note this is the case where SRV would have earned its keep, since the record
-could carry the non-default port. That does not change the menos decision, where
-the port is the default and the record already existed.
-
-**Where they converge.** Once Bitwarden is the secret plane and catalog entries
-declare the secret names a service requires, a connection string can be
-assembled from `HOST_DOMAIN` plus a credential fetched by name, and both
-services resolve the same way. That is blocked on the catalog `secrets:` field,
-which is deferred. Recorded here so the two halves are not treated as unrelated
-problems, and so the convergence is not rediscovered from scratch.
+An explicit `ONCLAVE_AMQP_URL` remains a development override. It is not stored
+in the operator private archive or homelab values repository.
 
 ## menos
 
