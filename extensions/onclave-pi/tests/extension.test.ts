@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import onclavePi, { refreshFooterStatus } from "../src/onclave-pi";
+import onclavePi, { refreshFooterStatus, resolveAmqpUrl } from "../src/onclave-pi";
 
 type RegisteredTool = { name: string; parameters?: unknown };
 type RegisteredCommand = { name: string };
@@ -46,6 +46,23 @@ describe("Onclave v2 adapter registration", () => {
     expect(serialized).toContain("request");
     expect(serialized).toContain("query");
     expect(serialized).not.toContain("inform");
+  });
+});
+
+describe("Onclave v2 broker resolution", () => {
+  it("preserves an explicit broker override", async () => {
+    const loader = vi.fn();
+
+    await expect(resolveAmqpUrl("amqp://explicit.example/onclave", loader)).resolves.toBe(
+      "amqp://explicit.example/onclave"
+    );
+    expect(loader).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when BWS bootstrap is unavailable", async () => {
+    await expect(resolveAmqpUrl(undefined, async () => undefined)).rejects.toThrow(
+      "missing BITWARDEN_ACCESS_KEY"
+    );
   });
 });
 

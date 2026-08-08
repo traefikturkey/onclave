@@ -13,7 +13,8 @@ import { INBOUND_CUSTOM_TYPE } from "../extensions/onclave-pi/src/lib/correlatio
 
 const execFileAsync = promisify(execFile);
 
-const AMQP_URL = process.env.ONCLAVE_AMQP_URL ?? "amqp://onclave:onclave-dev@localhost:5672/onclave";
+const AMQP_URL = process.env.ONCLAVE_AMQP_URL?.trim();
+if (!AMQP_URL) throw new Error("ONCLAVE_AMQP_URL is required for v2 acceptance");
 const HEALTH_URL = process.env.ONCLAVE_HEALTH_URL ?? "http://localhost:8080/health";
 const COMPOSE_FILE = "docker/compose.yaml";
 const RUN_TAG = randomBytes(4).toString("hex");

@@ -16,6 +16,24 @@ describe("Bitwarden broker configuration", () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
+  it("uses the central broker and project defaults", async () => {
+    const runner = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify([
+        { key: "RABBITMQ_DEFAULT_USER", value: "onclave-agent" },
+        { key: "RABBITMQ_DEFAULT_PASS", value: "password" },
+      ]),
+    });
+
+    const result = await loadBrokerUrlFromBws({ BITWARDEN_ACCESS_KEY: "bootstrap-token" }, runner);
+
+    expect(result).toBe("amqp://onclave-agent:password@rabbitmq.ilude.com:5672/onclave");
+    expect(runner).toHaveBeenCalledWith(
+      "bws",
+      ["secret", "list", "06e2f73a-9869-40dc-b430-b48500175560", "--output", "json"],
+      expect.anything()
+    );
+  });
+
   it("combines the non-secret endpoint with BWS credentials", async () => {
     const runner = vi.fn().mockResolvedValue({
       stdout: JSON.stringify([

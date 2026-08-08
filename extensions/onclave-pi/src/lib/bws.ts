@@ -4,6 +4,9 @@ import { promisify } from "node:util";
 const execFile = promisify(execFileCallback);
 const BWS_TIMEOUT_MS = 60_000;
 
+export const DEFAULT_BWS_PROJECT_ID = "06e2f73a-9869-40dc-b430-b48500175560";
+export const DEFAULT_AMQP_ENDPOINT = "amqp://rabbitmq.ilude.com:5672/onclave";
+
 type Environment = Record<string, string | undefined>;
 type BwsRunner = (
   command: string,
@@ -19,12 +22,6 @@ type BwsSecret = {
 function serverUrl(apiServer: string): string {
   const trimmed = apiServer.replace(/\/+$/, "");
   return trimmed.endsWith("/api") ? trimmed.slice(0, -4) : trimmed;
-}
-
-function required(environment: Environment, name: string): string {
-  const value = environment[name]?.trim();
-  if (!value) throw new Error(`Onclave BWS configuration is missing ${name}`);
-  return value;
 }
 
 function parseSecrets(stdout: string): Map<string, string> {
@@ -81,8 +78,8 @@ export async function loadBrokerUrlFromBws(
   const accessToken = environment.BITWARDEN_ACCESS_KEY?.trim();
   if (!accessToken) return undefined;
 
-  const projectId = required(environment, "ONCLAVE_BWS_PROJECT_ID");
-  const endpoint = required(environment, "ONCLAVE_AMQP_ENDPOINT");
+  const projectId = environment.ONCLAVE_BWS_PROJECT_ID?.trim() || DEFAULT_BWS_PROJECT_ID;
+  const endpoint = environment.ONCLAVE_AMQP_ENDPOINT?.trim() || DEFAULT_AMQP_ENDPOINT;
   const childEnvironment: NodeJS.ProcessEnv = {
     ...environment,
     BWS_ACCESS_TOKEN: accessToken,

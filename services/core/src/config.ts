@@ -34,8 +34,10 @@ function parsePort(value: string | undefined, fallback: number): number {
 
 export function loadCoreConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
   const dataDir = env.ONCLAVE_DATA_DIR ?? "/data";
+  const amqpUrl = env.ONCLAVE_AMQP_URL?.trim();
+  if (!amqpUrl) throw new Error("ONCLAVE_AMQP_URL is required");
   return {
-    amqpUrl: env.ONCLAVE_AMQP_URL ?? "amqp://onclave:onclave-dev@localhost:5672/onclave",
+    amqpUrl,
     httpPort: parsePort(env.ONCLAVE_HTTP_PORT, 8080),
     dataDir,
     registryPath: join(dataDir, "registry.json"),

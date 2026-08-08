@@ -41,7 +41,6 @@ import { lastAssistantText, runUsage } from "./lib/run-summary";
 const MAX_MESSAGE_LENGTH = 100_000;
 const MAX_WAIT_TIMEOUT_MS = 300_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
-const DEFAULT_AMQP_URL = "amqp://onclave:onclave-dev@localhost:5672/onclave";
 const FOOTER_STATUS_KEY = "onclave-v2";
 const ANSI_GREEN = "\x1b[32m";
 const ANSI_RED = "\x1b[31m";
@@ -487,10 +486,22 @@ function sanitizeAgentId(value: string): string {
   return cleaned.slice(0, 64) || "onclave-agent";
 }
 
-async function amqpUrl(pi: ExtensionAPI): Promise<string> {
-  const explicitUrl = readStringFlag(pi, "onclave-url") ?? process.env.ONCLAVE_AMQP_URL;
+type BrokerUrlLoader = () => Promise<string | undefined>;
+
+export async function resolveAmqpUrl(
+  explicitUrl: string | undefined,
+  loader: BrokerUrlLoader = loadBrokerUrlFromBws
+): Promise<string> {
   if (explicitUrl) return explicitUrl;
-  return (await loadBrokerUrlFromBws()) ?? DEFAULT_AMQP_URL;
+  const brokerUrl = await loader();
+  if (brokerUrl === undefined) {
+    throw new Error("Onclave BWS bootstrap is missing BITWARDEN_ACCESS_KEY");
+  }
+  return brokerUrl;
+}
+
+async function amqpUrl(pi: ExtensionAPI): Promise<string> {
+  return resolveAmqpUrl(readStringFlag(pi, "onclave-url") ?? process.env.ONCLAVE_AMQP_URL);
 }
 
 function readStringFlag(pi: ExtensionAPI, name: string): string | undefined {
