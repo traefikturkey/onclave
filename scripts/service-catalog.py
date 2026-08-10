@@ -43,7 +43,10 @@ def validate_catalog(services: list[dict]) -> None:
 
         for key in ("appDefinition", "sampleEnv"):
             relative_path = service.get(key)
-            if not isinstance(relative_path, str) or not (REPO_ROOT / relative_path).is_file():
+            if (
+                not isinstance(relative_path, str)
+                or not (REPO_ROOT / relative_path).is_file()
+            ):
                 raise ValueError(f"{service_id}: missing {key}")
 
         state_order = service.get("stateOrder")
@@ -52,7 +55,9 @@ def validate_catalog(services: list[dict]) -> None:
             or not state_order
             or len(state_order) != len(set(state_order))
         ):
-            raise ValueError(f"{service_id}: stateOrder must be a non-empty unique list")
+            raise ValueError(
+                f"{service_id}: stateOrder must be a non-empty unique list"
+            )
 
         deployment = service.get("deployment")
         if not isinstance(deployment, dict) or deployment.get("mode") not in {
@@ -102,7 +107,8 @@ def deploy(service: dict) -> None:
     deployment = service["deployment"]
     if deployment["mode"] != "temporary-direct":
         raise ValueError(
-            f"{service['id']} deployment is external; use the consuming platform workflow"
+            f"{service['id']} deployment is external; "
+            "use the consuming platform workflow"
         )
     command = [
         "docker",
@@ -134,7 +140,9 @@ def main() -> int:
     services = load_catalog()
     if args.command == "list":
         for service in services:
-            print(f"{service['order']:03d} {service['id']} {service['deployment']['mode']}")
+            print(
+                f"{service['order']:03d} {service['id']} {service['deployment']['mode']}"
+            )
         return 0
     if args.command == "validate":
         validate_apps(select_services(services, args.service))
