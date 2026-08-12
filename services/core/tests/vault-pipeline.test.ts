@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { PipelineOrchestrator, type JobStorage } from "../src/vault/jobs";
 import { MeteringLLMProvider, type MeteredLlmUsage } from "../src/vault/llm-metering";
 import { LLMPricingService, type PricingSnapshotStorage } from "../src/vault/llm-pricing";
-import type { LlmProvider } from "../src/vault/llm-providers";
+import type { LlmGenerationOptions, LlmProvider } from "../src/vault/llm-providers";
 import { EdgeType, EntityType, JobStatus, type ChunkModel, type ContentEntityEdge, type ContentMetadata, type EntityModel, type JsonObject, type PipelineJob } from "../src/vault/models";
 import { UnifiedPipeline, type PipelineConfig, type PipelineEmbeddingService, type PipelineStorage } from "../src/vault/pipeline";
 
@@ -147,6 +147,22 @@ function staticProvider(text = response): LlmProvider {
   };
 }
 
+function sequenceProvider(responses: readonly string[]): LlmProvider & { calls: { prompt: string; options: LlmGenerationOptions | undefined }[] } {
+  let index = 0;
+  const calls: { prompt: string; options: LlmGenerationOptions | undefined }[] = [];
+  return {
+    model: "test-model",
+    calls,
+    async generate(prompt: string, options?: LlmGenerationOptions): Promise<string> {
+      calls.push({ prompt, options });
+      const output = responses[index];
+      index += 1;
+      return output ?? "";
+    },
+    async close(): Promise<void> {},
+  };
+}
+
 describe("vault unified pipeline and jobs", () => {
   it("persists summary, tags, topics, entities, and metered usage on the happy path", async () => {
     const storage = new FakeStorage();
@@ -174,6 +190,70 @@ describe("vault unified pipeline and jobs", () => {
     expect(storage.usages).toHaveLength(1);
     expect(storage.usages[0]?.context).toBe(`pipeline:${job?.id ?? ""}`);
     expect(storage.jobs.get(job?.id ?? "")?.status).toBe(JobStatus.COMPLETED);
+  });
+
+  it("repairs an initial response with a whitespace-only topic before persisting", async () => {
+    const storage = new FakeStorage();
+    const initial = JSON.stringify({ tags: ["typescript"], summary: "Partial summary.", topics: [{ name: " > ", confidence: "high", edge_type: "discusses" }] });
+    const corrected = JSON.stringify({
+      tags: ["typescript"],
+      new_tags: [],
+      tier: "B",
+      tier_explanation: ["Useful"],
+      quality_score: 60,
+      score_explanation: ["Clear"],
+      summary: "Corrected summary.",
+      topics: [
+        { name: "Engineering > TypeScript", confidence: "high", edge_type: "discusses" },
+        { name: "Engineering > Testing", confidence: "medium", edge_type: "mentions" },
+        { name: "Engineering > Tooling", confidence: "medium", edge_type: "uses" },
+      ],
+      pre_detected_validations: [],
+      additional_entities: [],
+    });
+    const provider = sequenceProvider([initial, corrected]);
+    const jobs = orchestrator(storage, provider);
+
+    const job = await jobs.submit({ contentId: "content-repaired", contentText: "content", contentType: "markdown", title: "Repaired", resourceKey: "cid:content-repaired" });
+    await jobs.waitForIdle();
+
+    expect(provider.calls).toHaveLength(2);
+    expect(provider.calls[1]).toMatchObject({ options: { temperature: 0.1, maxTokens: 3000, timeout: 60 } });
+    expect(provider.calls[1]?.prompt).toContain("\"topics\" must contain 3-7 objects");
+    expect(storage.completions[0]?.result).toMatchObject({ summary: "Corrected summary.", tags: ["typescript"] });
+    expect(storage.completions[0]?.result.topics).toHaveLength(3);
+    expect(storage.jobs.get(job.id ?? "")?.status).toBe(JobStatus.COMPLETED);
+  });
+
+  it("fails without persistence when corrected output has only whitespace-only topics", async () => {
+    const storage = new FakeStorage();
+    const provider = sequenceProvider([
+      JSON.stringify({ tags: ["typescript"], summary: "Partial summary.", topics: [{ name: "   ", confidence: "high", edge_type: "discusses" }] }),
+      JSON.stringify({ tags: ["typescript"], summary: "Still partial.", topics: [{ name: " > ", confidence: "high", edge_type: "discusses" }], additional_entities: [] }),
+    ]);
+    const pipeline = new UnifiedPipeline(provider, storage, config(), { chunkText: (text: string): string[] => [text] }, new FakeEmbeddings());
+
+    await expect(pipeline.execute({ contentId: "content-no-topics", contentText: "content", contentType: "markdown", title: "No topics", pipelineVersion: "1.0.0" })).rejects.toMatchObject({ stage: "parse", code: "PARSE_FAILED" });
+
+    expect(provider.calls).toHaveLength(2);
+    expect(storage.completions).toHaveLength(0);
+  });
+
+  it("accepts an empty additional_entities array when valid topics exist", async () => {
+    const storage = new FakeStorage();
+    const provider = sequenceProvider([JSON.stringify({
+      tags: ["typescript"],
+      summary: "Summary.",
+      topics: [{ name: "Engineering > TypeScript", confidence: "high", edge_type: "discusses" }],
+      additional_entities: [],
+    })]);
+    const pipeline = new UnifiedPipeline(provider, storage, config(), { chunkText: (text: string): string[] => [text] }, new FakeEmbeddings());
+
+    const output = await pipeline.execute({ contentId: "content-empty-entities", contentText: "content", contentType: "markdown", title: "Empty entities", pipelineVersion: "1.0.0" });
+
+    expect(provider.calls).toHaveLength(1);
+    expect(output?.result.additional_entities).toEqual([]);
+    expect(storage.completions[0]?.relationships).toHaveLength(1);
   });
 
   it("creates a terminal failed job when the pipeline is disabled", async () => {

@@ -399,7 +399,7 @@ export class UnifiedPipeline {
     } catch (error: unknown) {
       throw new PipelineStageError("llm_call", "LLM_CALL_ERROR", errorMessage(error).slice(0, 500));
     }
-    const parsed = await this.parseResponse(provider, response, context.existingTags, request.contentId);
+    const parsed = await this.parseResponse(provider, response, context.existingTags);
     const result = parsed.result;
     result.model = provider.model;
     result.processed_at = new Date().toISOString();
@@ -464,23 +464,25 @@ export class UnifiedPipeline {
     return total <= 0 ? "No data" : ["S", "A", "B", "C", "D"].map((tier) => `${tier}=${Math.round((Math.max(value[tier] ?? 0, 0) / total) * 100)}%`).join(", ");
   }
 
-  private async parseResponse(provider: LlmProvider, response: string, existingTags: string[], contentId: string): Promise<{ result: UnifiedResult; aliasMappings: [string, string][] }> {
-    let data = extractJson(response);
-    if (data === undefined) {
-      const correction = `Your previous response was not valid JSON. Convert the following content into the exact JSON format requested. Respond ONLY with valid JSON, no markdown, no explanation.\n\n${response.slice(0, 3000)}`;
-      try {
-        data = extractJson(await provider.generate(correction, { temperature: 0.1, maxTokens: 3000, timeout: 60 }));
-      } catch {
-        data = undefined;
-      }
+  private async parseResponse(provider: LlmProvider, response: string, existingTags: string[]): Promise<{ result: UnifiedResult; aliasMappings: [string, string][] }> {
+    const initial = this.parseUnifiedResponse(extractJson(response), existingTags);
+    if (initial !== undefined && (initial.result.topics?.length ?? 0) > 0) return initial;
+
+    let corrected: { result: UnifiedResult; aliasMappings: [string, string][] } | undefined;
+    try {
+      const correction = `Repair the previous response into the complete canonical JSON schema below. Preserve all correct fields from the previous response. Respond ONLY with valid JSON, no markdown or explanation.\n{"tags":["tag"],"new_tags":["tag"],"tier":"B","tier_explanation":["reason"],"quality_score":50,"score_explanation":["reason"],"summary":"summary","topics":[{"name":"Parent > Child","confidence":"high","edge_type":"discusses"}],"pre_detected_validations":[{"entity_id":"entity:id","edge_type":"mentions","confirmed":true}],"additional_entities":[{"type":"tool","name":"name","confidence":"medium","edge_type":"mentions"}]}\n"topics" must contain 3-7 objects with name, confidence, and edge_type. "additional_entities" must be an array but may be empty.\n\nPrevious response:\n${response.slice(0, 3000)}`;
+      corrected = this.parseUnifiedResponse(extractJson(await provider.generate(correction, { temperature: 0.1, maxTokens: 3000, timeout: 60 })), existingTags);
+    } catch {
+      corrected = undefined;
     }
-    if (data === undefined) throw new PipelineStageError("parse", "EMPTY_RESPONSE", `Empty unified pipeline response for ${contentId}`);
-    const result = this.parseUnifiedResponse(data, existingTags);
-    if (result === undefined) throw new PipelineStageError("parse", "PARSE_FAILED", `Failed to parse unified response for ${contentId}`);
-    return result;
+    if (corrected === undefined || (corrected.result.topics?.length ?? 0) === 0) {
+      throw new PipelineStageError("parse", "PARSE_FAILED", "Unified pipeline response was invalid or missing topics");
+    }
+    return corrected;
   }
 
-  private parseUnifiedResponse(data: JsonObject, existingTags: string[]): { result: UnifiedResult; aliasMappings: [string, string][] } | undefined {
+  private parseUnifiedResponse(data: JsonObject | undefined, existingTags: string[]): { result: UnifiedResult; aliasMappings: [string, string][] } | undefined {
+    if (data === undefined) return undefined;
     const recognized = ["tags", "new_tags", "tier", "quality_score", "topics", "pre_detected_validations", "additional_entities", "summary"];
     if (!recognized.some((field) => field in data)) return undefined;
     const aliases: [string, string][] = [];
@@ -525,6 +527,7 @@ export class UnifiedPipeline {
       const confidence = typeof topic.confidence === "string" ? topic.confidence : "medium";
       if (confidenceValue(confidence) < this.config.entityMinConfidence) continue;
       const hierarchy = topic.name.split(">").map((part) => part.trim()).filter(Boolean);
+      if (hierarchy.length === 0) continue;
       topics.push({ entity_type: EntityTypes.TOPIC, name: hierarchy.at(-1) ?? topic.name, confidence, edge_type: edgeType(topic.edge_type ?? "discusses"), hierarchy });
     }
     return topics;
