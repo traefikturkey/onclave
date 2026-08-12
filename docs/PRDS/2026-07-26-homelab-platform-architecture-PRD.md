@@ -124,11 +124,11 @@ has not been verified from the repository alone.
 live.** Three partial expressions of this already exist:
 
 - `onclave/deploy/app/onclave/env-contract.md`
-- `onclave/deploy/app/menos/env-contract.md`
+- the former Menos environment contract
 - the `STACKS` dictionary in `onclave/scripts/onclave-bws-env.py`
 
-They do not currently agree. `onclave/deploy/app/menos/env-contract.md:18-31`
-requires `POSTGRES_PASSWORD`, while `onclave-bws-env.py:32-60` still requires
+They did not agree. The former Menos environment contract required
+`POSTGRES_PASSWORD`, while `onclave-bws-env.py:32-60` still requires
 `SURREALDB_PASSWORD` and carries SurrealDB defaults. Reconciling them against
 the actual app definition is a prerequisite, not a free promotion.
 
@@ -141,8 +141,7 @@ secrets:
 ```
 
 Names here are the app's environment contract, not consumer-side inventory
-names. The app contract uses `S3_SECRET_KEY`
-(`onclave/deploy/app/menos/env-contract.md:20-28`); `MENOS_S3_SECRET_KEY` is the
+names. The former app contract used `S3_SECRET_KEY`; `MENOS_S3_SECRET_KEY` is the
 name `homelab-infra` uses in its own private inventory. Mixing the two layers in
 one field is a mistake worth avoiding from the start.
 
@@ -295,8 +294,8 @@ project.
 - `.dotfiles/AGENTS.md:3,13` and `.dotfiles/CLAUDE.md:54-79` document a `menos/`
   submodule that no longer exists and describe SurrealDB, which menos no longer
   uses. `.gitmodules` declares only `dotbot` and `onclave`.
-- `onclave/infra/services.json` declares menos `stateOrder` beginning with
-  `surrealdb`, but `onclave/deploy/app/menos/compose.yaml:4` is `postgres`.
+- The former Menos catalog entry declared a `stateOrder` beginning with
+  `surrealdb`, while its Compose definition used `postgres`.
   `onclave/scripts/service-catalog.py:49-55` only shape-validates the list.
 - `onclave/infra/ansible/files/onclave/docker-compose.yml:25-28` builds from a
   local `./src` context rather than consuming the digest-pinned app definition.
@@ -355,7 +354,7 @@ repository and are not verifiable without access to it.
 | Four onramp app roles sharing a common skeleton but differing in detail | `homelab-infra/infra/ansible/roles/{onclave,menos,searxng,infisical}_onramp/` |
 | Eight hand-maintained image and definition pins | private `values/ansible/inventory/local.yml`, mirrored in `homelab-infra/scaffold/ansible/inventory/local.yml:101-120` |
 | BWS tooling already present | `onclave/scripts/onclave-bws-env.py` |
-| menos compose uses postgres, catalog says surrealdb | `onclave/deploy/app/menos/compose.yaml:4` vs `onclave/infra/services.json` |
+| former Menos compose used postgres while its catalog said surrealdb | retired app definition vs former `onclave/infra/services.json` |
 | Stale menos submodule docs | `.dotfiles/AGENTS.md:3,13`, `.dotfiles/CLAUDE.md:54-79`, `.dotfiles/.gitmodules` |
 | Tailscale declared but disabled | private `values/terraform.tfvars:67` |
 | onramp host sizing, 16 GB RAM, second 512 GB data disk | private `values/terraform.tfvars:197-205` |

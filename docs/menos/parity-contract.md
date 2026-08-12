@@ -1,8 +1,8 @@
 # Menos Parity Contract
 
 Frozen inventory for porting the Menos content vault into the Onclave core
-service. Source of truth: the generated FastAPI OpenAPI document at Menos
-`services/menos` (33 paths, 39 operations) plus every real client call site in
+service. Source of truth: the generated FastAPI OpenAPI document from the
+retired Menos service (33 paths, 39 operations) plus every real client call site in
 the operator dotfiles (`tools/menos-youtube/`, `claude/hooks/menos-circuit/`,
 `claude/shared/yt-instructions.md`) and the deployment health gates.
 
@@ -20,8 +20,7 @@ Dispositions:
 ## Authentication
 
 All routes except `GET /health` and `GET /ready` require RFC 9421 HTTP
-message signatures with Ed25519 keys. Normative pair: server verification in
-`services/menos/menos/auth/signature.py` and client signing in the dotfiles
+message signatures with Ed25519 keys. Normative pair: the retired server verifier and client signing in the dotfiles
 `tools/menos-youtube/signing.py` (signs method, path with query, host, and
 content digest for bodies; key loaded from the operator SSH Ed25519 key;
 server authorizes against a mounted `authorized_keys` file with reload via

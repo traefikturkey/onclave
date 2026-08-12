@@ -27,12 +27,6 @@ typecheck:
 check:
     pnpm typecheck && pnpm test
 
-menos-test:
-    cd services/menos && uv run pytest -v
-
-menos-lint:
-    cd services/menos && uv run ruff check .
-
 up:
     docker compose -f docker/compose.yaml up -d --build
 
@@ -67,9 +61,6 @@ deploy-syntax: values-init
 
 deploy-lint: values-init
     docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-lint playbooks/deploy.yml
-
-menos-backup-setup *ARGS:
-    docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-playbook playbooks/backup-menos.yml {{ARGS}}
 
 pi-local:
     pi -e ./extensions/onclave-comms

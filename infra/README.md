@@ -1,20 +1,20 @@
 # Onclave Infrastructure
 
-Deploys the central onclave stack (rabbitmq + onclave-core) to the docker
-host with the ansible-in-docker harness adapted from the menos deployment
-pattern. The harness runs in a container, so only docker is needed locally.
+Deploys the central Onclave stack, including RabbitMQ and the content vault,
+to the docker host with the ansible-in-docker harness. The harness runs in a
+container, so only docker is needed locally.
 
 ## Layout
 
 - `ansible/docker-compose.yml` - the harness container (ansible + rsync +
   gitleaks + bws) with the repo mounted at `/project`.
-- `../deploy/app/{onclave,menos}/` - provider-neutral app definitions.
+- `../deploy/app/onclave/` - provider-neutral unified app definition.
 - `services.json` - dependency and state order for catalog commands.
 - `../values/inventory/` - ignored site inventory and group variables,
   initialized from `../scaffold/`.
 - `ansible/playbooks/deploy.yml` - temporary direct Onclave deployment.
-- `ansible/files/{onclave,menos}/docker-compose.yml` - production stack
-  definitions installed on the target.
+- `ansible/files/onclave/docker-compose.yml` - production stack definition
+  installed on the target.
 - `../scripts/onclave-bws-env.py` - renders stack-specific runtime `.env`
   files from Bitwarden Secrets Manager without printing secret values.
 
@@ -30,10 +30,8 @@ access token. The host shell provides (loaded from
 The non-secret project ID and server URLs live in the private values
 repository under `values/inventory/group_vars/all.yml`.
 
-Onclave requires `RABBITMQ_DEFAULT_USER` and `RABBITMQ_DEFAULT_PASS`.
-Menos production deployment and secret management are external to this
-harness. Its provider-neutral runtime contract is documented in
-`../deploy/app/menos/env-contract.md`.
+Onclave requires broker, vault, and dependency credentials documented in
+`../deploy/app/onclave/env-contract.md`.
 
 ## Usage
 
@@ -41,8 +39,8 @@ harness. Its provider-neutral runtime contract is documented in
 just values-init      # create ignored values from public-safe scaffold
 just public-safety    # reject tracked site-specific values
 just services         # list catalog services and deployment modes
-just validate         # validate both app definitions and the harness
-just validate onclave # validate one app definition and the harness
+just validate         # validate the unified app definition and the harness
+just validate onclave # validate the unified app definition and the harness
 just deploy-build     # build the harness image (first time / on change)
 just deploy-syntax    # playbook syntax check, no secrets needed
 just deploy-lint      # ansible-lint, no secrets needed
@@ -50,8 +48,7 @@ just deploy onclave   # temporary direct path; approval required
 ```
 
 The deployment playbook refuses dirty working trees and verifies service
-health after `docker compose up`. Menos is deployed by the consuming platform;
-its direct legacy playbook remains reference material only.
+health after `docker compose up`.
 
 The validation container stays root because it normalizes read-only SSH key
 mount permissions. Repository and values mounts are read-only, and the harness
