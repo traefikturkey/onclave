@@ -8,10 +8,10 @@ describe("core configuration", () => {
 
   it("uses the configured broker URL", () => {
     const config = loadCoreConfig({
-      ONCLAVE_AMQP_URL: "amqp://rabbitmq.ilude.com:5672/onclave",
+      ONCLAVE_AMQP_URL: "amqp://rabbitmq.example.internal:5672/onclave",
       ONCLAVE_DATA_DIR: "/tmp/onclave",
     });
 
-    expect(config.amqpUrl).toBe("amqp://rabbitmq.ilude.com:5672/onclave");
+    expect(config.amqpUrl).toBe("amqp://rabbitmq.example.internal:5672/onclave");
   });
 });

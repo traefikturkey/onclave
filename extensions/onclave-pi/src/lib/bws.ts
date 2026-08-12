@@ -5,7 +5,6 @@ const execFile = promisify(execFileCallback);
 const BWS_TIMEOUT_MS = 60_000;
 
 export const DEFAULT_BWS_PROJECT_ID = "06e2f73a-9869-40dc-b430-b48500175560";
-export const DEFAULT_AMQP_ENDPOINT = "amqp://rabbitmq.ilude.com:5672/onclave";
 
 type Environment = Record<string, string | undefined>;
 type BwsRunner = (
@@ -79,7 +78,8 @@ export async function loadBrokerUrlFromBws(
   if (!accessToken) return undefined;
 
   const projectId = environment.ONCLAVE_BWS_PROJECT_ID?.trim() || DEFAULT_BWS_PROJECT_ID;
-  const endpoint = environment.ONCLAVE_AMQP_ENDPOINT?.trim() || DEFAULT_AMQP_ENDPOINT;
+  const endpoint = environment.ONCLAVE_AMQP_ENDPOINT?.trim();
+  if (!endpoint) throw new Error("ONCLAVE_AMQP_ENDPOINT is required");
   const childEnvironment: NodeJS.ProcessEnv = {
     ...environment,
     BWS_ACCESS_TOKEN: accessToken,

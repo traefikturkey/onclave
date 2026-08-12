@@ -16,7 +16,7 @@ describe("Bitwarden broker configuration", () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
-  it("uses the central broker and project defaults", async () => {
+  it("uses the default project with an explicit endpoint", async () => {
     const runner = vi.fn().mockResolvedValue({
       stdout: JSON.stringify([
         { key: "RABBITMQ_DEFAULT_USER", value: "onclave-agent" },
@@ -24,9 +24,15 @@ describe("Bitwarden broker configuration", () => {
       ]),
     });
 
-    const result = await loadBrokerUrlFromBws({ BITWARDEN_ACCESS_KEY: "bootstrap-token" }, runner);
+    const result = await loadBrokerUrlFromBws(
+      {
+        BITWARDEN_ACCESS_KEY: "bootstrap-token",
+        ONCLAVE_AMQP_ENDPOINT: "amqp://rabbitmq.example.internal:5672/onclave",
+      },
+      runner
+    );
 
-    expect(result).toBe("amqp://onclave-agent:password@rabbitmq.ilude.com:5672/onclave");
+    expect(result).toBe("amqp://onclave-agent:password@rabbitmq.example.internal:5672/onclave");
     expect(runner).toHaveBeenCalledWith(
       "bws",
       ["secret", "list", "06e2f73a-9869-40dc-b430-b48500175560", "--output", "json"],
