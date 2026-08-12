@@ -160,7 +160,7 @@ export type LlmUsage = {
   input_price_per_million: number;
   output_price_per_million: number;
   estimated_cost: number;
-  context: JsonObject;
+  context: string;
   duration_ms: number;
   pricing_snapshot_refreshed_at?: Date | null;
   created_at?: Date | null;

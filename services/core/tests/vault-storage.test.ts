@@ -121,11 +121,11 @@ describe("vault storage repository", () => {
   it("inserts and queries LLM usage with optional filters", async () => {
     const client = new FakeClient({ rows: [] }, { rows: [{ total_calls: "1" }] }, { rows: [{ provider: "openrouter" }] });
     const repository = new PostgresRepository(client);
-    await repository.record_llm_usage({ provider: "openrouter", model: "model", input_tokens: 1, output_tokens: 2, input_price_per_million: 3, output_price_per_million: 4, estimated_cost: 5, context: {}, duration_ms: 6 });
+    await repository.record_llm_usage({ provider: "openrouter", model: "model", input_tokens: 1, output_tokens: 2, input_price_per_million: 3, output_price_per_million: 4, estimated_cost: 5, context: "pipeline:job-1", duration_ms: 6 });
     await repository.usage_totals(undefined, undefined, "openrouter", "model");
     await repository.usage_breakdown(undefined, undefined, "openrouter", "model");
     expect(client.calls[0]?.text).toBe("INSERT INTO llm_usage(id,provider,model,input_tokens,output_tokens,input_price_per_million, output_price_per_million,estimated_cost,context,duration_ms,pricing_snapshot_refreshed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)");
-    expect(client.calls[0]?.values?.slice(1)).toEqual(["openrouter", "model", 1, 2, 3, 4, 5, {}, 6, null]);
+    expect(client.calls[0]?.values?.slice(1)).toEqual(["openrouter", "model", 1, 2, 3, 4, 5, "pipeline:job-1", 6, null]);
     expect(client.calls.slice(1)).toEqual([
       { text: "SELECT count(*) AS total_calls,coalesce(sum(input_tokens),0) AS total_input_tokens,coalesce(sum(output_tokens),0) AS total_output_tokens,coalesce(sum(estimated_cost),0) AS estimated_total_cost FROM llm_usage WHERE provider = $1 AND model = $2", values: ["openrouter", "model"] },
       { text: "SELECT provider,model,count(*) AS calls,sum(input_tokens) AS input_tokens,sum(output_tokens) AS output_tokens,sum(estimated_cost) AS estimated_cost FROM llm_usage WHERE provider = $1 AND model = $2 GROUP BY provider,model ORDER BY estimated_cost DESC,provider,model", values: ["openrouter", "model"] },
