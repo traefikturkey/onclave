@@ -109,6 +109,9 @@ importers:
       tsx:
         specifier: ^4.20.6
         version: 4.22.3
+      undici:
+        specifier: ^8.3.0
+        version: 8.3.0
     devDependencies:
       '@types/amqplib':
         specifier: ^0.10.6

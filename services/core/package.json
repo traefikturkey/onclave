@@ -11,10 +11,14 @@
   "dependencies": {
     "@onclave/envelope": "workspace:*",
     "amqplib": "^0.10.5",
-    "tsx": "^4.20.6"
+    "minio": "^8.0.5",
+    "pg": "^8.16.3",
+    "tsx": "^4.20.6",
+    "undici": "^8.3.0"
   },
   "devDependencies": {
     "@types/amqplib": "^0.10.6",
+    "@types/pg": "^8.15.5",
     "vitest": "^3.2.4"
   }
 }
