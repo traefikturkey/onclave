@@ -1,8 +1,10 @@
 export class HttpError extends Error {
   readonly status: number;
+  readonly detail: unknown;
 
-  constructor(status: number, message: string) {
-    super(message);
+  constructor(status: number, detail: unknown) {
+    super(typeof detail === "string" ? detail : "Request validation failed");
     this.status = status;
+    this.detail = detail;
   }
 }

@@ -291,7 +291,7 @@ export function createVaultHttpHandler(options: VaultHttpOptions): (request: Inc
       } catch (error) {
         if (response.writableEnded) return;
         if (isHttpError(error)) {
-          writeJson(response, error.status, { detail: error.message });
+          writeJson(response, error.status, { detail: error.detail });
           return;
         }
         writeJson(response, 500, { detail: "Internal Server Error" });

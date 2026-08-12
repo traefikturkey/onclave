@@ -8,6 +8,7 @@ const config = loadCoreConfig();
 log("info", "core.starting", {
   amqpUrl: redactAmqpUrl(config.amqpUrl),
   httpPort: config.httpPort,
+  vaultEnabled: config.vault !== undefined,
   envelopeVersion: ENVELOPE_VERSION,
   protocolVersion: PROTOCOL_VERSION,
 });

@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { BudgetLimits } from "@onclave/envelope";
+import { loadVaultConfig, type VaultConfig } from "./vault/config";
 
 export type CoreConfig = {
   amqpUrl: string;
@@ -15,6 +16,7 @@ export type CoreConfig = {
   budgetLimits: BudgetLimits;
   connectRetryBaseMs: number;
   connectRetryMaxMs: number;
+  vault?: VaultConfig;
 };
 
 function parseIntEnv(value: string | undefined, fallback: number, label: string): number {
@@ -34,6 +36,7 @@ function parsePort(value: string | undefined, fallback: number): number {
 
 export function loadCoreConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
   const dataDir = env.ONCLAVE_DATA_DIR ?? "/data";
+  const vaultEnabled = Boolean(env.ONCLAVE_VAULT_POSTGRES_PASSWORD?.trim() || env.MENOS_POSTGRES_PASSWORD?.trim());
   const amqpUrl = env.ONCLAVE_AMQP_URL?.trim();
   if (!amqpUrl) throw new Error("ONCLAVE_AMQP_URL is required");
   return {
@@ -53,6 +56,7 @@ export function loadCoreConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig
     },
     connectRetryBaseMs: 500,
     connectRetryMaxMs: 15000,
+    ...(vaultEnabled ? { vault: loadVaultConfig(env) } : {}),
   };
 }
 
