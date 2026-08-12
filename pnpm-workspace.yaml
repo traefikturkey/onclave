@@ -2,3 +2,7 @@ packages:
   - "extensions/*"
   - "packages/*"
   - "services/*"
+allowBuilds:
+  '@google/genai': false
+  esbuild: true
+  protobufjs: false
