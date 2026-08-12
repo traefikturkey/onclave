@@ -134,7 +134,7 @@ function config(overrides: Partial<PipelineConfig> = {}): PipelineConfig {
 
 function orchestrator(storage: FakeStorage, llm: LlmProvider, options: { pipeline?: PipelineConfig; fetcher?: (url: string, init?: RequestInit) => Promise<Response> } = {}): PipelineOrchestrator {
   const pipeline = new UnifiedPipeline(llm, storage, options.pipeline ?? config(), { chunkText: (text: string): string[] => [text] }, new FakeEmbeddings(), options.fetcher);
-  return new PipelineOrchestrator(pipeline, storage, { unifiedPipelineEnabled: true, pipelineVersion: "1.0.0" });
+  return new PipelineOrchestrator(pipeline, storage, { pipelineVersion: "1.0.0" });
 }
 
 function staticProvider(text = response): LlmProvider {
@@ -160,7 +160,12 @@ describe("vault unified pipeline and jobs", () => {
 
     expect(job?.status).toBe(JobStatus.PENDING);
     expect(storage.completions).toHaveLength(1);
-    expect(storage.completions[0]?.result).toMatchObject({ summary: "A concise summary.", tags: ["typescript", "vault"], topics: [{ name: "TypeScript" }] });
+    expect(storage.completions[0]?.result).toMatchObject({
+      summary: "A concise summary.",
+      tags: ["typescript", "vault"],
+      topics: [{ name: "TypeScript" }],
+      additional_entities: [{ name: "Vitest" }],
+    });
     expect(storage.completions[0]?.relationships).toEqual(expect.arrayContaining([
       expect.objectContaining({ edge_type: EdgeType.DISCUSSES }),
       expect.objectContaining({ edge_type: EdgeType.MENTIONS }),
@@ -169,6 +174,17 @@ describe("vault unified pipeline and jobs", () => {
     expect(storage.usages).toHaveLength(1);
     expect(storage.usages[0]?.context).toBe(`pipeline:${job?.id ?? ""}`);
     expect(storage.jobs.get(job?.id ?? "")?.status).toBe(JobStatus.COMPLETED);
+  });
+
+  it("creates a terminal failed job when the pipeline is disabled", async () => {
+    const storage = new FakeStorage();
+    const jobs = orchestrator(storage, staticProvider(), { pipeline: config({ unifiedPipelineEnabled: false }) });
+
+    const job = await jobs.submit({ contentId: "content-disabled", contentText: "content", contentType: "markdown", title: "Disabled", resourceKey: "cid:content-disabled" });
+    await jobs.waitForIdle();
+
+    expect(job.id).toEqual(expect.any(String));
+    expect(storage.jobs.get(job.id ?? "")).toMatchObject({ status: JobStatus.FAILED, error_code: "PIPELINE_DISABLED" });
   });
 
   it("marks LLM failures with the pipeline error surface", async () => {

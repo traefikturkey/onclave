@@ -145,6 +145,7 @@ describe("vault configuration", () => {
     expect(config.postgresHost).toBe("vault-postgres");
     expect(config.s3Secure).toBe(true);
     expect(config.ollamaModel).toBe("vault-embed");
+    expect(config.unifiedPipelineEnabled).toBe(true);
   });
 
   it("requires the Python-required secrets after compatible fallback lookup", () => {

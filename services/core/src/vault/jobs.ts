@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { VaultConfig } from "./config";
 import type { ContentMetadata, JobErrors, JobTiming, PipelineJob } from "./models";
 import { DataTier, JobStatus } from "./models";
 import { PipelineStageError, type PipelineRequest, type PipelineRunResult, type UnifiedPipeline } from "./pipeline";
@@ -16,7 +15,7 @@ export type JobStorage = {
   get_content?(contentId: string): Promise<ContentMetadata | undefined>;
 };
 
-export type JobOrchestratorConfig = Pick<VaultConfig, "unifiedPipelineEnabled"> & {
+export type JobOrchestratorConfig = {
   pipelineVersion: string;
 };
 
@@ -134,8 +133,7 @@ export class PipelineOrchestrator {
     private readonly config: JobOrchestratorConfig,
   ) {}
 
-  async submit(submission: JobSubmission): Promise<PipelineJob | undefined> {
-    if (!this.config.unifiedPipelineEnabled) return undefined;
+  async submit(submission: JobSubmission): Promise<PipelineJob> {
     const active = pipelineJob(await this.storage.find_active_pipeline_job(submission.resourceKey));
     if (active !== undefined) return active;
     const pending: PipelineJob = {
@@ -233,7 +231,13 @@ export class PipelineOrchestrator {
         await this.storage.update_content_processing_status(job.content_id, JobStatus.PROCESSING);
         return true;
       });
-      if (output === undefined) return;
+      if (output === undefined) {
+        const current = pipelineJob(await this.storage.get_pipeline_job(jobId));
+        if (current?.status === JobStatus.CANCELLED) return;
+        await this.storage.update_pipeline_job(jobId, JobStatus.FAILED, [undefined, new Date()], ["PIPELINE_DISABLED", "Unified pipeline is disabled", "pipeline"]);
+        await this.storage.update_content_processing_status(job.content_id, JobStatus.FAILED);
+        return;
+      }
       const completed = await this.storage.update_pipeline_job(jobId, JobStatus.COMPLETED, [undefined, new Date()], [undefined, undefined, undefined]);
       await this.pipeline.deliverCallback(pipelineJob(completed, job) ?? job, output.resultJson);
     } catch (error: unknown) {

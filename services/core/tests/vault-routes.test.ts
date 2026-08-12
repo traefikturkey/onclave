@@ -5,15 +5,17 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { PipelineOrchestrator } from "../src/vault/jobs";
+import { PipelineOrchestrator } from "../src/vault/jobs";
 import { LLMPricingService, type PricingSnapshotStorage } from "../src/vault/llm-pricing";
-import type { ContentMetadata } from "../src/vault/models";
+import { EdgeType, EntityType, JobStatus, type ChunkModel, type ContentEntityEdge, type ContentMetadata, type EntityModel, type JobErrors, type JobTiming, type JsonObject, type PipelineJob } from "../src/vault/models";
 import type { SearchService } from "../src/vault/search";
 import { createVaultHttpServer } from "../src/vault/http";
 import { computeKeyId } from "../src/vault/keys";
-import { createVaultRouteHandlers, type VaultRepository } from "../src/vault/routes";
+import { createVaultRouteHandlers } from "../src/vault/routes";
 import { createVaultService, type VaultServiceOverrides } from "../src/vault/vault-service";
 import type { VaultConfig } from "../src/vault/config";
+import { UnifiedPipeline, type PipelineStorage } from "../src/vault/pipeline";
+import type { JobStorage } from "../src/vault/jobs";
 
 const SSH_ED25519 = "ssh-ed25519";
 
@@ -74,6 +76,7 @@ describe("vault routes", () => {
   let baseUrl: string;
   let key: TestKey;
   let keysDir: string;
+  let jobs: PipelineOrchestrator;
 
   beforeEach(async () => {
     key = testKey();
@@ -84,13 +87,42 @@ describe("vault routes", () => {
       id: "video-1", content_type: "youtube", title: "Existing video", mime_type: "text/plain", file_size: 10, file_path: "youtube/video-1/transcript.txt", tags: ["test", "typescript"], metadata: { video_id: "existing123" }, created_at: new Date("2026-01-01T00:00:00Z"),
     }]]);
     const bytes = new Map<string, Buffer>([["youtube/video-1/transcript.txt", Buffer.from("existing transcript")]]);
-    const jobs = new Map<string, Record<string, unknown>>();
+    const pipelineJobs = new Map<string, PipelineJob>();
+    const entities = new Map<string, EntityModel>([
+      ["topic-typescript", { id: "topic-typescript", entity_type: EntityType.TOPIC, name: "TypeScript", normalized_name: "typescript", hierarchy: ["Engineering", "TypeScript"] }],
+      ["tool-vitest", { id: "tool-vitest", entity_type: EntityType.TOOL, name: "Vitest", normalized_name: "vitest" }],
+    ]);
+    const contentEntities = new Map<string, ContentEntityEdge[]>([["video-1", [
+      { content_id: "video-1", entity_id: "topic-typescript", edge_type: EdgeType.DISCUSSES },
+      { content_id: "video-1", entity_id: "tool-vitest", edge_type: EdgeType.MENTIONS },
+    ]]]);
+    const processingStatuses = new Map<string, string>([["video-1", JobStatus.COMPLETED]]);
     const repository = {
       async get_content(id: string): Promise<ContentMetadata | undefined> { return contents.get(id); },
       async list_content(): Promise<[ContentMetadata[], number]> { return [[...contents.values()], contents.size]; },
       async get_chunk_counts(): Promise<Record<string, number>> { return { "video-1": 1 }; },
       async get_content_stats(): Promise<{ total: number; by_status: Record<string, number>; by_content_type: Record<string, number> }> { return { total: contents.size, by_status: { completed: 1 }, by_content_type: { youtube: contents.size } }; },
       async list_tags_with_counts(): Promise<readonly Record<string, unknown>[]> { return [{ name: "typescript", count: 1 }]; },
+      async get_topic_hierarchy(): Promise<readonly EntityModel[]> { return []; },
+      async get_tag_cooccurrence(): Promise<Record<string, string[]>> { return {}; },
+      async get_tier_distribution(): Promise<Record<string, number>> { return {}; },
+      async get_tag_aliases(): Promise<Record<string, string>> { return {}; },
+      async record_tag_alias(): Promise<void> {},
+      async find_or_create_entity(name: string, entityType: EntityType, values: Omit<Partial<EntityModel>, "name" | "entity_type" | "normalized_name"> = {}): Promise<readonly [EntityModel, boolean]> {
+        const existing = [...entities.values()].find((entity) => entity.entity_type === entityType && entity.normalized_name === name.toLowerCase());
+        if (existing !== undefined) return [existing, false];
+        const id = `entity-${entities.size + 1}`;
+        const entity: EntityModel = { id, entity_type: entityType, name, normalized_name: name.toLowerCase(), hierarchy: values.hierarchy };
+        entities.set(id, entity);
+        return [entity, true];
+      },
+      async complete_content_processing(contentId: string, result: JsonObject, _pipelineVersion: string, _chunks: ChunkModel[], relationships: ContentEntityEdge[]): Promise<void> {
+        const content = contents.get(contentId);
+        if (content === undefined) throw new Error("content not found");
+        contents.set(contentId, { ...content, metadata: { ...content.metadata, unified_result: result } });
+        contentEntities.set(contentId, relationships.map((relationship) => ({ ...relationship })));
+        processingStatuses.set(contentId, JobStatus.COMPLETED);
+      },
       async update_content(_id: string, content: ContentMetadata): Promise<ContentMetadata> { return content; },
       async delete_content(id: string): Promise<void> { contents.delete(id); },
       async delete_chunks(): Promise<void> {}, async delete_links_by_source(): Promise<void> {},
@@ -99,27 +131,53 @@ describe("vault routes", () => {
       async create_content(content: ContentMetadata): Promise<ContentMetadata> { const id = content.id ?? `content-${contents.size + 1}`; const created = { ...content, id, created_at: new Date() }; contents.set(id, created); return created; },
       async find_content_by_resource_key(keyValue: string): Promise<ContentMetadata | undefined> { return [...contents.values()].find((item) => item.metadata?.resource_key === keyValue); },
       async find_content_by_video_id(videoId: string): Promise<ContentMetadata | undefined> { return [...contents.values()].find((item) => item.metadata?.video_id === videoId); },
-      async get_content_processing_status(): Promise<string | undefined> { return "completed"; },
+      async get_content_processing_status(id: string): Promise<string | undefined> { return processingStatuses.get(id); },
+      async update_content_processing_status(id: string, status: string): Promise<void> { processingStatuses.set(id, status); },
+      async get_entities_for_content(id: string): Promise<readonly [EntityModel, ContentEntityEdge][]> {
+        return (contentEntities.get(id) ?? []).flatMap((edge) => {
+          const entity = entities.get(edge.entity_id);
+          return entity === undefined ? [] : [[entity, edge] as [EntityModel, ContentEntityEdge]];
+        });
+      },
+      async create_pipeline_job(job: PipelineJob): Promise<PipelineJob> { if (job.id === undefined) throw new Error("job ID is required"); pipelineJobs.set(job.id, { ...job }); return pipelineJobs.get(job.id) ?? job; },
+      async get_pipeline_job(id: string): Promise<PipelineJob | undefined> { return pipelineJobs.get(id); },
+      async find_active_pipeline_job(resourceKey: string): Promise<PipelineJob | undefined> { return [...pipelineJobs.values()].find((job) => job.resource_key === resourceKey && (job.status === JobStatus.PENDING || job.status === JobStatus.PROCESSING)); },
+      async update_pipeline_job(id: string, status: JobStatus, timing: JobTiming, errors: JobErrors): Promise<PipelineJob | undefined> {
+        const job = pipelineJobs.get(id);
+        if (job === undefined) return undefined;
+        const updated = { ...job, status, started_at: timing[0] ?? job.started_at, finished_at: timing[1] ?? job.finished_at, error_code: errors[0] ?? job.error_code, error_message: errors[1] ?? job.error_message, error_stage: errors[2] ?? job.error_stage };
+        pipelineJobs.set(id, updated);
+        return updated;
+      },
+      async list_pipeline_jobs(): Promise<readonly [unknown[], number]> { return [[...pipelineJobs.values()], pipelineJobs.size]; },
       async usage_totals(): Promise<Record<string, unknown>> { return { total_calls: 0, total_input_tokens: 0, total_output_tokens: 0, estimated_total_cost: 0 }; },
       async usage_breakdown(): Promise<Record<string, unknown>[]> { return []; },
       async get_pricing_snapshot(): Promise<Record<string, unknown> | undefined> { return undefined; },
       async upsert_pricing_snapshot(): Promise<void> {},
-    };
-    const jobService = {
-      async submit(input: { contentId: string }): Promise<{ id: string }> { const id = `job-${jobs.size + 1}`; jobs.set(id, { job_id: id, content_id: input.contentId, status: "completed" }); return { id }; },
-      async reprocess(input: { contentId: string }): Promise<{ id: string }> { return this.submit(input); },
-      async get(id: string): Promise<Record<string, unknown> | undefined> { return jobs.get(id); },
-      async list(): Promise<{ jobs: Record<string, unknown>[]; total: number }> { return { jobs: [...jobs.values()], total: jobs.size }; },
-      async cancel(id: string): Promise<Record<string, unknown> | undefined> { const job = jobs.get(id); return job === undefined ? undefined : { job_id: id, status: "completed", message: "Job already in terminal state: completed" }; },
     };
     const storage = {
       async upload(path: string, stream: AsyncIterable<Buffer>): Promise<number> { const chunks: Buffer[] = []; for await (const chunk of stream) chunks.push(chunk); const body = Buffer.concat(chunks); bytes.set(path, body); return body.length; },
       async download(path: string): Promise<Buffer> { const body = bytes.get(path); if (body === undefined) throw new Error("missing"); return body; },
       async delete(path: string): Promise<void> { bytes.delete(path); },
     };
+    const pipelineStorage = repository as unknown as PipelineStorage & JobStorage;
+    jobs = new PipelineOrchestrator(new UnifiedPipeline({
+      model: "test-model",
+      async generate(): Promise<string> {
+        return JSON.stringify({
+          tags: ["typescript"], tier: "A", quality_score: 82, summary: "A concise summary.",
+          topics: [{ name: "Engineering > TypeScript", confidence: "high", edge_type: "discusses" }],
+          pre_detected_validations: [],
+          additional_entities: [{ type: "tool", name: "Vitest", confidence: "medium", edge_type: "mentions" }],
+        });
+      },
+      async close(): Promise<void> {},
+    }, pipelineStorage, vaultConfig(keysPath), { chunkText: (text: string): string[] => [text] }, {
+      async embedBatch(texts: readonly string[]): Promise<number[][]> { return texts.map(() => Array.from({ length: 1024 }, () => 0.5)); },
+    }), pipelineStorage, { pipelineVersion: "test" });
     const overrides: VaultServiceOverrides = {
       repository: repository as unknown as NonNullable<VaultServiceOverrides["repository"]>, storage,
-      jobs: jobService as unknown as PipelineOrchestrator,
+      jobs,
       search: { async search(query: string): Promise<{ query: string; total: number; results: unknown[] }> { return { query, total: 1, results: [{ id: "video-1", title: "Existing video", snippet: "existing transcript" }] }; } } as unknown as SearchService,
       pricing: new LLMPricingService(repository as unknown as PricingSnapshotStorage),
       transcript: { async fetchTranscript(): Promise<{ videoId: string; segments: []; language: string; fullText: string; timestampedText: string }> { return { videoId: "dQw4w9WgXcQ", segments: [], language: "en", fullText: "youtube transcript", timestampedText: "youtube transcript" }; } },
@@ -142,14 +200,54 @@ describe("vault routes", () => {
     return fetch(`${baseUrl}${path}`, { method, headers: signRequest(key, method, path, new URL(baseUrl).host, bytes), body: bytes });
   }
 
+  it("returns a pollable reprocessing job for duplicate YouTube ingest", async () => {
+    const initial = await (await request("/api/v1/ingest", "POST", { url: "https://youtube.com/watch?v=dQw4w9WgXcQ" })).json() as Record<string, unknown>;
+    if (typeof initial.job_id !== "string") throw new Error("initial YouTube ingest did not return a job ID");
+    await jobs.waitForIdle();
+
+    const duplicate = await (await request("/api/v1/ingest", "POST", { url: "https://youtu.be/dQw4w9WgXcQ" })).json() as Record<string, unknown>;
+    expect(duplicate.job_id).toEqual(expect.any(String));
+    if (typeof duplicate.job_id !== "string") throw new Error("duplicate YouTube ingest did not return a job ID");
+
+    expect((await request(`/api/v1/jobs/${duplicate.job_id}`)).status).toBe(200);
+    await jobs.waitForIdle();
+    await expect((await request(`/api/v1/jobs/${duplicate.job_id}`)).json()).resolves.toMatchObject({ job_id: duplicate.job_id, status: JobStatus.COMPLETED });
+  });
+
+  it("returns a pollable reprocessing job for duplicate web ingest", async () => {
+    const initial = await (await request("/api/v1/ingest", "POST", { url: "https://www.example.com/page?utm_source=test&topic=onclave" })).json() as Record<string, unknown>;
+    if (typeof initial.job_id !== "string") throw new Error("initial web ingest did not return a job ID");
+    await jobs.waitForIdle();
+
+    const duplicate = await (await request("/api/v1/ingest", "POST", { url: "https://example.com/page?topic=onclave" })).json() as Record<string, unknown>;
+    expect(duplicate.job_id).toEqual(expect.any(String));
+    if (typeof duplicate.job_id !== "string") throw new Error("duplicate web ingest did not return a job ID");
+
+    expect((await request(`/api/v1/jobs/${duplicate.job_id}`)).status).toBe(200);
+    await jobs.waitForIdle();
+    await expect((await request(`/api/v1/jobs/${duplicate.job_id}`)).json()).resolves.toMatchObject({ job_id: duplicate.job_id, status: JobStatus.COMPLETED });
+  });
+
   it("serves signed Menos routes and leaves dropped routes unregistered", async () => {
     await expect((await request("/api/v1/content?exclude_tags=")).json()).resolves.toMatchObject({ total: 1, items: [{ id: "video-1", tags: ["test", "typescript"], chunk_count: 1 }] });
     expect((await request("/api/v1/content/missing")).status).toBe(404);
     await expect((await request("/api/v1/content/video-1/download")).text()).resolves.toBe("existing transcript");
     await expect((await request("/api/v1/content/video-1/annotations", "POST", { text: "note", tags: ["note"] })).json()).resolves.toMatchObject({ title: "Annotation for Existing video", tags: ["note"] });
-    const ingest = await (await request("/api/v1/ingest?tags=test", "POST", { url: "https://youtube.com/watch?v=dQw4w9WgXcQ" })).json() as Record<string, string>;
-    expect(ingest).toMatchObject({ title: "YouTube: dQw4w9WgXcQ", content_type: "youtube", job_id: "job-1" });
+    const ingest = await (await request("/api/v1/ingest?tags=test", "POST", { url: "https://youtube.com/watch?v=dQw4w9WgXcQ" })).json() as Record<string, unknown>;
+    expect(ingest).toMatchObject({ title: "YouTube: dQw4w9WgXcQ", content_type: "youtube" });
+    expect(typeof ingest.job_id).toBe("string");
+    if (typeof ingest.job_id !== "string" || typeof ingest.content_id !== "string") throw new Error("ingest did not return content and job IDs");
+    await jobs.waitForIdle();
     await expect((await request(`/api/v1/jobs/${ingest.job_id}`)).json()).resolves.toMatchObject({ status: "completed" });
+    await expect((await request(`/api/v1/content/${ingest.content_id}`)).json()).resolves.toMatchObject({
+      summary: "A concise summary.",
+      topics: ["TypeScript"],
+      entities: ["Vitest"],
+    });
+    await expect((await request("/api/v1/content/video-1")).json()).resolves.toMatchObject({
+      topics: ["TypeScript"],
+      entities: ["Vitest"],
+    });
     expect((await request("/api/v1/content/missing/reprocess", "POST")).status).toBe(404);
     await expect((await request("/api/v1/content/video-1/reprocess", "POST")).json()).resolves.toMatchObject({ status: "already_completed" });
     await expect((await request("/api/v1/search", "POST", { query: "existing", limit: 1 })).json()).resolves.toMatchObject({ total: 1, results: [{ snippet: "existing transcript" }] });

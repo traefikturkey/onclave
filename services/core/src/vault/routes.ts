@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { HttpError } from "./errors";
 import type { KeyStore } from "./keys";
-import { JobStatus, type ChunkModel, type ContentMetadata, type JsonObject, type JsonValue } from "./models";
+import { EntityType, JobStatus, type ChunkModel, type ContentEntityEdge, type ContentMetadata, type EntityModel, type JsonObject, type JsonValue } from "./models";
 import type { PipelineOrchestrator } from "./jobs";
 import type { SearchService } from "./search";
 import type { UsagePricingService, UsageStorage } from "./usage";
@@ -43,6 +43,7 @@ export type VaultRepository = UsageStorage & {
   find_content_by_resource_key(resourceKey: string): Promise<ContentMetadata | undefined>;
   find_content_by_video_id(videoId: string): Promise<ContentMetadata | undefined>;
   get_content_processing_status(contentId: string): Promise<string | undefined>;
+  get_entities_for_content(contentId: string): Promise<readonly [EntityModel, ContentEntityEdge][]>;
 };
 
 export type VaultTranscriptService = {
@@ -159,6 +160,30 @@ function contentId(content: ContentMetadata): string {
   return content.id ?? "";
 }
 
+function submittedJobId(job: { id?: string }): string {
+  if (job.id === undefined || job.id === "") throw new Error("Pipeline submission did not return a job ID");
+  return job.id;
+}
+
+async function resubmitExistingIngest(deps: VaultRouteDependencies, content: ContentMetadata, resourceKey: string, fallbackTitle: string): Promise<string> {
+  const id = contentId(content);
+  if (id === "") throw new Error("Existing content does not have an ID");
+  let contentText: string;
+  try {
+    contentText = (await deps.storage.download(content.file_path)).toString("utf8");
+  } catch (error) {
+    throw new HttpError(500, `Failed to download content: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  const job = await deps.jobs.submit({
+    contentId: id,
+    contentText,
+    contentType: content.content_type,
+    title: content.title ?? fallbackTitle,
+    resourceKey,
+  });
+  return submittedJobId(job);
+}
+
 function splitTags(value: string | undefined): string[] | undefined {
   if (value === undefined) return undefined;
   return value.split(",").map((tag) => tag.trim()).filter(Boolean);
@@ -174,7 +199,7 @@ function metadataValue(content: ContentMetadata): Record<string, JsonValue> {
   return record(content.metadata);
 }
 
-function pipelineFields(content: ContentMetadata): { summary: string | null; topics: string[]; entities: string[]; pipelineTags: string[] } {
+function pipelineFields(content: ContentMetadata, persistedEntities: readonly EntityModel[]): { summary: string | null; topics: string[]; entities: string[]; pipelineTags: string[] } {
   const unified = record(metadataValue(content).unified_result);
   const names = (value: JsonValue | undefined): string[] => Array.isArray(value)
     ? value.flatMap((item) => {
@@ -182,16 +207,19 @@ function pipelineFields(content: ContentMetadata): { summary: string | null; top
       return typeof itemRecord.name === "string" ? [itemRecord.name] : [];
     })
     : [];
+  const uniqueNames = (entities: readonly EntityModel[]): string[] => [...new Set(entities.flatMap((entity) => entity.name === "" ? [] : [entity.name]))];
+  const topics = uniqueNames(persistedEntities.filter((entity) => entity.entity_type === EntityType.TOPIC));
+  const entities = uniqueNames(persistedEntities.filter((entity) => entity.entity_type !== EntityType.TOPIC));
   return {
     summary: typeof unified.summary === "string" && unified.summary !== "" ? unified.summary : null,
-    topics: names(unified.topics),
-    entities: names(unified.additional_entities),
+    topics: topics.length > 0 ? topics : names(unified.topics),
+    entities: entities.length > 0 ? entities : names(unified.additional_entities),
     pipelineTags: Array.isArray(unified.tags) ? unified.tags.filter((item): item is string => typeof item === "string") : [],
   };
 }
 
-function contentDetail(content: ContentMetadata, processingStatus: string | undefined): Record<string, unknown> {
-  const fields = pipelineFields(content);
+function contentDetail(content: ContentMetadata, processingStatus: string | undefined, persistedEntities: readonly EntityModel[]): Record<string, unknown> {
+  const fields = pipelineFields(content, persistedEntities);
   const unified = record(metadataValue(content).unified_result);
   return {
     id: contentId(content),
@@ -322,7 +350,11 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
       const id = request.params.content_id ?? "";
       const content = await deps.repository.get_content(id);
       if (content === undefined) throw new HttpError(404, "Content not found");
-      return jsonResponse(contentDetail(content, await deps.repository.get_content_processing_status(id)));
+      const [processingStatus, entitiesWithEdges] = await Promise.all([
+        deps.repository.get_content_processing_status(id),
+        deps.repository.get_entities_for_content(id),
+      ]);
+      return jsonResponse(contentDetail(content, processingStatus, entitiesWithEdges.map(([entity]) => entity)));
     },
     contentUpdate: async (request) => {
       const id = request.params.content_id ?? "";
@@ -458,7 +490,9 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
         const resourceKey = `yt:${videoId}`;
         const existing = await deps.repository.find_content_by_resource_key(resourceKey) ?? await deps.repository.find_content_by_video_id(videoId);
         if (existing !== undefined) {
-          return jsonResponse({ content_id: contentId(existing), content_type: existing.content_type, title: existing.title ?? `YouTube: ${videoId}`, job_id: null });
+          const title = existing.title ?? `YouTube: ${videoId}`;
+          const jobId = await resubmitExistingIngest(deps, existing, resourceKey, title);
+          return jsonResponse({ content_id: contentId(existing), content_type: existing.content_type, title, job_id: jobId });
         }
         let transcript: YouTubeTranscript | undefined;
         let processingText = transcriptText;
@@ -491,14 +525,16 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
         });
         const id = contentId(created) || videoId;
         const job = await deps.jobs.submit({ contentId: id, contentText: text, contentType: "youtube", title, resourceKey });
-        return jsonResponse({ title, content_id: id, content_type: "youtube", job_id: job?.id ?? null });
+        return jsonResponse({ title, content_id: id, content_type: "youtube", job_id: submittedJobId(job) });
       }
       const canonicalUrl = canonicalWebUrl(url);
       const urlHash = createHash("sha256").update(canonicalUrl).digest("hex");
       const resourceKey = `url:${urlHash}`;
       const existing = await deps.repository.find_content_by_resource_key(resourceKey);
       if (existing !== undefined) {
-        return jsonResponse({ content_id: contentId(existing), content_type: existing.content_type, title: existing.title ?? canonicalUrl, job_id: null });
+        const title = existing.title ?? canonicalUrl;
+        const jobId = await resubmitExistingIngest(deps, existing, resourceKey, title);
+        return jsonResponse({ content_id: contentId(existing), content_type: existing.content_type, title, job_id: jobId });
       }
       const extracted = await deps.docling.extractMarkdown(url);
       const title = extracted.title ?? canonicalUrl;
@@ -510,7 +546,7 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
       });
       const id = contentId(created) || urlHash;
       const job = await deps.jobs.submit({ contentId: id, contentText: extracted.markdown, contentType: "web", title, resourceKey });
-      return jsonResponse({ title, content_id: id, content_type: "web", job_id: job?.id ?? null });
+      return jsonResponse({ title, content_id: id, content_type: "web", job_id: submittedJobId(job) });
     },
     jobsList: async (request) => {
       const limit = integerQuery(request.query.limit, "limit", 50, 1, 100);
