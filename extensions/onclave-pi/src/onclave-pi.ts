@@ -22,6 +22,7 @@ import {
   type Envelope,
 } from "@onclave/envelope";
 import { appendAdapterAuditEvent, type AdapterAuditEventName, type AdapterAuditMetadata } from "./lib/audit";
+import { loadApiBaseFromBws } from "./lib/bws";
 import { HttpLink, type ConnectionState } from "./lib/connection";
 import { CorrelationStore, INBOUND_CUSTOM_TYPE } from "./lib/correlation";
 import { SeenIds } from "./lib/dedup";
@@ -122,13 +123,31 @@ type StartOptions = {
   policyPath: string;
 };
 
+export type ApiBaseLoader = () => Promise<string | undefined>;
+
+export async function resolveAdapterApiBase(
+  explicitUrl: string | undefined,
+  environment: NodeJS.ProcessEnv = process.env,
+  loader: ApiBaseLoader = () => loadApiBaseFromBws(environment)
+): Promise<string> {
+  if (explicitUrl !== undefined || environment.ONCLAVE_API_BASE !== undefined) {
+    return resolveApiBase(explicitUrl, environment);
+  }
+
+  const apiBase = await loader();
+  if (apiBase === undefined) {
+    throw new Error("Onclave BWS bootstrap is missing BITWARDEN_ACCESS_KEY");
+  }
+  return resolveApiBase(apiBase, {});
+}
+
 async function startAdapter(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   options: StartOptions
 ): Promise<AdapterRuntime> {
   const card = await buildAgentCard(pi, ctx);
-  const apiBase = resolveApiBase(readStringFlag(pi, "onclave-url"));
+  const apiBase = await resolveAdapterApiBase(readStringFlag(pi, "onclave-url"));
   const client = new OnclaveHttpClient({
     apiBase,
     signer: await loadDefaultRequestSigner(),

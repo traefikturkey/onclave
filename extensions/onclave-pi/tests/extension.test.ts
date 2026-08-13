@@ -55,7 +55,7 @@ vi.mock("../src/lib/http-signer", () => ({
   })),
 }));
 
-import onclavePi, { refreshFooterStatus, resolveApiBase } from "../src/onclave-pi";
+import onclavePi, { resolveAdapterApiBase, refreshFooterStatus, resolveApiBase } from "../src/onclave-pi";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> };
 type RegisteredTool = {
@@ -196,6 +196,25 @@ describe("Onclave v2 API resolution", () => {
   it("canonicalizes an explicit HTTPS origin override", () => {
     expect(resolveApiBase("https://explicit.example", { ONCLAVE_API_BASE: "https://env.example" })).toBe(
       "https://explicit.example/api/v1/"
+    );
+  });
+
+  it("uses the flag and environment before the BWS lookup", async () => {
+    const loader = vi.fn(async () => "https://bws.example");
+
+    await expect(
+      resolveAdapterApiBase("https://flag.example", { ONCLAVE_API_BASE: "https://env.example" }, loader)
+    ).resolves.toBe("https://flag.example/api/v1/");
+    await expect(resolveAdapterApiBase(undefined, { ONCLAVE_API_BASE: "https://env.example" }, loader)).resolves.toBe(
+      "https://env.example/api/v1/"
+    );
+    await expect(resolveAdapterApiBase(undefined, {}, loader)).resolves.toBe("https://bws.example/api/v1/");
+    expect(loader).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when neither an override nor BWS bootstrap is available", async () => {
+    await expect(resolveAdapterApiBase(undefined, {}, async () => undefined)).rejects.toThrow(
+      "Onclave BWS bootstrap is missing BITWARDEN_ACCESS_KEY"
     );
   });
 
