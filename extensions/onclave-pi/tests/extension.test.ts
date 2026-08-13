@@ -1,10 +1,76 @@
-import { describe, expect, it, vi } from "vitest";
-import onclavePi, { refreshFooterStatus, resolveAmqpUrl } from "../src/onclave-pi";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type RegisteredTool = { name: string; parameters?: unknown };
+const httpClient = vi.hoisted(() => ({
+  call: vi.fn<(request: object) => Promise<Record<string, unknown>>>(),
+  publish: vi.fn<(envelope: object) => Promise<void>>(),
+}));
+
+vi.mock("../src/lib/audit", () => ({
+  appendAdapterAuditEvent: vi.fn(async () => undefined),
+}));
+
+vi.mock("../src/lib/connection", () => {
+  class HttpLink {
+    constructor(
+      private readonly options: {
+        onReady: (signal: AbortSignal) => Promise<void>;
+        onStateChange?: (state: "connecting" | "connected" | "closed") => void;
+      }
+    ) {}
+
+    start(): void {
+      this.options.onStateChange?.("connecting");
+      this.options.onStateChange?.("connected");
+      void this.options.onReady(new AbortController().signal);
+    }
+
+    async stop(): Promise<void> {
+      this.options.onStateChange?.("closed");
+    }
+  }
+
+  return { HttpLink };
+});
+
+vi.mock("../src/lib/http-client", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/http-client")>();
+
+  class OnclaveHttpClient {
+    async call(request: object): Promise<Record<string, unknown>> {
+      return httpClient.call(request);
+    }
+
+    async publish(envelope: object): Promise<void> {
+      return httpClient.publish(envelope);
+    }
+  }
+
+  return { ...actual, OnclaveHttpClient };
+});
+
+vi.mock("../src/lib/http-signer", () => ({
+  loadDefaultRequestSigner: vi.fn(async () => ({
+    keyId: "test",
+    signRequest: () => ({}),
+  })),
+}));
+
+import onclavePi, { refreshFooterStatus, resolveApiBase } from "../src/onclave-pi";
+
+type ToolResult = { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> };
+type RegisteredTool = {
+  name: string;
+  parameters?: unknown;
+  execute?: (callId: string, params: Record<string, unknown>) => Promise<ToolResult>;
+};
 type RegisteredCommand = { name: string };
 
 describe("Onclave v2 adapter registration", () => {
+  beforeEach(() => {
+    httpClient.call.mockReset();
+    httpClient.publish.mockReset();
+  });
+
   it("registers lifecycle hooks, flags, tools, and the status command", () => {
     const registered = createFakePi();
 
@@ -47,22 +113,94 @@ describe("Onclave v2 adapter registration", () => {
     expect(serialized).toContain("query");
     expect(serialized).not.toContain("inform");
   });
-});
 
-describe("Onclave v2 broker resolution", () => {
-  it("preserves an explicit broker override", async () => {
-    const loader = vi.fn();
-
-    await expect(resolveAmqpUrl("amqp://explicit.example/onclave", loader)).resolves.toBe(
-      "amqp://explicit.example/onclave"
-    );
-    expect(loader).not.toHaveBeenCalled();
+  it("inform tool makes its target optional for alive-peer broadcasts", () => {
+    const registered = createFakePi();
+    onclavePi(registered.pi as never);
+    const inform = registered.tools.find((tool) => tool.name === "onclave_inform");
+    const schema = inform?.parameters as { required?: readonly string[] } | undefined;
+    expect(schema?.required).not.toContain("to");
   });
 
-  it("fails closed when BWS bootstrap is unavailable", async () => {
-    await expect(resolveAmqpUrl(undefined, async () => undefined)).rejects.toThrow(
-      "missing BITWARDEN_ACCESS_KEY"
+  it("broadcasts inert informs directly to each alive peer", async () => {
+    httpClient.call.mockResolvedValue({ ok: true });
+    httpClient.publish.mockResolvedValue(undefined);
+    const registered = createFakePi({ "onclave-url": "https://api.example" });
+    onclavePi(registered.pi as never);
+
+    await startSession(registered);
+    const registerRequest = httpClient.call.mock.calls.find(([request]) => hasOperation(request, "register"));
+    if (registerRequest === undefined) throw new Error("adapter did not register");
+    const localAgentId = (registerRequest[0] as { card: { agent_id: string } }).card.agent_id;
+    httpClient.call.mockImplementation(async (request) => {
+      if (hasOperation(request, "list_agents")) {
+        return {
+          ok: true,
+          agents: [
+            { agent_id: localAgentId, alive: true },
+            { agent_id: "peer-a", alive: true },
+            { agent_id: "peer-b", alive: true },
+            { agent_id: "sleeping-peer", alive: false },
+            { agent_id: "*", alive: true },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+
+    const inform = registered.tools.find((tool) => tool.name === "onclave_inform");
+    if (inform?.execute === undefined) throw new Error("inform tool is not registered");
+    const result = await inform.execute("call-1", { body: "maintenance notice" });
+
+    expect(httpClient.call).toHaveBeenCalledWith({ op: "list_agents" });
+    expect(httpClient.publish.mock.calls.map(([envelope]) => (envelope as { to: string }).to)).toEqual([
+      "peer-a",
+      "peer-b",
+    ]);
+    expect(httpClient.publish.mock.calls.map(([envelope]) => (envelope as { performative: string }).performative)).toEqual([
+      "inform",
+      "inform",
+    ]);
+    expect(result).toMatchObject({
+      content: [{ type: "text", text: "onclave_inform broadcast\nrecipients 2" }],
+      details: { recipient_count: 2, recipients: ["peer-a", "peer-b"] },
+    });
+
+    await shutdownSession(registered);
+  });
+
+  it("keeps direct informs on the messages operation without listing agents", async () => {
+    httpClient.call.mockResolvedValue({ ok: true });
+    httpClient.publish.mockResolvedValue(undefined);
+    const registered = createFakePi({ "onclave-url": "https://api.example" });
+    onclavePi(registered.pi as never);
+
+    await startSession(registered);
+    const inform = registered.tools.find((tool) => tool.name === "onclave_inform");
+    if (inform?.execute === undefined) throw new Error("inform tool is not registered");
+    const result = await inform.execute("call-2", { body: "maintenance notice", to: "peer-a" });
+
+    expect(httpClient.call.mock.calls.filter(([request]) => hasOperation(request, "list_agents"))).toHaveLength(0);
+    expect(httpClient.publish).toHaveBeenCalledTimes(1);
+    expect(httpClient.publish.mock.calls[0]?.[0]).toMatchObject({
+      performative: "inform",
+      to: "peer-a",
+    });
+    expect(result.content[0]?.text).toBe("onclave_inform sent\nmsg_id " + result.details.msg_id);
+
+    await shutdownSession(registered);
+  });
+});
+
+describe("Onclave v2 API resolution", () => {
+  it("canonicalizes an explicit HTTPS origin override", () => {
+    expect(resolveApiBase("https://explicit.example", { ONCLAVE_API_BASE: "https://env.example" })).toBe(
+      "https://explicit.example/api/v1/"
     );
+  });
+
+  it("fails closed when the API base is unavailable", () => {
+    expect(() => resolveApiBase(undefined, {})).toThrow("ONCLAVE_API_BASE is required");
   });
 });
 
@@ -87,7 +225,26 @@ describe("Onclave v2 footer status", () => {
   });
 });
 
-function createFakePi() {
+function hasOperation(request: object, operation: string): boolean {
+  return "op" in request && request.op === operation;
+}
+
+async function startSession(registered: ReturnType<typeof createFakePi>): Promise<void> {
+  const sessionStart = registered.hooks.find((hook) => hook.event === "session_start");
+  if (sessionStart === undefined) throw new Error("session_start hook is not registered");
+  await sessionStart.handler({}, { cwd: process.cwd(), ui: { notify: vi.fn(), setStatus: vi.fn() } });
+  await vi.waitFor(() => {
+    expect(httpClient.call.mock.calls.some(([request]) => hasOperation(request, "register"))).toBe(true);
+  });
+}
+
+async function shutdownSession(registered: ReturnType<typeof createFakePi>): Promise<void> {
+  const sessionShutdown = registered.hooks.find((hook) => hook.event === "session_shutdown");
+  if (sessionShutdown === undefined) throw new Error("session_shutdown hook is not registered");
+  await sessionShutdown.handler();
+}
+
+function createFakePi(flagValues: Record<string, unknown> = {}) {
   const flags: Array<{ name: string; options: unknown }> = [];
   const hooks: Array<{ event: string; handler: (...args: unknown[]) => unknown }> = [];
   const commands: RegisteredCommand[] = [];
@@ -105,8 +262,8 @@ function createFakePi() {
     registerTool(tool: RegisteredTool) {
       tools.push(tool);
     },
-    getFlag() {
-      return undefined;
+    getFlag(name: string) {
+      return flagValues[name];
     },
     sendMessage() {},
   };

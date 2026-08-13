@@ -74,6 +74,19 @@ describe("Registry", () => {
     expect(reloaded.get("agent-a")).toMatchObject({ agent_id: "agent-a" });
   });
 
+  it("preserves key bindings for AMQP registration and reuses an operator key", async () => {
+    const registry = makeRegistry(() => new Date());
+    await registry.register(card);
+    expect(registry.get(card.agent_id)?.key_id).toBeUndefined();
+
+    await registry.register(card, "operator-key");
+    await registry.register({ ...card, agent_id: "agent-b", name: "Agent B" }, "operator-key");
+    await registry.register({ ...card, name: "Agent A2" });
+
+    expect(registry.get(card.agent_id)).toMatchObject({ key_id: "operator-key", name: "Agent A2" });
+    expect(registry.get("agent-b")).toMatchObject({ key_id: "operator-key" });
+  });
+
   it("loads nothing from a missing or corrupt file", async () => {
     const registry = makeRegistry(() => new Date(), join(dir, "missing.json"));
     expect(await registry.load()).toBe(0);

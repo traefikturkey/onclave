@@ -32,8 +32,8 @@ export type DeliveryDeps = {
   deliverTurn: (envelope: Envelope) => void;
   deliverDelegatedTurn: (envelope: Envelope, grant: DelegationGrant) => void;
   deliverInert: (envelope: Envelope) => void;
-  publishFailureReply: (envelope: Envelope, reason: string) => void;
-  publishNotUnderstood: (replyTo: string, error: string) => void;
+  publishFailureReply: (envelope: Envelope, reason: string) => void | Promise<void>;
+  publishNotUnderstood: (replyTo: string, error: string) => void | Promise<void>;
   registerInbound: (envelope: Envelope) => void;
   acceptReply: (envelope: Envelope) => boolean;
   audit: (event: AdapterAuditEventName, metadata?: AdapterAuditMetadata) => Promise<void>;
@@ -47,7 +47,13 @@ export async function handleInboundMessage(
   if (!parsed.ok) {
     return handleMalformed(deps, message, parsed.error);
   }
-  const envelope = parsed.envelope;
+  return handleInboundEnvelope(deps, parsed.envelope);
+}
+
+export async function handleInboundEnvelope(
+  deps: DeliveryDeps,
+  envelope: Envelope
+): Promise<DeliveryDecision> {
   if (!deps.seen.add(envelope.id)) {
     await deps.audit("message_deduplicated", { message_id: envelope.id });
     return "ack";
@@ -58,6 +64,40 @@ export async function handleInboundMessage(
   return handleInert(deps, envelope);
 }
 
+export async function handleInboundHttpDelivery(
+  deps: DeliveryDeps,
+  envelope: Envelope,
+  deliveryId: string,
+  dispose: (decision: DeliveryDecision) => Promise<void>
+): Promise<void> {
+  let decision: DeliveryDecision;
+  try {
+    decision = await handleInboundEnvelope(deps, envelope);
+  } catch (error) {
+    await deps
+      .audit("message_rejected", {
+        message_id: envelope.id,
+        detail: error instanceof Error ? error.message : String(error),
+      })
+      .catch(() => undefined);
+    decision = "reject";
+  }
+
+  try {
+    await dispose(decision);
+  } catch (error) {
+    await deps
+      .audit("message_disposition_failed", {
+        message_id: envelope.id,
+        delivery_id: deliveryId,
+        disposition: decision,
+        detail: error instanceof Error ? error.message : String(error),
+      })
+      .catch(() => undefined);
+    throw error;
+  }
+}
+
 async function handleMalformed(
   deps: DeliveryDeps,
   message: AmqpConsumedMessage,
@@ -65,7 +105,7 @@ async function handleMalformed(
 ): Promise<DeliveryDecision> {
   const target = replyToFromProperties(message);
   if (target !== undefined) {
-    deps.publishNotUnderstood(target, error);
+    await deps.publishNotUnderstood(target, error);
   }
   await deps.audit("message_rejected", { detail: error });
   return "reject";
@@ -124,7 +164,7 @@ async function authorizeDelegation(
 ): Promise<TurnAuthorization> {
   const verified = await deps.verifyDelegation(envelope);
   if (!verified.ok) {
-    deps.publishFailureReply(envelope, `delegation_rejected:${verified.reason}`);
+    await deps.publishFailureReply(envelope, `delegation_rejected:${verified.reason}`);
     await deps.audit("delegation_rejected", {
       message_id: envelope.id,
       grant_id: envelope.delegation?.grant_id,
@@ -181,7 +221,7 @@ async function confirmCrossHost(deps: DeliveryDeps, envelope: Envelope): Promise
   });
   const confirmed = await deps.confirmRemote(envelope);
   if (confirmed) return true;
-  deps.publishFailureReply(envelope, "declined_by_operator");
+  await deps.publishFailureReply(envelope, "declined_by_operator");
   await deps.audit("remote_confirm_declined", {
     message_id: envelope.id,
     from_host: envelope.from.host,

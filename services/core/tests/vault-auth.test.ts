@@ -182,7 +182,7 @@ describe("verifySignedRequest", () => {
     const request = makeRequest(key, "POST", "/api/v1/search", "vault.example", body);
     request.body = Buffer.from(JSON.stringify({ query: "evil", limit: 5 }), "utf8");
     expect(() => verifySignedRequest(request, store)).toThrowError(
-      expect.objectContaining({ status: 401, message: "Invalid signature" }),
+      expect.objectContaining({ status: 401, message: "Invalid content-digest header" }),
     );
   });
 
@@ -193,6 +193,52 @@ describe("verifySignedRequest", () => {
     request.path = "/api/v1/content/def";
     expect(() => verifySignedRequest(request, store)).toThrowError(
       expect.objectContaining({ status: 401, message: "Invalid signature" }),
+    );
+  });
+
+  it("rejects a missing created signature parameter", () => {
+    const key = makeTestKey();
+    const store = storeWithKeys(key.authorizedKeysLine);
+    const request = makeRequest(key, "GET", "/api/v1/content", "vault.example");
+    request.headers["signature-input"] = request.headers["signature-input"]?.replace(/;created=\d+$/, "");
+
+    expect(() => verifySignedRequest(request, store)).toThrowError(
+      expect.objectContaining({ status: 401, message: "Missing created in signature-input" }),
+    );
+  });
+
+  it("rejects signatures without every required component", () => {
+    const key = makeTestKey();
+    const store = storeWithKeys(key.authorizedKeysLine);
+    const request = makeRequest(key, "GET", "/api/v1/content", "vault.example");
+    request.headers["signature-input"] = request.headers["signature-input"]?.replace(' "@authority"', "");
+
+    expect(() => verifySignedRequest(request, store)).toThrowError(
+      expect.objectContaining({ status: 401, message: "Invalid signature component profile" }),
+    );
+  });
+
+  it("rejects a nonempty body without a content digest", () => {
+    const key = makeTestKey();
+    const store = storeWithKeys(key.authorizedKeysLine);
+    const body = Buffer.from('{"query":"test"}', "utf8");
+    const request = makeRequest(key, "POST", "/api/v1/search", "vault.example", body);
+    delete request.headers["content-digest"];
+
+    expect(() => verifySignedRequest(request, store)).toThrowError(
+      expect.objectContaining({ status: 401, message: "Missing content-digest header" }),
+    );
+  });
+
+  it("rejects a content-digest header that does not match the body", () => {
+    const key = makeTestKey();
+    const store = storeWithKeys(key.authorizedKeysLine);
+    const body = Buffer.from('{"query":"test"}', "utf8");
+    const request = makeRequest(key, "POST", "/api/v1/search", "vault.example", body);
+    request.headers["content-digest"] = "sha-256=:invalid:";
+
+    expect(() => verifySignedRequest(request, store)).toThrowError(
+      expect.objectContaining({ status: 401, message: "Invalid content-digest header" }),
     );
   });
 

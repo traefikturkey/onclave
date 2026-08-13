@@ -13,7 +13,7 @@ export type AgentCard = {
   project?: string;
   model?: string;
   capabilities?: string[];
-  transport: "amqp";
+  transport: "amqp" | "https";
 };
 
 export type HeartbeatTelemetry = {
@@ -61,7 +61,7 @@ export function isAgentCard(value: unknown): value is AgentCard {
   // #lizard forgives: TS lexer merges adjacent small helpers into one region
   if (!isRecord(value)) return false;
   const record: JsonRecord = value;
-  if (record.transport !== "amqp") return false;
+  if (record.transport !== "amqp" && record.transport !== "https") return false;
   if (record.model !== undefined && !isNonEmptyString(record.model)) return false;
   if (!hasValidCapabilities(record.capabilities)) return false;
   return isAgentOrigin(value);

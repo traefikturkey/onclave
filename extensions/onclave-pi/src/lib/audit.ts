@@ -12,6 +12,7 @@ export type AdapterAuditEventName =
   | "message_delivered_inert"
   | "message_deduplicated"
   | "message_rejected"
+  | "message_disposition_failed"
   | "message_budget_blocked"
   | "delegation_issued"
   | "delegation_accepted"

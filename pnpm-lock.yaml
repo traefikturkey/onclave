@@ -78,16 +78,10 @@ importers:
       '@onclave/envelope':
         specifier: workspace:*
         version: link:../../packages/envelope
-      amqplib:
-        specifier: ^0.10.5
-        version: 0.10.9
       typebox:
         specifier: '*'
         version: 1.1.38
     devDependencies:
-      '@types/amqplib':
-        specifier: ^0.10.6
-        version: 0.10.8
       vitest:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@24.12.4)(jiti@2.7.0)(tsx@4.22.3)(yaml@2.9.0)

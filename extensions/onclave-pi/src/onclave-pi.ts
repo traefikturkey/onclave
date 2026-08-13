@@ -1,23 +1,18 @@
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { connect } from "amqplib";
-import type { Channel } from "amqplib";
 import { Type } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   DELEGATED_ACTIONS,
-  EXCHANGE_AGENTS,
-  EXCHANGE_EVENTS,
   PROTOCOL_VERSION,
   buildDelegatedRequestFraming,
+  buildFailureReply,
   buildInformDisplayText,
   buildInformReply,
-  buildFailureReply,
   buildRequestFraming,
   createDelegationGrant,
   createEnvelope,
-  toAmqpPublish,
   ulid,
   verifyDelegationGrant,
   type AgentCard,
@@ -25,22 +20,24 @@ import {
   type DelegatedAction,
   type DelegationGrant,
   type Envelope,
-  type TokenUsage,
 } from "@onclave/envelope";
 import { appendAdapterAuditEvent, type AdapterAuditEventName, type AdapterAuditMetadata } from "./lib/audit";
-import { loadBrokerUrlFromBws } from "./lib/bws";
-import { BrokerLink, type ConnectionState } from "./lib/connection";
+import { HttpLink, type ConnectionState } from "./lib/connection";
 import { CorrelationStore, INBOUND_CUSTOM_TYPE } from "./lib/correlation";
 import { SeenIds } from "./lib/dedup";
-import { handleInboundMessage, type DeliveryDeps } from "./lib/delivery";
+import { handleInboundHttpDelivery, type DeliveryDeps } from "./lib/delivery";
+import { OnclaveHttpClient, resolveApiBase, type Delivery } from "./lib/http-client";
+import { loadDefaultRequestSigner } from "./lib/http-signer";
 import { isAutoAccepted, loadAdapterPolicy } from "./lib/policy";
 import { resolveProjectLabel } from "./lib/project-label";
-import { CoreRpcClient } from "./lib/rpc-client";
 import { lastAssistantText, runUsage } from "./lib/run-summary";
+
+export { resolveApiBase };
 
 const MAX_MESSAGE_LENGTH = 100_000;
 const MAX_WAIT_TIMEOUT_MS = 300_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
+const LONG_POLL_WAIT_MS = 25_000;
 const FOOTER_STATUS_KEY = "onclave-v2";
 const ANSI_GREEN = "\x1b[32m";
 const ANSI_RED = "\x1b[31m";
@@ -48,10 +45,8 @@ const ANSI_RESET = "\x1b[0m";
 
 type AdapterRuntime = {
   card: AgentCard;
-  queue: string;
-  link: BrokerLink;
-  channel: Channel | undefined;
-  rpc: CoreRpcClient | undefined;
+  link: HttpLink;
+  client: OnclaveHttpClient;
   state: ConnectionState;
   correlation: CorrelationStore;
   seen: SeenIds;
@@ -67,7 +62,7 @@ export default function onclavePi(pi: ExtensionAPI): void {
     default: undefined,
   });
   pi.registerFlag("onclave-url", {
-    description: "AMQP URL for the Onclave broker",
+    description: "HTTPS API base URL for Onclave",
     type: "string",
     default: undefined,
   });
@@ -133,12 +128,15 @@ async function startAdapter(
   options: StartOptions
 ): Promise<AdapterRuntime> {
   const card = await buildAgentCard(pi, ctx);
+  const apiBase = resolveApiBase(readStringFlag(pi, "onclave-url"));
+  const client = new OnclaveHttpClient({
+    apiBase,
+    signer: await loadDefaultRequestSigner(),
+  });
   const runtime: AdapterRuntime = {
     card,
-    queue: `agent.${card.agent_id}`,
-    link: undefined as unknown as BrokerLink,
-    channel: undefined,
-    rpc: undefined,
+    link: undefined as unknown as HttpLink,
+    client,
     state: "disconnected",
     correlation: new CorrelationStore(),
     seen: new SeenIds(),
@@ -146,21 +144,18 @@ async function startAdapter(
     aliveAgents: 0,
     registered: false,
   };
-  const url = await amqpUrl(pi);
-  runtime.link = new BrokerLink({
-    url,
-    connectFn: connect as unknown as ConstructorParameters<typeof BrokerLink>[0]["connectFn"],
+  runtime.link = new HttpLink({
     retryBaseMs: 500,
-    retryMaxMs: 15000,
-    onReady: async (channel) => {
-      await onChannelReady(pi, runtime, channel as Channel, options);
+    retryMaxMs: 15_000,
+    onReady: async (signal) => {
+      await onHttpReady(runtime, options, signal);
+    },
+    poll: async (signal) => {
+      await pollForDelivery(pi, runtime, options, signal);
     },
     onStateChange: (state, detail) => {
       runtime.state = state;
       if (state === "disconnected") {
-        runtime.channel = undefined;
-        runtime.rpc?.failAll("broker disconnected");
-        runtime.rpc = undefined;
         runtime.registered = false;
         void options.audit("adapter_disconnect", { detail: detail ?? "" });
       }
@@ -172,68 +167,51 @@ async function startAdapter(
   return runtime;
 }
 
-async function onChannelReady(
-  pi: ExtensionAPI,
-  runtime: AdapterRuntime,
-  channel: Channel,
-  options: StartOptions
-): Promise<void> {
-  runtime.channel = channel;
-  const rpc = new CoreRpcClient(channel);
-  await rpc.init();
-  runtime.rpc = rpc;
-  const response = await rpc.call({
-    op: "register",
-    protocol_version: PROTOCOL_VERSION,
-    card: runtime.card,
-  });
+async function onHttpReady(runtime: AdapterRuntime, options: StartOptions, signal: AbortSignal): Promise<void> {
+  const response = await runtime.client.call(
+    {
+      op: "register",
+      protocol_version: PROTOCOL_VERSION,
+      card: runtime.card,
+    },
+    signal
+  );
   if (response.ok !== true) {
     const detail = `register rejected: ${String(response.error ?? "unknown")}`;
     runtime.ui.notify(`Onclave v2 ${detail}`, "error");
     throw new Error(detail);
   }
   runtime.registered = true;
-  await options.audit("adapter_register", {
-    agent_id: runtime.card.agent_id,
-    queue: runtime.queue,
-  });
-  await channel.consume(runtime.queue, (message) => {
-    if (message === null) return;
-    void consumeMessage(pi, runtime, channel, message, options);
-  });
+  await options.audit("adapter_register", { agent_id: runtime.card.agent_id });
   await options.audit("adapter_connect", { agent_id: runtime.card.agent_id });
-  refreshFooterStatus(runtime);
 }
 
-async function consumeMessage(
+async function pollForDelivery(
   pi: ExtensionAPI,
   runtime: AdapterRuntime,
-  channel: Channel,
-  message: Parameters<Parameters<Channel["consume"]>[1]>[0] & object,
+  options: StartOptions,
+  signal: AbortSignal
+): Promise<void> {
+  const delivery = await runtime.client.next(runtime.card.agent_id, LONG_POLL_WAIT_MS, signal);
+  if (delivery === undefined) return;
+  await consumeDelivery(pi, runtime, delivery, options);
+}
+
+async function consumeDelivery(
+  pi: ExtensionAPI,
+  runtime: AdapterRuntime,
+  delivery: Delivery,
   options: StartOptions
 ): Promise<void> {
-  try {
-    const deps = buildDeliveryDeps(pi, runtime, channel, options);
-    const decision = await handleInboundMessage(deps, message);
-    if (decision === "ack") {
-      channel.ack(message);
-    } else {
-      channel.reject(message, false);
-    }
-  } catch (error) {
-    await options
-      .audit("message_rejected", {
-        detail: error instanceof Error ? error.message : String(error),
-      })
-      .catch(() => undefined);
-    channel.reject(message, false);
-  }
+  const deps = buildDeliveryDeps(pi, runtime, options);
+  await handleInboundHttpDelivery(deps, delivery.envelope, delivery.deliveryId, (decision) =>
+    runtime.client.dispose(delivery.deliveryId, decision)
+  );
 }
 
 function buildDeliveryDeps(
   pi: ExtensionAPI,
   runtime: AdapterRuntime,
-  channel: Channel,
   options: StartOptions
 ): DeliveryDeps {
   return {
@@ -250,8 +228,7 @@ function buildDeliveryDeps(
           `requests a turn in this session. Allow it to run?`
       ),
     recordExchange: async (envelope) => {
-      const rpc = requireRpc(runtime);
-      const response = await rpc.call({
+      const response = await requireClient(runtime).call({
         op: "record_exchange",
         conversation_id: envelope.conversation_id,
         message_id: envelope.id,
@@ -296,16 +273,23 @@ function buildDeliveryDeps(
         { triggerTurn: false }
       );
     },
-    publishFailureReply: (envelope, reason) => {
+    publishFailureReply: async (envelope, reason) => {
       const failure = buildFailureReply({
         original: envelope,
         from: cardOrigin(runtime.card),
         body: `request declined: ${reason}`,
       });
-      publishEnvelope(channel, failure);
+      await publishEnvelope(requireClient(runtime), failure);
     },
-    publishNotUnderstood: (replyTo, error) => {
-      publishNotUnderstoodTo(channel, runtime.card, replyTo, error);
+    publishNotUnderstood: async (replyTo, error) => {
+      const target = replyTo.startsWith("agent.") ? replyTo.slice("agent.".length) : replyTo;
+      const reply = createEnvelope({
+        performative: "not_understood",
+        from: cardOrigin(runtime.card),
+        to: target,
+        body: `message rejected: ${error}`,
+      });
+      await publishEnvelope(requireClient(runtime), reply);
     },
     registerInbound: (envelope) => runtime.correlation.registerInbound(envelope),
     acceptReply: (envelope) => runtime.correlation.acceptReply(envelope),
@@ -348,26 +332,8 @@ async function verifyInboundDelegation(
   return result.ok ? result : { ok: false, reason: result.error };
 }
 
-function publishEnvelope(channel: Channel, envelope: Envelope): void {
-  const spec = toAmqpPublish(envelope);
-  channel.publish(EXCHANGE_AGENTS, spec.routingKey, spec.content, spec.options);
-}
-
-function publishNotUnderstoodTo(
-  channel: Channel,
-  card: AgentCard,
-  replyTo: string,
-  error: string
-): void {
-  const target = replyTo.startsWith("agent.") ? replyTo.slice("agent.".length) : replyTo;
-  const reply = createEnvelope({
-    performative: "not_understood",
-    from: cardOrigin(card),
-    to: target,
-    body: `message rejected: ${error}`,
-  });
-  const spec = toAmqpPublish(reply);
-  channel.sendToQueue(replyTo, spec.content, spec.options);
+async function publishEnvelope(client: OnclaveHttpClient, envelope: Envelope): Promise<void> {
+  await client.publish(envelope);
 }
 
 function cardOrigin(card: AgentCard): AgentOrigin {
@@ -392,9 +358,8 @@ async function submitRunReply(
     }
     return;
   }
-  const channel = runtime.channel;
-  if (channel === undefined) {
-    await audit("correlation_miss", { message_id: inbound.id, detail: "broker disconnected" });
+  if (!runtime.registered || runtime.state !== "connected") {
+    await audit("correlation_miss", { message_id: inbound.id, detail: "HTTPS transport disconnected" });
     return;
   }
   const reply = buildInformReply({
@@ -403,7 +368,7 @@ async function submitRunReply(
     body: lastAssistantText(messages),
     usage: runUsage(messages),
   });
-  publishEnvelope(channel, reply);
+  await publishEnvelope(runtime.client, reply);
   runtime.correlation.completeInbound(inbound.id);
   await audit("reply_published", {
     message_id: reply.id,
@@ -413,9 +378,9 @@ async function submitRunReply(
 }
 
 async function heartbeatTick(runtime: AdapterRuntime | null): Promise<void> {
-  if (runtime === null || runtime.rpc === undefined || !runtime.registered) return;
-  await runtime.rpc.call({ op: "heartbeat", agent_id: runtime.card.agent_id });
-  const list = await runtime.rpc.call({ op: "list_agents" });
+  if (runtime === null || !runtime.registered || runtime.state !== "connected") return;
+  await runtime.client.call({ op: "heartbeat", agent_id: runtime.card.agent_id });
+  const list = await runtime.client.call({ op: "list_agents" });
   if (list.ok === true && Array.isArray(list.agents)) {
     runtime.aliveAgents = (list.agents as Array<{ alive?: unknown }>).filter(
       (agent) => agent.alive === true
@@ -429,12 +394,12 @@ async function shutdownAdapter(
   audit: (event: AdapterAuditEventName, metadata?: AdapterAuditMetadata) => Promise<void>
 ): Promise<void> {
   try {
-    if (runtime.rpc !== undefined && runtime.registered) {
-      await runtime.rpc.call({ op: "unregister", agent_id: runtime.card.agent_id });
+    if (runtime.registered && runtime.state === "connected") {
+      await runtime.client.call({ op: "unregister", agent_id: runtime.card.agent_id });
       await audit("adapter_unregister", { agent_id: runtime.card.agent_id });
     }
   } catch {
-    // broker may already be gone; shutdown continues
+    // The HTTPS transport may already be unavailable; shutdown continues.
   }
   await runtime.link.stop();
   runtime.ui.setStatus?.(FOOTER_STATUS_KEY, undefined);
@@ -457,7 +422,6 @@ function statusText(runtime: AdapterRuntime | null): string {
   return (
     `state: ${runtime.state}\n` +
     `agent_id: ${runtime.card.agent_id}\n` +
-    `queue: ${runtime.queue}\n` +
     `registered: ${runtime.registered}\n` +
     `peers alive: ${runtime.aliveAgents}`
   );
@@ -473,7 +437,7 @@ async function buildAgentCard(pi: ExtensionAPI, ctx: ExtensionContext): Promise<
     name: pi.getSessionName?.() ?? agentId,
     host,
     project,
-    transport: "amqp",
+    transport: "https",
   };
   const model = ctx.model?.id;
   if (typeof model === "string" && model.length > 0) card.model = model;
@@ -486,32 +450,16 @@ function sanitizeAgentId(value: string): string {
   return cleaned.slice(0, 64) || "onclave-agent";
 }
 
-type BrokerUrlLoader = () => Promise<string | undefined>;
-
-export async function resolveAmqpUrl(
-  explicitUrl: string | undefined,
-  loader: BrokerUrlLoader = loadBrokerUrlFromBws
-): Promise<string> {
-  if (explicitUrl) return explicitUrl;
-  const brokerUrl = await loader();
-  if (brokerUrl === undefined) {
-    throw new Error("Onclave BWS bootstrap is missing BITWARDEN_ACCESS_KEY");
-  }
-  return brokerUrl;
-}
-
-async function amqpUrl(pi: ExtensionAPI): Promise<string> {
-  return resolveAmqpUrl(readStringFlag(pi, "onclave-url") ?? process.env.ONCLAVE_AMQP_URL);
-}
-
 function readStringFlag(pi: ExtensionAPI, name: string): string | undefined {
   const value = pi.getFlag(name);
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function requireRpc(runtime: AdapterRuntime): CoreRpcClient {
-  if (runtime.rpc === undefined) throw new Error("onclave core rpc is unavailable");
-  return runtime.rpc;
+function requireClient(runtime: AdapterRuntime): OnclaveHttpClient {
+  if (!runtime.registered || runtime.state !== "connected") {
+    throw new Error("onclave HTTPS transport is disconnected");
+  }
+  return runtime.client;
 }
 
 type RuntimeGetter = () => AdapterRuntime | null;
@@ -520,11 +468,6 @@ function requireRuntime(getRuntime: RuntimeGetter): AdapterRuntime {
   const runtime = getRuntime();
   if (runtime === null) throw new Error("onclave v2 adapter is not initialized");
   return runtime;
-}
-
-function requireChannel(runtime: AdapterRuntime): Channel {
-  if (runtime.channel === undefined) throw new Error("onclave broker is disconnected");
-  return runtime.channel;
 }
 
 function textResult(text: string, details: Record<string, unknown>) {
@@ -552,7 +495,7 @@ function registerListTool(pi: ExtensionAPI, getRuntime: RuntimeGetter): void {
     parameters: Type.Object({}),
     async execute() {
       const runtime = requireRuntime(getRuntime);
-      const response = await requireRpc(runtime).call({ op: "list_agents" });
+      const response = await requireClient(runtime).call({ op: "list_agents" });
       if (response.ok !== true) throw new Error(`list_agents failed: ${String(response.error)}`);
       const agents = response.agents as Array<Record<string, unknown>>;
       const lines = agents.map(
@@ -584,7 +527,6 @@ function registerSendTool(pi: ExtensionAPI, getRuntime: RuntimeGetter): void {
     }),
     async execute(_callId, params) {
       const runtime = requireRuntime(getRuntime);
-      const channel = requireChannel(runtime);
       const envelope = createEnvelope({
         performative: params.performative ?? "request",
         from: cardOrigin(runtime.card),
@@ -594,7 +536,7 @@ function registerSendTool(pi: ExtensionAPI, getRuntime: RuntimeGetter): void {
         ttlMs: params.ttl_ms,
       });
       runtime.correlation.registerOutbound(envelope);
-      publishEnvelope(channel, envelope);
+      await publishEnvelope(requireClient(runtime), envelope);
       return textResult(
         `onclave_send -> ${params.to}\nmsg_id ${envelope.id}\nconversation_id ${envelope.conversation_id}`,
         {
@@ -677,7 +619,7 @@ async function publishDelegation(
     delegation: grant,
   });
   runtime.correlation.registerOutbound(envelope);
-  publishEnvelope(requireChannel(runtime), envelope);
+  await publishEnvelope(requireClient(runtime), envelope);
   await audit("delegation_issued", {
     message_id: envelope.id,
     grant_id: grant.grant_id,
@@ -704,7 +646,7 @@ async function resolveDelegationTarget(
   runtime: AdapterRuntime,
   agentId: string
 ): Promise<DelegationTarget> {
-  const response = await requireRpc(runtime).call({ op: "list_agents" });
+  const response = await requireClient(runtime).call({ op: "list_agents" });
   if (response.ok !== true || !Array.isArray(response.agents)) {
     throw new Error(`list_agents failed: ${String(response.error ?? "invalid response")}`);
   }
@@ -724,42 +666,84 @@ function registerInformTool(
   pi.registerTool({
     name: "onclave_inform",
     label: "Onclave Inform",
-    description:
-      "Send an inert inform notification to one agent, or broadcast to the events exchange when no target is given. Informs never trigger turns.",
+    description: "Send an inert inform notification to one agent or all alive peers. Informs never trigger turns.",
     parameters: Type.Object({
       body: Type.String({ description: "Notification body.", maxLength: MAX_MESSAGE_LENGTH }),
-      to: Type.Optional(Type.String({ description: "Target agent id; omit to broadcast." })),
+      to: Type.Optional(
+        Type.String({ description: "Target agent id. Omit to inform all alive peers." })
+      ),
       conversation_id: Type.Optional(
         Type.String({ description: "Attach to an existing conversation." })
       ),
     }),
     async execute(_callId, params) {
       const runtime = requireRuntime(getRuntime);
-      const channel = requireChannel(runtime);
-      const envelope = createEnvelope({
-        performative: "inform",
-        from: cardOrigin(runtime.card),
-        to: params.to ?? "*",
-        body: params.body,
-        conversationId: params.conversation_id,
-      });
-      const spec = toAmqpPublish(envelope);
       if (params.to !== undefined) {
-        channel.publish(EXCHANGE_AGENTS, params.to, spec.content, spec.options);
-      } else {
-        const topic = `inform.${runtime.card.project ?? "default"}.${runtime.card.agent_id}`;
-        channel.publish(EXCHANGE_EVENTS, topic, spec.content, spec.options);
+        const envelope = createEnvelope({
+          performative: "inform",
+          from: cardOrigin(runtime.card),
+          to: params.to,
+          body: params.body,
+          conversationId: params.conversation_id,
+        });
+        await publishEnvelope(requireClient(runtime), envelope);
+        await audit("inform_published", {
+          message_id: envelope.id,
+          to: params.to,
+        });
+        return textResult(`onclave_inform sent\nmsg_id ${envelope.id}`, {
+          msg_id: envelope.id,
+          to: params.to,
+        });
       }
-      await audit("inform_published", {
-        message_id: envelope.id,
-        to: params.to ?? "broadcast",
-      });
-      return textResult(`onclave_inform sent\nmsg_id ${envelope.id}`, {
-        msg_id: envelope.id,
-        to: params.to ?? "broadcast",
+
+      const client = requireClient(runtime);
+      const response = await client.call({ op: "list_agents" });
+      const recipients = alivePeerAgentIds(response, runtime.card.agent_id);
+      const messages = recipients.map((to) =>
+        createEnvelope({
+          performative: "inform",
+          from: cardOrigin(runtime.card),
+          to,
+          body: params.body,
+          conversationId: params.conversation_id,
+        })
+      );
+      for (const envelope of messages) {
+        await publishEnvelope(client, envelope);
+        await audit("inform_published", {
+          message_id: envelope.id,
+          to: envelope.to,
+        });
+      }
+      return textResult(`onclave_inform broadcast\nrecipients ${recipients.length}`, {
+        recipient_count: recipients.length,
+        recipients,
+        msg_ids: messages.map((message) => message.id),
       });
     },
   });
+}
+
+function alivePeerAgentIds(response: Record<string, unknown>, localAgentId: string): string[] {
+  if (response.ok !== true || !Array.isArray(response.agents)) {
+    throw new Error(`list_agents failed: ${String(response.error ?? "invalid response")}`);
+  }
+  const recipients = new Set<string>();
+  for (const agent of response.agents) {
+    if (agent === null || typeof agent !== "object" || Array.isArray(agent)) continue;
+    const { agent_id: agentId, alive } = agent as Record<string, unknown>;
+    if (
+      typeof agentId === "string" &&
+      agentId.length > 0 &&
+      agentId !== localAgentId &&
+      agentId !== "*" &&
+      alive === true
+    ) {
+      recipients.add(agentId);
+    }
+  }
+  return [...recipients];
 }
 
 function formatReply(reply: Envelope | undefined, msgId: string): string {

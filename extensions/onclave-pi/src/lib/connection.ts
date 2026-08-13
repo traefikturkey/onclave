@@ -1,44 +1,31 @@
-// Reconnect state machine for the adapter's broker link. The connect function
-// is injected so the machine is unit-testable without a broker.
+// Reconnect state machine for the adapter's HTTPS transport. Registration and
+// long polling are injected so the machine is unit-testable without an API.
 
 export type ConnectionState = "disconnected" | "connecting" | "connected" | "closed";
 
-export type ChannelLike = {
-  close?: () => Promise<void>;
-};
-
-export type ConnectionLike = {
-  createChannel: () => Promise<unknown>;
-  on: (event: string, handler: (...args: unknown[]) => void) => void;
-  close: () => Promise<void>;
-};
-
-export type ConnectFn = (url: string) => Promise<ConnectionLike>;
-
-export type BrokerLinkOptions = {
-  url: string;
-  connectFn: ConnectFn;
+export type HttpLinkOptions = {
   retryBaseMs: number;
   retryMaxMs: number;
-  onReady: (channel: unknown) => Promise<void>;
+  onReady: (signal: AbortSignal) => Promise<void>;
+  poll: (signal: AbortSignal) => Promise<void>;
   onStateChange?: (state: ConnectionState, detail?: string) => void;
 };
 
-export class BrokerLink {
+export class HttpLink {
   private state: ConnectionState = "disconnected";
-  private connection: ConnectionLike | undefined;
   private attempt = 0;
   private retryTimer: NodeJS.Timeout | undefined;
+  private operationAbort: AbortController | undefined;
+  private activeOperation: Promise<void> | undefined;
 
-  constructor(private readonly options: BrokerLinkOptions) {}
+  constructor(private readonly options: HttpLinkOptions) {}
 
   getState(): ConnectionState {
     return this.state;
   }
 
   start(): void {
-    if (this.state === "closed") return;
-    void this.establish();
+    this.beginEstablish();
   }
 
   async stop(): Promise<void> {
@@ -47,11 +34,23 @@ export class BrokerLink {
       clearTimeout(this.retryTimer);
       this.retryTimer = undefined;
     }
-    const connection = this.connection;
-    this.connection = undefined;
-    if (connection !== undefined) {
-      await connection.close().catch(() => undefined);
-    }
+    this.operationAbort?.abort();
+    const activeOperation = this.activeOperation;
+    if (activeOperation !== undefined) await activeOperation;
+  }
+
+  private beginEstablish(): void {
+    if (this.getState() === "closed" || this.activeOperation !== undefined) return;
+    const operation = Promise.resolve().then(() => this.establish());
+    this.activeOperation = operation;
+    void operation.then(
+      () => this.clearActiveOperation(operation),
+      () => this.clearActiveOperation(operation)
+    );
+  }
+
+  private clearActiveOperation(operation: Promise<void>): void {
+    if (this.activeOperation === operation) this.activeOperation = undefined;
   }
 
   private setState(state: ConnectionState, detail?: string): void {
@@ -66,33 +65,31 @@ export class BrokerLink {
     this.attempt += 1;
     this.setState("disconnected", detail);
     this.retryTimer = setTimeout(() => {
-      void this.establish();
+      this.retryTimer = undefined;
+      this.beginEstablish();
     }, delay);
     this.retryTimer.unref?.();
   }
 
   private async establish(): Promise<void> {
-    if (this.state === "closed") return;
+    if (this.getState() === "closed") return;
     this.setState("connecting");
+    const operationAbort = new AbortController();
+    this.operationAbort = operationAbort;
     try {
-      const connection = await this.options.connectFn(this.options.url);
-      if ((this.state as ConnectionState) === "closed") {
-        await connection.close().catch(() => undefined);
-        return;
-      }
-      this.connection = connection;
-      connection.on("error", () => undefined);
-      connection.on("close", () => {
-        this.connection = undefined;
-        this.scheduleReconnect("connection_closed");
-      });
-      const channel = await connection.createChannel();
-      await this.options.onReady(channel);
+      await this.options.onReady(operationAbort.signal);
+      if (this.getState() === "closed" || operationAbort.signal.aborted) return;
       this.attempt = 0;
       this.setState("connected");
+      while (this.getState() === "connected" && !operationAbort.signal.aborted) {
+        await this.options.poll(operationAbort.signal);
+      }
     } catch (error) {
-      this.connection = undefined;
-      this.scheduleReconnect(error instanceof Error ? error.message : String(error));
+      if (this.getState() !== "closed" && !operationAbort.signal.aborted) {
+        this.scheduleReconnect(error instanceof Error ? error.message : String(error));
+      }
+    } finally {
+      if (this.operationAbort === operationAbort) this.operationAbort = undefined;
     }
   }
 }

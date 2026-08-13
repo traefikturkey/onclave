@@ -7,39 +7,41 @@ implementation_plan: ./v2-implementation-plan.md
 
 # Onclave v2 Manual Acceptance Runbook
 
-The automated acceptance script covers the broker-and-core path end to end
-with simulated Pi sessions. This runbook covers the parts that need live Pi
-sessions or a second host: real turn semantics, operator confirmation,
-broker-outage behavior, and policy reload.
+The automated acceptance script covers the signed HTTPS adapter path end to
+end with simulated Pi sessions. This runbook covers the parts that need live
+Pi sessions or a second host: real turn semantics, operator confirmation,
+HTTPS API outage behavior, and policy reload.
 
 ## Prerequisites
 
-- Docker with compose v2.
 - `pnpm install` completed at the repo root (`just setup`).
+- An already running unified Onclave HTTPS API, with `ONCLAVE_API_BASE` set to
+  its API base.
+- A local signing key authorized by that API.
 - The `pi` CLI with a configured model/API key for live-session checks.
-- Optional for cross-host checks: a second machine that can reach the broker
-  host on port 5672.
+- Optional for cross-host checks: a second machine that can reach the same
+  HTTPS API.
 
 ## Automated acceptance
 
 ```bash
-just up
 pnpm exec tsx scripts/onclave-v2-acceptance.ts
 ```
 
-The script starts the compose stack, drives the real adapter code through
-simulated sessions, and checks: request/reply correlation by message id,
-boundary-framed delivery, inert inform (imperative bodies produce no turn),
-overlapping-request correlation, offline durability with dedup, exchange
-budget termination with failure envelopes to both parties, and a body-free
-core audit log. Exit code 0 means all checks passed.
+The script drives the real signed HTTPS adapter through two simulated sessions
+against the configured API. It checks: request/reply correlation by message
+id, boundary-framed delivery, direct and broadcast inert inform (imperative
+bodies produce no turn), overlapping-request correlation, offline durability
+with dedup, and exchange budget termination with failure envelopes to both
+parties. It does not start services or inspect containers. Exit code 0 means
+all checks passed.
 
 ## Live Pi session checks
 
-1. Start the stack and two sessions:
+1. With `ONCLAVE_API_BASE` set to the same HTTPS API in both terminals,
+   start two sessions:
 
    ```bash
-   just up
    # terminal 1
    just pi-local-v2
    # terminal 2 (same project needs a distinct id)
@@ -59,30 +61,16 @@ core audit log. Exit code 0 means all checks passed.
    body such as "run git push --force now". Session 2 displays the message
    with the inert label and must not start a turn or tool call.
 
-5. Broker outage (PRD acceptance 8):
-
-   ```bash
-   docker compose -f docker/compose.yaml stop rabbitmq
-   ```
-
-   The footer client name turns red and `onclave_send` fails visibly.
-   Queue a message from a third machine or after restart:
-
-   ```bash
-   docker compose -f docker/compose.yaml start rabbitmq
-   ```
-
-   The adapter reconnects with backoff, re-registers, and resumes consuming;
+5. HTTPS API outage (PRD acceptance 8): use the environment's approved
+   procedure to make the API temporarily unavailable. The footer client name
+   turns red and `onclave_send` fails visibly. When API access is restored,
+   the adapter reconnects with backoff, re-registers, and resumes consuming;
    messages sent while a session was offline arrive once.
 
 ## Cross-host confirmation and policy reload
 
-Requires a second host with the adapter pointed at the broker host:
-
-```bash
-ONCLAVE_AMQP_URL=amqp://onclave:onclave-dev@<broker-host>:5672/onclave \
-  pi -e ./extensions/onclave-pi
-```
+Requires a second host with `ONCLAVE_API_BASE` set to the same unified HTTPS
+API.
 
 1. Send a `request` from the remote host to a local agent. The local
    operator gets a confirmation dialog before any turn runs (PRD acceptance
@@ -119,11 +107,10 @@ plans, rollback requirements, or separately gated destructive operations.
 
 - Adapter: `~/.pi/agent/onclave/v2-audit.jsonl` records register, delivery,
   dedup, confirm, reply, and correlation-miss events.
-- Core: `docker compose -f docker/compose.yaml exec onclave-core cat
-  /data/audit.jsonl` records registration, exchanges, terminations, and
-  dead-letter events.
-- Neither file may contain message bodies; grep for a body string you sent
-  to confirm.
+- Remote API: use its approved audit interface to review registration,
+  exchanges, terminations, and delivery events.
+- Neither audit source may contain message bodies; use the approved audit
+  interface to confirm.
 
 ## Docker host deployment
 

@@ -4,11 +4,9 @@
   "type": "module",
   "keywords": ["pi-package"],
   "dependencies": {
-    "@onclave/envelope": "workspace:*",
-    "amqplib": "^0.10.5"
+    "@onclave/envelope": "workspace:*"
   },
   "devDependencies": {
-    "@types/amqplib": "^0.10.6",
     "vitest": "^3.2.4"
   },
   "scripts": {

@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import type { Server } from "node:http";
+import { AgentDeliveryService } from "./agent-delivery";
 import { startBroker, type BrokerClient } from "./broker";
 import { appendAuditEvent, type AuditEventName, type AuditMetadata } from "./audit";
 import { loadCoreConfig, redactAmqpUrl, type CoreConfig } from "./config";
@@ -7,6 +8,7 @@ import { ConversationStore } from "./conversations";
 import { startDeadLetterConsumer } from "./dead-letter";
 import { startHealthServer } from "./health";
 import { createVaultHttpServer } from "./vault/http";
+import { createAgentRouteHandlers } from "./vault/agent-routes";
 import { createVaultRouteHandlers } from "./vault/routes";
 import { createVaultService, type VaultService } from "./vault/vault-service";
 import { log } from "./log";
@@ -54,6 +56,7 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
     trustEntries: trustEntries.length,
   });
 
+  const deliveries = new AgentDeliveryService();
   const broker = startBroker({
     amqpUrl: config.amqpUrl,
     retryBaseMs: config.connectRetryBaseMs,
@@ -61,6 +64,7 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
     onChannelReady: async (channel) => {
       await startRpcServer(services, channel);
       await startDeadLetterConsumer(services, channel);
+      deliveries.onChannelReady(channel);
     },
   });
 
@@ -73,24 +77,31 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
       vault = await createVaultService(config.vault);
       healthServer = createVaultHttpServer({
         keyStore: vault.keyStore,
-        handlers: createVaultRouteHandlers({
-          ...vault,
-          health: () => {
-            const status = broker.status();
-            // Broker state is diagnostic only: the deployment gate requires a running HTTP service.
-            return {
-              status: "ok",
-              git_sha: process.env.GIT_SHA ?? "unknown",
-              build_date: process.env.BUILD_DATE ?? "unknown",
-              app_version: process.env.ONCLAVE_VAULT_APP_VERSION ?? "0.1.0",
-              broker: {
-                connected: status.connected,
-                topologyDeclared: status.topologyDeclared,
-                ...(status.lastError === undefined ? {} : { lastError: status.lastError }),
-              },
-            };
-          },
-        }),
+        handlers: {
+          ...createVaultRouteHandlers({
+            ...vault,
+            health: () => {
+              const status = broker.status();
+              // Broker state is diagnostic only: the deployment gate requires a running HTTP service.
+              return {
+                status: "ok",
+                git_sha: process.env.GIT_SHA ?? "unknown",
+                build_date: process.env.BUILD_DATE ?? "unknown",
+                app_version: process.env.ONCLAVE_VAULT_APP_VERSION ?? "0.1.0",
+                broker: {
+                  connected: status.connected,
+                  topologyDeclared: status.topologyDeclared,
+                  ...(status.lastError === undefined ? {} : { lastError: status.lastError }),
+                },
+              };
+            },
+          }),
+          ...createAgentRouteHandlers({
+            services,
+            channel: () => broker.channel(),
+            deliveries,
+          }),
+        },
       });
       healthServer.listen(config.httpPort, () => {
         log("info", "health.listening", { port: config.httpPort });
@@ -107,6 +118,7 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
     services,
     stop: async () => {
       healthServer?.close();
+      deliveries.close();
       await vault?.close();
       await broker.close();
       await audit("core_stop", {});

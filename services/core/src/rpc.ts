@@ -43,7 +43,8 @@ export function publishEnvelope(channel: Channel, envelope: Envelope): void {
 async function handleRegister(
   services: CoreServices,
   channel: Channel,
-  request: Extract<RpcRequest, { op: "register" }>
+  request: Extract<RpcRequest, { op: "register" }>,
+  keyId?: string,
 ): Promise<object> {
   if (request.protocol_version !== PROTOCOL_VERSION) {
     await services.audit("agent_register_rejected", {
@@ -64,7 +65,7 @@ async function handleRegister(
     arguments: agentQueueArguments(services.config),
   });
   await channel.bindQueue(queue, EXCHANGE_AGENTS, request.card.agent_id);
-  const agent = await services.registry.register(request.card);
+  const agent = await services.registry.register(request.card, keyId);
   await services.audit("agent_register", {
     agent_id: agent.agent_id,
     host: agent.host,
@@ -160,11 +161,12 @@ async function handleSimpleOps(services: CoreServices, request: SimpleRpcRequest
 export async function handleRpcRequest(
   services: CoreServices,
   channel: Channel,
-  request: RpcRequest
+  request: RpcRequest,
+  keyId?: string,
 ): Promise<object> {
   switch (request.op) {
     case "register":
-      return handleRegister(services, channel, request);
+      return handleRegister(services, channel, request, keyId);
     case "record_exchange":
       return handleRecordExchange(services, channel, request);
     default:

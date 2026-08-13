@@ -10,7 +10,12 @@ import {
   type Performative,
 } from "@onclave/envelope";
 import { SeenIds } from "../src/lib/dedup";
-import { handleInboundMessage, type DeliveryDeps } from "../src/lib/delivery";
+import {
+  handleInboundEnvelope,
+  handleInboundHttpDelivery,
+  handleInboundMessage,
+  type DeliveryDeps,
+} from "../src/lib/delivery";
 
 const localSender: AgentOrigin = { agent_id: "peer-local", name: "Peer", host: "local-host" };
 const remoteSender: AgentOrigin = { agent_id: "peer-remote", name: "Remote", host: "other-host" };
@@ -78,6 +83,45 @@ describe("handleInboundMessage", () => {
     expect(deps.deliverTurn).toHaveBeenCalledOnce();
     expect(deps.confirmRemote).not.toHaveBeenCalled();
     expect(deps.deliverInert).not.toHaveBeenCalled();
+  });
+
+  it("applies the same delivery decision to a validated HTTPS envelope", async () => {
+    const deps = makeDeps();
+    const envelope = envelopeFrom(localSender, "request", "do the thing");
+    await expect(handleInboundEnvelope(deps, envelope)).resolves.toBe("ack");
+    expect(deps.recordExchange).toHaveBeenCalledOnce();
+    expect(deps.deliverTurn).toHaveBeenCalledOnce();
+  });
+
+  it("uses reject only when the inbound handler fails", async () => {
+    const dispose = vi.fn(async () => undefined);
+    const deps = makeDeps({ recordExchange: vi.fn(async () => Promise.reject(new Error("budget unavailable"))) });
+    const envelope = envelopeFrom(localSender, "request", "do the thing");
+
+    await expect(handleInboundHttpDelivery(deps, envelope, "delivery-1", dispose)).resolves.toBeUndefined();
+    expect(dispose).toHaveBeenCalledWith("reject");
+    expect(deps.audit).toHaveBeenCalledWith(
+      "message_rejected",
+      expect.objectContaining({ message_id: envelope.id, detail: "budget unavailable" })
+    );
+  });
+
+  it("does not replace a failed acknowledgement with reject", async () => {
+    const dispose = vi.fn(async (decision: "ack" | "reject") => {
+      if (decision === "ack") throw new Error("ack transport unavailable");
+    });
+    const deps = makeDeps();
+    const envelope = envelopeFrom(localSender, "request", "do the thing");
+
+    await expect(handleInboundHttpDelivery(deps, envelope, "delivery-1", dispose)).rejects.toThrow(
+      "ack transport unavailable"
+    );
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(dispose).toHaveBeenCalledWith("ack");
+    expect(deps.audit).toHaveBeenCalledWith(
+      "message_disposition_failed",
+      expect.objectContaining({ delivery_id: "delivery-1", disposition: "ack", message_id: envelope.id })
+    );
   });
 
   it.each(["inform", "failure", "not_understood"] as const)(

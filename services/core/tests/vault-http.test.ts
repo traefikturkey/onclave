@@ -161,6 +161,19 @@ describe("vault HTTP router", () => {
     await expect(response.json()).resolves.toEqual({ detail: "Missing signature headers" });
   });
 
+  it("rejects stale signed requests", async () => {
+    const path = "/api/v1/content/example";
+    const headers = signRequest(key, "GET", path, new URL(baseUrl).host);
+    headers["signature-input"] = headers["signature-input"].replace(
+      /created=\d+/,
+      `created=${Math.floor(Date.now() / 1000) - 301}`,
+    );
+    const response = await fetch(`${baseUrl}${path}`, { headers });
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({ detail: "Signature expired or from future" });
+  });
+
   it("rejects a body changed after it was signed", async () => {
     const path = "/api/v1/search";
     const originalBody = Buffer.from('{"query":"trusted"}', "utf8");
@@ -175,7 +188,7 @@ describe("vault HTTP router", () => {
     });
 
     expect(response.status).toBe(401);
-    await expect(response.json()).resolves.toEqual({ detail: "Invalid signature" });
+    await expect(response.json()).resolves.toEqual({ detail: "Invalid content-digest header" });
   });
 
   it("returns FastAPI-compatible JSON for unknown routes", async () => {
