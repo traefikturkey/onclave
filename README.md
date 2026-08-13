@@ -46,13 +46,8 @@ adapter reaches parity.
 just setup
 just check                                     # typecheck + unit tests
 just test-integration                          # broker-backed integration suite
-pnpm exec tsx scripts/onclave-v2-acceptance.ts # end-to-end acceptance
 just pi-local-v2                               # Pi session with the v2 adapter
 ```
-
-Set `ONCLAVE_API_BASE` to an already running unified Onclave HTTPS API before
-running the acceptance script. It uses the local signing key authorized by that
-API and does not start local services.
 
 Broker credentials for local development default to the values in
 `docker/.env.example`; copy it to `docker/.env` (gitignored) to override.
@@ -63,9 +58,8 @@ operator-owned broker accept valid grants without an additional Onclave prompt
 or per-sender allowlist. Repository safety rules and separately gated
 operations still apply.
 See [v2 PRD](./docs/extensions/onclave-comms/v2-PRD.md),
-[v2 implementation plan](./docs/extensions/onclave-comms/v2-implementation-plan.md),
-[v2 status](./docs/extensions/onclave-comms/v2-status.md), and the
-[v2 manual acceptance runbook](./docs/extensions/onclave-comms/v2-manual-acceptance.md).
+[v2 implementation plan](./docs/extensions/onclave-comms/v2-implementation-plan.md), and
+[v2 status](./docs/extensions/onclave-comms/v2-status.md).
 
 ## Development Prerequisites
 

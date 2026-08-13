@@ -58,7 +58,7 @@ type AdapterRuntime = {
 
 export default function onclavePi(pi: ExtensionAPI): void {
   pi.registerFlag("onclave-id", {
-    description: "Override the Onclave v2 agent id (default host-project)",
+    description: "Override the Onclave v2 agent id (default host-project-session)",
     type: "string",
     default: undefined,
   });
@@ -201,6 +201,7 @@ async function onHttpReady(runtime: AdapterRuntime, options: StartOptions, signa
     throw new Error(detail);
   }
   runtime.registered = true;
+  await updateAlivePeers(runtime);
   await options.audit("adapter_register", { agent_id: runtime.card.agent_id });
   await options.audit("adapter_connect", { agent_id: runtime.card.agent_id });
 }
@@ -399,10 +400,14 @@ async function submitRunReply(
 async function heartbeatTick(runtime: AdapterRuntime | null): Promise<void> {
   if (runtime === null || !runtime.registered || runtime.state !== "connected") return;
   await runtime.client.call({ op: "heartbeat", agent_id: runtime.card.agent_id });
+  await updateAlivePeers(runtime);
+}
+
+async function updateAlivePeers(runtime: AdapterRuntime): Promise<void> {
   const list = await runtime.client.call({ op: "list_agents" });
   if (list.ok === true && Array.isArray(list.agents)) {
-    runtime.aliveAgents = (list.agents as Array<{ alive?: unknown }>).filter(
-      (agent) => agent.alive === true
+    runtime.aliveAgents = (list.agents as Array<{ agent_id?: unknown; alive?: unknown }>).filter(
+      (agent) => agent.alive === true && agent.agent_id !== runtime.card.agent_id
     ).length;
   }
   refreshFooterStatus(runtime);
@@ -450,7 +455,9 @@ async function buildAgentCard(pi: ExtensionAPI, ctx: ExtensionContext): Promise<
   const project = await resolveProjectLabel(ctx.cwd || process.cwd());
   const host = hostname();
   const flagId = readStringFlag(pi, "onclave-id");
-  const agentId = sanitizeAgentId(flagId ?? `${host}-${project}`);
+  const agentId = flagId === undefined
+    ? sessionAgentId(host, project, ctx.sessionManager.getSessionId())
+    : sanitizeAgentId(flagId);
   const card: AgentCard = {
     agent_id: agentId,
     name: pi.getSessionName?.() ?? agentId,
@@ -461,6 +468,13 @@ async function buildAgentCard(pi: ExtensionAPI, ctx: ExtensionContext): Promise<
   const model = ctx.model?.id;
   if (typeof model === "string" && model.length > 0) card.model = model;
   return card;
+}
+
+function sessionAgentId(host: string, project: string, sessionId: string): string {
+  const suffix = sanitizeAgentId(sessionId).replaceAll("-", "").slice(0, 12);
+  const base = sanitizeAgentId(`${host}-${project}`);
+  const prefix = base.slice(0, 63 - suffix.length).replace(/-+$/, "");
+  return `${prefix}-${suffix}`;
 }
 
 function sanitizeAgentId(value: string): string {

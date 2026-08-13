@@ -122,6 +122,70 @@ describe("Onclave v2 adapter registration", () => {
     expect(schema?.required).not.toContain("to");
   });
 
+  it("uses stable session-specific default agent ids", async () => {
+    httpClient.call.mockResolvedValue({ ok: true, agents: [] });
+    const first = createFakePi({ "onclave-url": "https://api.example" }, "session-aaaaaaaa-bbbb");
+    const second = createFakePi({ "onclave-url": "https://api.example" }, "session-cccccccc-dddd");
+    onclavePi(first.pi as never);
+    onclavePi(second.pi as never);
+
+    await startSession(first);
+    await startSession(second);
+    const registrations = httpClient.call.mock.calls
+      .filter(([request]) => hasOperation(request, "register"))
+      .map(([request]) => (request as { card: { agent_id: string } }).card.agent_id);
+
+    expect(registrations).toHaveLength(2);
+    expect(registrations[0]).not.toBe(registrations[1]);
+    expect(registrations[0]).toMatch(/-sessionaaaaa$/);
+    expect(registrations[1]).toMatch(/-sessionccccc$/);
+
+    await shutdownSession(first);
+    await shutdownSession(second);
+  });
+
+  it("populates the footer peer count immediately and excludes self", async () => {
+    httpClient.call.mockImplementation(async (request) => {
+      if (hasOperation(request, "list_agents")) {
+        const registration = httpClient.call.mock.calls.find(([candidate]) => hasOperation(candidate, "register"));
+        const localAgentId = (registration?.[0] as { card: { agent_id: string } }).card.agent_id;
+        return {
+          ok: true,
+          agents: [
+            { agent_id: localAgentId, alive: true },
+            { agent_id: "peer-a", alive: true },
+            { agent_id: "sleeping-peer", alive: false },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+    const registered = createFakePi({ "onclave-url": "https://api.example" });
+    onclavePi(registered.pi as never);
+
+    const { setStatus } = await startSession(registered);
+    await vi.waitFor(() => {
+      expect(setStatus).toHaveBeenCalledWith("onclave-v2", expect.stringContaining("Peers: 1"));
+    });
+
+    await shutdownSession(registered);
+  });
+
+  it("uses an explicit agent id without a session suffix", async () => {
+    httpClient.call.mockResolvedValue({ ok: true, agents: [] });
+    const registered = createFakePi({
+      "onclave-url": "https://api.example",
+      "onclave-id": "explicit-agent",
+    });
+    onclavePi(registered.pi as never);
+
+    await startSession(registered);
+    const registration = httpClient.call.mock.calls.find(([request]) => hasOperation(request, "register"));
+    expect((registration?.[0] as { card: { agent_id: string } }).card.agent_id).toBe("explicit-agent");
+
+    await shutdownSession(registered);
+  });
+
   it("broadcasts inert informs directly to each alive peer", async () => {
     httpClient.call.mockResolvedValue({ ok: true });
     httpClient.publish.mockResolvedValue(undefined);
@@ -176,11 +240,16 @@ describe("Onclave v2 adapter registration", () => {
     onclavePi(registered.pi as never);
 
     await startSession(registered);
+    const listCallsBeforeInform = httpClient.call.mock.calls.filter(
+      ([request]) => hasOperation(request, "list_agents")
+    ).length;
     const inform = registered.tools.find((tool) => tool.name === "onclave_inform");
     if (inform?.execute === undefined) throw new Error("inform tool is not registered");
     const result = await inform.execute("call-2", { body: "maintenance notice", to: "peer-a" });
 
-    expect(httpClient.call.mock.calls.filter(([request]) => hasOperation(request, "list_agents"))).toHaveLength(0);
+    expect(httpClient.call.mock.calls.filter(([request]) => hasOperation(request, "list_agents"))).toHaveLength(
+      listCallsBeforeInform
+    );
     expect(httpClient.publish).toHaveBeenCalledTimes(1);
     expect(httpClient.publish.mock.calls[0]?.[0]).toMatchObject({
       performative: "inform",
@@ -248,13 +317,21 @@ function hasOperation(request: object, operation: string): boolean {
   return "op" in request && request.op === operation;
 }
 
-async function startSession(registered: ReturnType<typeof createFakePi>): Promise<void> {
+async function startSession(
+  registered: ReturnType<typeof createFakePi>
+): Promise<{ setStatus: ReturnType<typeof vi.fn> }> {
   const sessionStart = registered.hooks.find((hook) => hook.event === "session_start");
   if (sessionStart === undefined) throw new Error("session_start hook is not registered");
-  await sessionStart.handler({}, { cwd: process.cwd(), ui: { notify: vi.fn(), setStatus: vi.fn() } });
+  const setStatus = vi.fn();
+  await sessionStart.handler({}, {
+    cwd: process.cwd(),
+    sessionManager: registered.sessionManager,
+    ui: { notify: vi.fn(), setStatus },
+  });
   await vi.waitFor(() => {
     expect(httpClient.call.mock.calls.some(([request]) => hasOperation(request, "register"))).toBe(true);
   });
+  return { setStatus };
 }
 
 async function shutdownSession(registered: ReturnType<typeof createFakePi>): Promise<void> {
@@ -263,7 +340,7 @@ async function shutdownSession(registered: ReturnType<typeof createFakePi>): Pro
   await sessionShutdown.handler();
 }
 
-function createFakePi(flagValues: Record<string, unknown> = {}) {
+function createFakePi(flagValues: Record<string, unknown> = {}, sessionId = "session-default-1234") {
   const flags: Array<{ name: string; options: unknown }> = [];
   const hooks: Array<{ event: string; handler: (...args: unknown[]) => unknown }> = [];
   const commands: RegisteredCommand[] = [];
@@ -286,5 +363,6 @@ function createFakePi(flagValues: Record<string, unknown> = {}) {
     },
     sendMessage() {},
   };
-  return { pi, flags, hooks, commands, tools };
+  const sessionManager = { getSessionId: () => sessionId };
+  return { pi, flags, hooks, commands, tools, sessionManager };
 }

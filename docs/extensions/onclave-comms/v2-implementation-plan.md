@@ -65,9 +65,8 @@ enforcement, conversation budgets, strict reply correlation, and audit - with
 ## MVP Boundary
 
 In scope: core service, Pi adapter, shared envelope package, compose stack,
-integration tests, acceptance script, docs. Single broker host, single
-machine's agents (multi-machine works transport-wise but is not acceptance-
-tested in this plan).
+integration tests, and docs. Single broker host, single machine's agents
+(multi-machine works transport-wise but is not validated in this plan).
 
 Explicit deferrals:
 
@@ -253,25 +252,17 @@ Validation gate: adapter unit tests with a mocked channel (delivery modes,
 correlation strictness, reconnect state machine); manual smoke via
 `just pi-local-v2` (`pi -e ./extensions/onclave-pi`) against compose stack.
 
-### Phase 4: End-to-end acceptance
+### Phase 4: Deterministic integration coverage
 
 Tasks:
 
-1. Acceptance script (`scripts/onclave-v2-acceptance.ts`) mirroring the v1
-   acceptance-host pattern: compose up, launch two headless Pi sessions with
-   the adapter, then assert: A request -> B reply correlation; inform is
-   inert (imperative body produces no turn); offline B receives queued
-   message on restart (durability); scripted ping-pong halts at exchange
-   budget with `failure` both sides; audit JSONL contains the expected
-   events and no message bodies.
-2. Concurrency case for strict correlation: two overlapping inbound
-   requests to one session resolve to their own msg ids.
-3. Document the runbook in `docs/extensions/onclave-comms/
-   v2-manual-acceptance.md` including the Docker host deployment note
-   (replacing the placeholder `onclave` container with the built image).
+1. Extend the component and broker integration suites to assert request/reply
+   correlation, inert inform handling, offline queue durability, exchange
+   budget termination, and metadata-only audit records.
+2. Cover two overlapping inbound requests resolving to their own message ids.
 
-Validation gate: acceptance script passes on a dev machine against the
-compose stack; run recorded in `status.md`-style notes on the branch.
+Validation gate: deterministic unit and broker integration suites pass without
+starting Pi sessions or invoking models.
 
 ### Phase 5: CI and branch finalization
 
@@ -282,8 +273,8 @@ Tasks:
 2. Update `README.md` (v2 overview + quick start). Decisions 6-10 are
    already recorded as accepted in `decisions.md`; confirm they still match
    the implementation as built.
-3. Branch review pass: `just check`, full integration suite, acceptance
-   evidence linked; open PR against `main`.
+3. Branch review pass: `just check` and the full integration suite; open PR
+   against `main`.
 
 Validation gate: CI green on the PR; v1 suites still untouched and passing.
 
@@ -293,7 +284,6 @@ Validation gate: CI green on the PR; v1 suites still untouched and passing.
 just setup && just check                       # repo-wide, includes v1
 docker compose -f docker/compose.yaml up -d    # stack
 just test-integration                          # core + adapter vs rabbitmq
-pnpm exec tsx scripts/onclave-v2-acceptance.ts # end-to-end acceptance
 ```
 
 ## Risks
