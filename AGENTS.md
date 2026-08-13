@@ -4,6 +4,26 @@ This repo is organized as a monolithic Onclave repository. For the current
 stage, the implemented communication subsystem lives under a single extension
 subtree instead of being split across multiple top-level packages.
 
+## Location and collaboration boundaries
+
+- The canonical checkout is the `modules/onclave/` submodule of the dotfiles
+  repository. The dotfiles parent pins an exact Onclave commit; Onclave history,
+  branches, validation, commits, and pushes remain owned by this repository.
+- The sibling `../homelab-infra/` module owns Proxmox resources, infrastructure
+  services, host placement, site inventory, and deployment orchestration.
+  Onclave owns product code, protocols, services, and provider-neutral app and
+  environment contracts that homelab-infra consumes.
+- The dotfiles parent at `../..` owns workstation and Pi runtime wiring.
+  `pi/extensions/onclave-pi.ts` must remain a thin loader for this repository's
+  adapter rather than a second implementation.
+- Keep live hostnames, addresses, credentials, inventory, and infrastructure
+  state in homelab-infra's private `values/` repository. Do not copy them into
+  Onclave source, tests, examples, or documentation.
+- For a coordinated change, edit and validate each owning repository
+  independently. Commit and push Onclave first, then let the dotfiles parent
+  update its submodule pointer. Do not commit sibling or parent files from this
+  repository.
+
 ## Current structure
 
 - `extensions/onclave-comms/` contains the Pi extension package metadata,
