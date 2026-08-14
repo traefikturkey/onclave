@@ -7,8 +7,10 @@ subtree instead of being split across multiple top-level packages.
 ## Location and collaboration boundaries
 
 - The canonical checkout is the `modules/onclave/` submodule of the dotfiles
-  repository. The dotfiles parent pins an exact Onclave commit; Onclave history,
-  branches, validation, commits, and pushes remain owned by this repository.
+  repository. Keep it attached to and tracking `origin/feature/v2-broker-core`;
+  do not switch it to `main` or another branch unless the user explicitly
+  requests that branch change. The dotfiles parent pins an exact Onclave commit;
+  Onclave history, validation, commits, and pushes remain owned by this repository.
 - The sibling `../homelab-infra/` module owns Proxmox resources, infrastructure
   services, host placement, site inventory, and deployment orchestration.
   Onclave owns product code, protocols, services, and provider-neutral app and
