@@ -65,7 +65,7 @@ async function close(server: Server): Promise<void> {
 
 function vaultConfig(keysPath: string): VaultConfig {
   return {
-    apiBaseUrl: "http://localhost:8000", postgresHost: "localhost", postgresPort: 5432, postgresUser: "menos", postgresPassword: "secret", postgresDatabase: "menos", postgresPoolMinSize: 1, postgresPoolMaxSize: 1,
+    apiBaseUrl: "http://localhost:8000", appVersion: "test", postgresHost: "localhost", postgresPort: 5432, postgresUser: "menos", postgresPassword: "secret", postgresDatabase: "menos", postgresPoolMinSize: 1, postgresPoolMaxSize: 1,
     s3EndpointUrl: "localhost:9000", s3AccessKey: "access", s3SecretKey: "secret", s3Secure: false, s3Bucket: "menos", s3Region: "us-east-1", ollamaUrl: "http://ollama", ollamaModel: "embed", doclingUrl: "http://docling", sshPublicKeysPath: keysPath,
     webshareProxyUsername: "user", webshareProxyPassword: "password", agentExpansionProvider: "none", agentExpansionModel: "", agentRerankProvider: "none", agentRerankModel: "", agentSynthesisProvider: "none", agentSynthesisModel: "", unifiedPipelineEnabled: true, unifiedPipelineProvider: "none", unifiedPipelineModel: "", unifiedPipelineMaxConcurrency: 1, unifiedPipelineMaxNewTags: 3, entityMaxTopicsPerContent: 7, entityMinConfidence: 0.6, entityFetchExternalMetadata: true,
   };

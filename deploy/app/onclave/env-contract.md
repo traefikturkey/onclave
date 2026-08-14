@@ -27,36 +27,30 @@ values should use immutable `tag@sha256:digest` references.
 | --- | --- |
 | `RABBITMQ_DEFAULT_USER` | RabbitMQ application user |
 | `RABBITMQ_DEFAULT_PASS` | RabbitMQ application password |
-| `POSTGRES_PASSWORD` | PostgreSQL and vault password |
-| `S3_ACCESS_KEY` | MinIO root user and vault access key |
-| `S3_SECRET_KEY` | MinIO root password and vault secret key |
-| `SEARXNG_SECRET` | SearXNG secret |
-| `WEBSHARE_PROXY_USERNAME` | Webshare proxy user |
-| `WEBSHARE_PROXY_PASSWORD` | Webshare proxy password |
+| `ONCLAVE_VAULT_POSTGRES_PASSWORD` | PostgreSQL and vault password |
+| `ONCLAVE_VAULT_S3_ACCESS_KEY` | MinIO root user and vault access key |
+| `ONCLAVE_VAULT_S3_SECRET_KEY` | MinIO root password and vault secret key |
+| `ONCLAVE_VAULT_SEARXNG_SECRET` | SearXNG secret |
+| `ONCLAVE_VAULT_WEBSHARE_PROXY_USERNAME` | Webshare proxy user |
+| `ONCLAVE_VAULT_WEBSHARE_PROXY_PASSWORD` | Webshare proxy password |
 
-The Compose definition passes the Webshare values as
-`ONCLAVE_VAULT_WEBSHARE_PROXY_USERNAME` and
-`ONCLAVE_VAULT_WEBSHARE_PROXY_PASSWORD` to the core.
+Compose maps canonical vault values to the PostgreSQL, MinIO, and SearXNG
+container variable names. The core receives canonical vault names directly.
 
 ## Vault provider and callback values
 
 | Key | Default | Purpose |
 | --- | --- | --- |
-| `YOUTUBE_API_KEY` | empty | YouTube metadata API key |
-| `OPENAI_API_KEY` | empty | OpenAI provider key |
-| `ANTHROPIC_API_KEY` | empty | Anthropic provider key |
-| `OPENROUTER_API_KEY` | empty | OpenRouter provider key |
-| `CALLBACK_URL` | empty | Pipeline callback URL |
-| `CALLBACK_SECRET` | empty | Pipeline callback secret |
-| `SEMANTIC_SCHOLAR_API_KEY` | empty | Semantic Scholar API key |
+| `ONCLAVE_VAULT_YOUTUBE_API_KEY` | empty | YouTube metadata API key |
+| `ONCLAVE_VAULT_OPENAI_API_KEY` | empty | OpenAI provider key |
+| `ONCLAVE_VAULT_ANTHROPIC_API_KEY` | empty | Anthropic provider key |
+| `ONCLAVE_VAULT_OPENROUTER_API_KEY` | empty | OpenRouter provider key |
+| `ONCLAVE_VAULT_CALLBACK_URL` | empty | Pipeline callback URL |
+| `ONCLAVE_VAULT_CALLBACK_SECRET` | empty | Pipeline callback secret |
+| `ONCLAVE_VAULT_SEMANTIC_SCHOLAR_API_KEY` | empty | Semantic Scholar API key |
 
 Set the key required by each selected LLM provider. The default expansion,
-synthesis, and unified pipeline provider is `openrouter`. The Compose
-definition passes these values to the core as
-`ONCLAVE_VAULT_YOUTUBE_API_KEY`, `ONCLAVE_VAULT_OPENAI_API_KEY`,
-`ONCLAVE_VAULT_ANTHROPIC_API_KEY`, `ONCLAVE_VAULT_OPENROUTER_API_KEY`,
-`ONCLAVE_VAULT_CALLBACK_URL`, `ONCLAVE_VAULT_CALLBACK_SECRET`, and
-`ONCLAVE_VAULT_SEMANTIC_SCHOLAR_API_KEY`.
+synthesis, and unified pipeline provider is `openrouter`.
 
 ## Core tuning
 
@@ -81,6 +75,7 @@ all remaining values can be overridden by the consumer.
 | Key | Default |
 | --- | --- |
 | `ONCLAVE_VAULT_API_BASE_URL` | `http://localhost:8000` |
+| `ONCLAVE_VAULT_APP_VERSION` | `0.1.0` |
 | `ONCLAVE_VAULT_POSTGRES_POOL_MIN_SIZE` | `1` |
 | `ONCLAVE_VAULT_POSTGRES_POOL_MAX_SIZE` | `10` |
 | `ONCLAVE_VAULT_S3_SECURE` | `false` |
@@ -102,24 +97,26 @@ all remaining values can be overridden by the consumer.
 | `ONCLAVE_VAULT_ENTITY_MIN_CONFIDENCE` | `0.6` |
 | `ONCLAVE_VAULT_ENTITY_FETCH_EXTERNAL_METADATA` | `true` |
 
-The Compose definition also sets these fixed vault addresses:
+The Compose definition sets the fixed dependency addresses
 `ONCLAVE_VAULT_POSTGRES_HOST`, `ONCLAVE_VAULT_POSTGRES_PORT`,
-`ONCLAVE_VAULT_POSTGRES_USER`, `ONCLAVE_VAULT_POSTGRES_PASSWORD`,
-`ONCLAVE_VAULT_POSTGRES_DATABASE`, `ONCLAVE_VAULT_S3_ENDPOINT_URL`,
-`ONCLAVE_VAULT_S3_ACCESS_KEY`, `ONCLAVE_VAULT_S3_SECRET_KEY`,
-`ONCLAVE_VAULT_OLLAMA_URL`, `ONCLAVE_VAULT_DOCLING_URL`, and
-`ONCLAVE_VAULT_SSH_PUBLIC_KEYS_PATH`.
+`ONCLAVE_VAULT_S3_ENDPOINT_URL`, `ONCLAVE_VAULT_OLLAMA_URL`,
+`ONCLAVE_VAULT_DOCLING_URL`, and `ONCLAVE_VAULT_SSH_PUBLIC_KEYS_PATH`.
+Consumers provide `ONCLAVE_VAULT_POSTGRES_USER`,
+`ONCLAVE_VAULT_POSTGRES_PASSWORD`, `ONCLAVE_VAULT_POSTGRES_DATABASE`,
+`ONCLAVE_VAULT_S3_ACCESS_KEY`, and `ONCLAVE_VAULT_S3_SECRET_KEY`.
 
-SearXNG remains a stack dependency and receives `SEARXNG_SECRET`. The current
-vault configuration has no SearXNG URL variable.
+SearXNG remains a stack dependency and receives the canonical
+`ONCLAVE_VAULT_SEARXNG_SECRET` as its `SEARXNG_SECRET` container variable. The
+current vault configuration has no SearXNG URL variable.
 
-## Legacy fallbacks
+## Vault runtime variable names
 
-For every vault setting named `ONCLAVE_VAULT_<NAME>`, the core accepts
-`MENOS_<NAME>` and then unprefixed `<NAME>` as fallbacks. This definition uses
-only `ONCLAVE_VAULT_` names. `MENOS_POSTGRES_PASSWORD` also activates vault
-mode when the preferred password is absent, and `MENOS_APP_VERSION` is the
-fallback for the vault pipeline version.
+The vault runtime accepts only `ONCLAVE_VAULT_<NAME>` configuration variables.
+`ONCLAVE_VAULT_POSTGRES_PASSWORD` activates the vault. The pipeline version
+uses `ONCLAVE_VAULT_APP_VERSION`.
+
+The adopted `menos` PostgreSQL database and user defaults and S3 bucket default
+are persistent data identities, not configuration aliases.
 
 ## Provider seam
 

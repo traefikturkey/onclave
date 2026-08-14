@@ -4,11 +4,11 @@ set -euo pipefail
 if [[ -n "${POSTGRES_CONTAINER:-}" ]]; then
   : "${CONTAINER_RUNTIME:?required when POSTGRES_CONTAINER is set}"
 else
-  : "${POSTGRES_HOST:?}"
-  : "${POSTGRES_PORT:=5432}"
-  : "${POSTGRES_DATABASE:?}"
-  : "${POSTGRES_USER:?}"
-  : "${POSTGRES_PASSWORD:?}"
+  : "${ONCLAVE_VAULT_POSTGRES_HOST:?}"
+  : "${ONCLAVE_VAULT_POSTGRES_PORT:=5432}"
+  : "${ONCLAVE_VAULT_POSTGRES_DATABASE:?}"
+  : "${ONCLAVE_VAULT_POSTGRES_USER:?}"
+  : "${ONCLAVE_VAULT_POSTGRES_PASSWORD:?}"
 fi
 
 output_dir="${1:?usage: backup-postgres.sh OUTPUT_DIR}"
@@ -29,9 +29,9 @@ if [[ -n "${POSTGRES_CONTAINER:-}" ]]; then
       --format=custom --no-owner --no-privileges
   ' >"${dump}"
 else
-  export PGPASSWORD="${POSTGRES_PASSWORD}"
-  pg_dump --host="${POSTGRES_HOST}" --port="${POSTGRES_PORT}" \
-    --username="${POSTGRES_USER}" --dbname="${POSTGRES_DATABASE}" \
+  export PGPASSWORD="${ONCLAVE_VAULT_POSTGRES_PASSWORD}"
+  pg_dump --host="${ONCLAVE_VAULT_POSTGRES_HOST}" --port="${ONCLAVE_VAULT_POSTGRES_PORT}" \
+    --username="${ONCLAVE_VAULT_POSTGRES_USER}" --dbname="${ONCLAVE_VAULT_POSTGRES_DATABASE}" \
     --format=custom --no-owner --no-privileges --file="${dump}"
 fi
 sha256="$(sha256sum "${dump}" | awk '{print $1}')"

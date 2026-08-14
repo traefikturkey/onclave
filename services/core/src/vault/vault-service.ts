@@ -146,7 +146,7 @@ export async function createVaultService(
     const metered = new MeteringLLMProvider(llm, meteringStorage, "pipeline", providerName(llm), llm.model, pricing);
     const pipeline = new UnifiedPipeline(metered, repository, config, { chunkText }, embeddings);
     jobs = new PipelineOrchestrator(pipeline, repository, {
-      pipelineVersion: process.env.ONCLAVE_VAULT_APP_VERSION ?? process.env.MENOS_APP_VERSION ?? "0.1.0",
+      pipelineVersion: config.appVersion,
     });
   }
   const transcript = overrides.transcript ?? new YouTubeTranscriptService({

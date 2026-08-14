@@ -140,16 +140,28 @@ describe("vault storage repository", () => {
 });
 
 describe("vault configuration", () => {
-  it("prefers ONCLAVE_VAULT values and falls back to MENOS values", () => {
-    const config = loadVaultConfig(configuredEnv({ MENOS_POSTGRES_HOST: "menos-postgres", ONCLAVE_VAULT_POSTGRES_HOST: "vault-postgres", MENOS_S3_SECURE: "true", MENOS_OLLAMA_MODEL: "menos-embed", ONCLAVE_VAULT_OLLAMA_MODEL: "vault-embed" }));
-    expect(config.postgresHost).toBe("vault-postgres");
-    expect(config.s3Secure).toBe(true);
-    expect(config.ollamaModel).toBe("vault-embed");
-    expect(config.unifiedPipelineEnabled).toBe(true);
+  it("uses ONCLAVE_VAULT values without legacy fallbacks", () => {
+    const config = loadVaultConfig(configuredEnv({
+      MENOS_POSTGRES_HOST: "menos-postgres",
+      POSTGRES_HOST: "legacy-postgres",
+      MENOS_S3_SECURE: "true",
+      S3_SECURE: "true",
+      MENOS_APP_VERSION: "menos-version",
+      APP_VERSION: "legacy-version",
+    }));
+    expect(config.postgresHost).toBe("localhost");
+    expect(config.s3Secure).toBe(false);
+    expect(config.appVersion).toBe("0.1.0");
+    expect(config.postgresDatabase).toBe("menos");
+    expect(config.s3Bucket).toBe("menos");
   });
 
-  it("requires the Python-required secrets after compatible fallback lookup", () => {
+  it("requires canonical vault secrets", () => {
     expect(() => loadVaultConfig({})).toThrow("ONCLAVE_VAULT_POSTGRES_PASSWORD is required");
-    expect(loadVaultConfig(configuredEnv({ ONCLAVE_VAULT_POSTGRES_PASSWORD: undefined, MENOS_POSTGRES_PASSWORD: "menos-password" })).postgresPassword).toBe("menos-password");
+    expect(() => loadVaultConfig(configuredEnv({ ONCLAVE_VAULT_POSTGRES_PASSWORD: undefined, MENOS_POSTGRES_PASSWORD: "menos-password", POSTGRES_PASSWORD: "legacy-password" }))).toThrow("ONCLAVE_VAULT_POSTGRES_PASSWORD is required");
+  });
+
+  it("uses the canonical pipeline version", () => {
+    expect(loadVaultConfig(configuredEnv({ ONCLAVE_VAULT_APP_VERSION: "1.2.3", MENOS_APP_VERSION: "menos-version", APP_VERSION: "legacy-version" })).appVersion).toBe("1.2.3");
   });
 });

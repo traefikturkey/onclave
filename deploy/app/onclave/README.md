@@ -54,5 +54,6 @@ Use `backup-postgres.sh` for credential-safe custom-format logical dumps and
 `restore-postgres.sh` for validated restores into an empty database. For an
 internal Compose database, set `POSTGRES_CONTAINER=onclave-postgres` and
 `CONTAINER_RUNTIME=docker` or `podman`. The helpers otherwise use
-`POSTGRES_HOST`, `POSTGRES_PORT`, `POSTGRES_DATABASE`, `POSTGRES_USER`, and
-`POSTGRES_PASSWORD` directly.
+`ONCLAVE_VAULT_POSTGRES_HOST`, `ONCLAVE_VAULT_POSTGRES_PORT`,
+`ONCLAVE_VAULT_POSTGRES_DATABASE`, `ONCLAVE_VAULT_POSTGRES_USER`, and
+`ONCLAVE_VAULT_POSTGRES_PASSWORD` directly.

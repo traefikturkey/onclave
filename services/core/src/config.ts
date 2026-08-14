@@ -36,7 +36,7 @@ function parsePort(value: string | undefined, fallback: number): number {
 
 export function loadCoreConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig {
   const dataDir = env.ONCLAVE_DATA_DIR ?? "/data";
-  const vaultEnabled = Boolean(env.ONCLAVE_VAULT_POSTGRES_PASSWORD?.trim() || env.MENOS_POSTGRES_PASSWORD?.trim());
+  const vaultEnabled = Boolean(env.ONCLAVE_VAULT_POSTGRES_PASSWORD?.trim());
   const amqpUrl = env.ONCLAVE_AMQP_URL?.trim();
   if (!amqpUrl) throw new Error("ONCLAVE_AMQP_URL is required");
   return {

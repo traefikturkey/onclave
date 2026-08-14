@@ -74,7 +74,8 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
     if (config.vault === undefined) {
       healthServer = startHealthServer(config.httpPort, broker);
     } else {
-      vault = await createVaultService(config.vault);
+      const vaultConfig = config.vault;
+      vault = await createVaultService(vaultConfig);
       healthServer = createVaultHttpServer({
         keyStore: vault.keyStore,
         handlers: {
@@ -87,7 +88,7 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
                 status: "ok",
                 git_sha: process.env.GIT_SHA ?? "unknown",
                 build_date: process.env.BUILD_DATE ?? "unknown",
-                app_version: process.env.ONCLAVE_VAULT_APP_VERSION ?? "0.1.0",
+                app_version: vaultConfig.appVersion,
                 broker: {
                   connected: status.connected,
                   topologyDeclared: status.topologyDeclared,

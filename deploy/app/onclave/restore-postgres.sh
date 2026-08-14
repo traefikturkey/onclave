@@ -4,11 +4,11 @@ set -euo pipefail
 if [[ -n "${POSTGRES_CONTAINER:-}" ]]; then
   : "${CONTAINER_RUNTIME:?required when POSTGRES_CONTAINER is set}"
 else
-  : "${POSTGRES_HOST:?}"
-  : "${POSTGRES_PORT:=5432}"
-  : "${POSTGRES_DATABASE:?}"
-  : "${POSTGRES_USER:?}"
-  : "${POSTGRES_PASSWORD:?}"
+  : "${ONCLAVE_VAULT_POSTGRES_HOST:?}"
+  : "${ONCLAVE_VAULT_POSTGRES_PORT:=5432}"
+  : "${ONCLAVE_VAULT_POSTGRES_DATABASE:?}"
+  : "${ONCLAVE_VAULT_POSTGRES_USER:?}"
+  : "${ONCLAVE_VAULT_POSTGRES_PASSWORD:?}"
 fi
 
 dump="${1:?usage: restore-postgres.sh DUMP_FILE}"
@@ -49,10 +49,10 @@ if [[ -n "${POSTGRES_CONTAINER:-}" ]]; then
     '
   )"
 else
-  export PGPASSWORD="${POSTGRES_PASSWORD}"
+  export PGPASSWORD="${ONCLAVE_VAULT_POSTGRES_PASSWORD}"
   table_count="$(
-    psql --host="${POSTGRES_HOST}" --port="${POSTGRES_PORT}" \
-      --username="${POSTGRES_USER}" --dbname="${POSTGRES_DATABASE}" \
+    psql --host="${ONCLAVE_VAULT_POSTGRES_HOST}" --port="${ONCLAVE_VAULT_POSTGRES_PORT}" \
+      --username="${ONCLAVE_VAULT_POSTGRES_USER}" --dbname="${ONCLAVE_VAULT_POSTGRES_DATABASE}" \
       --no-psqlrc --tuples-only --no-align --command \
       "SELECT count(*) FROM pg_catalog.pg_tables WHERE schemaname = 'public'"
   )"
@@ -72,7 +72,7 @@ if [[ -n "${POSTGRES_CONTAINER:-}" ]]; then
       --exit-on-error --single-transaction --no-owner --no-privileges
   ' <"${dump}"
 else
-  pg_restore --host="${POSTGRES_HOST}" --port="${POSTGRES_PORT}" \
-    --username="${POSTGRES_USER}" --dbname="${POSTGRES_DATABASE}" \
+  pg_restore --host="${ONCLAVE_VAULT_POSTGRES_HOST}" --port="${ONCLAVE_VAULT_POSTGRES_PORT}" \
+    --username="${ONCLAVE_VAULT_POSTGRES_USER}" --dbname="${ONCLAVE_VAULT_POSTGRES_DATABASE}" \
     --exit-on-error --single-transaction --no-owner --no-privileges "${dump}"
 fi

@@ -3,6 +3,7 @@ export type RerankerProviderType = "rerankers" | "llm" | "none";
 
 export type VaultConfig = {
   apiBaseUrl: string;
+  appVersion: string;
   postgresHost: string;
   postgresPort: number;
   postgresUser: string;
@@ -46,7 +47,7 @@ export type VaultConfig = {
 };
 
 function value(env: NodeJS.ProcessEnv, name: string): string | undefined {
-  return env[`ONCLAVE_VAULT_${name}`] ?? env[`MENOS_${name}`] ?? env[name];
+  return env[`ONCLAVE_VAULT_${name}`];
 }
 
 function optional(env: NodeJS.ProcessEnv, name: string): string | undefined {
@@ -108,6 +109,7 @@ export function loadVaultConfig(env: NodeJS.ProcessEnv = process.env): VaultConf
   }
   return {
     apiBaseUrl: optional(env, "API_BASE_URL") ?? "http://localhost:8000",
+    appVersion: optional(env, "APP_VERSION") ?? "0.1.0",
     postgresHost: optional(env, "POSTGRES_HOST") ?? "localhost",
     postgresPort: integer(env, "POSTGRES_PORT", 5432, 1),
     postgresUser: optional(env, "POSTGRES_USER") ?? "menos",
