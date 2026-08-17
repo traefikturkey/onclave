@@ -109,48 +109,6 @@ function parsePlayerResponse(value: unknown): PlayerResponse | undefined {
   return response;
 }
 
-function playerResponseFromWatchPage(html: string): PlayerResponse | undefined {
-  const marker = "ytInitialPlayerResponse";
-  const markerIndex = html.indexOf(marker);
-  if (markerIndex < 0) return undefined;
-  const assignmentIndex = html.indexOf("=", markerIndex + marker.length);
-  if (assignmentIndex < 0) return undefined;
-  const start = html.indexOf("{", assignmentIndex + 1);
-  if (start < 0) return undefined;
-
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let index = start; index < html.length; index += 1) {
-    const character = html[index];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (character === "\\") {
-        escaped = true;
-      } else if (character === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (character === '"') {
-      inString = true;
-    } else if (character === "{") {
-      depth += 1;
-    } else if (character === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        try {
-          return parsePlayerResponse(JSON.parse(html.slice(start, index + 1)));
-        } catch {
-          return undefined;
-        }
-      }
-    }
-  }
-  return undefined;
-}
-
 function innertubeApiKeyFromWatchPage(html: string): string | undefined {
   return /"INNERTUBE_API_KEY":\s*"([A-Za-z0-9_-]+)"/.exec(html)?.[1];
 }
@@ -330,22 +288,19 @@ export class YouTubeTranscriptService {
       }
 
       const watchHtml = await watchResponse.text();
-      let playerResponse = playerResponseFromWatchPage(watchHtml);
-      if (playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks === undefined) {
-        const apiKey = innertubeApiKeyFromWatchPage(watchHtml);
-        if (apiKey === undefined) throw requestFailedError(videoId, "watch page did not contain an Innertube API key");
-        const response = await this.fetcher(`${YOUTUBE_PLAYER_URL}${encodeURIComponent(apiKey)}`, {
-          method: "POST",
-          headers: { "content-type": "application/json", origin: "https://www.youtube.com", "user-agent": "Mozilla/5.0" },
-          body: JSON.stringify({ context: { client: { clientName: YOUTUBE_CLIENT_NAME, clientVersion: YOUTUBE_CLIENT_VERSION } }, videoId }),
-          dispatcher,
-        });
-        if (!response.ok) {
-          if (response.status === 403 || response.status === 429) throw blockedError(videoId, `HTTP ${response.status}`);
-          throw requestFailedError(videoId, `HTTP ${response.status}`);
-        }
-        playerResponse = parsePlayerResponse(await response.json());
+      const apiKey = innertubeApiKeyFromWatchPage(watchHtml);
+      if (apiKey === undefined) throw requestFailedError(videoId, "watch page did not contain an Innertube API key");
+      const response = await this.fetcher(`${YOUTUBE_PLAYER_URL}${encodeURIComponent(apiKey)}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "https://www.youtube.com", "user-agent": "Mozilla/5.0" },
+        body: JSON.stringify({ context: { client: { clientName: YOUTUBE_CLIENT_NAME, clientVersion: YOUTUBE_CLIENT_VERSION } }, videoId }),
+        dispatcher,
+      });
+      if (!response.ok) {
+        if (response.status === 403 || response.status === 429) throw blockedError(videoId, `HTTP ${response.status}`);
+        throw requestFailedError(videoId, `HTTP ${response.status}`);
       }
+      const playerResponse = parsePlayerResponse(await response.json());
 
       const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
       if (tracks === undefined) throw transcriptUnavailableError(playerResponse, videoId);

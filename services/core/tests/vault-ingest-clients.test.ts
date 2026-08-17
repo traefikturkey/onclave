@@ -121,9 +121,13 @@ describe("YouTube transcript parsing and retrieval", () => {
       fetcher: async (url, init = {}) => {
         calls.push({ url, init });
         if (url.includes("watch")) {
-          return new Response(
-            '<script>var ytInitialPlayerResponse = {"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[{"baseUrl":"https://captions.example/en?signature=abc&fmt=srv3","languageCode":"en"}]}}};</script>',
-          );
+          return new Response('<script>var ytcfg = {"INNERTUBE_API_KEY":"test-key"};</script>');
+        }
+        if (url.includes("youtubei")) {
+          return responseJson({
+            playabilityStatus: { status: "OK" },
+            captions: { playerCaptionsTracklistRenderer: { captionTracks: [{ baseUrl: "https://captions.example/en?signature=abc&fmt=srv3", languageCode: "en" }] } },
+          });
         }
         return new Response('<transcript><text start="0" dur="1">Hello</text></transcript>');
       },
@@ -134,20 +138,21 @@ describe("YouTube transcript parsing and retrieval", () => {
       fullText: "Hello",
       segments: [{ text: "Hello", start: 0, duration: 1 }],
     });
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(3);
     expect(calls[0]?.init.dispatcher).toBe(dispatcher);
-    expect(calls[1]?.url).toBe("https://captions.example/en?signature=abc");
     expect(calls[1]?.init.dispatcher).toBe(dispatcher);
+    expect(calls[2]?.url).toBe("https://captions.example/en?signature=abc");
+    expect(calls[2]?.init.dispatcher).toBe(dispatcher);
   });
 
-  it("uses the watch page API key with the Android player client when captions are absent", async () => {
+  it("uses the Android player response instead of watch page caption data", async () => {
     const calls: FetchCall[] = [];
     const service = new YouTubeTranscriptService({
       fetcher: async (url, init = {}) => {
         calls.push({ url, init });
         if (url.includes("watch")) {
           return new Response(
-            '<script>var ytcfg = {"INNERTUBE_API_KEY":"test-key"}; var ytInitialPlayerResponse = {"playabilityStatus":{"status":"LOGIN_REQUIRED","reason":"Sign in"}};</script>',
+            '<script>var ytcfg = {"INNERTUBE_API_KEY":"test-key"}; var ytInitialPlayerResponse = {"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[{"baseUrl":"https://captions.example/stale","languageCode":"en"}]}}};</script>',
           );
         }
         if (url.includes("youtubei")) {
@@ -166,6 +171,7 @@ describe("YouTube transcript parsing and retrieval", () => {
       context: { client: { clientName: "ANDROID", clientVersion: "20.10.38" } },
       videoId: "dQw4w9WgXcQ",
     });
+    expect(calls[2]?.url).toBe("https://captions.example/en");
     expect(calls).toHaveLength(3);
   });
 
@@ -173,9 +179,13 @@ describe("YouTube transcript parsing and retrieval", () => {
     const service = new YouTubeTranscriptService({
       fetcher: async (url) => {
         if (url.includes("watch")) {
-          return new Response(
-            '<script>var ytInitialPlayerResponse = {"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[{"baseUrl":"https://captions.example/en","languageCode":"en"}]}}};</script>',
-          );
+          return new Response('<script>var ytcfg = {"INNERTUBE_API_KEY":"test-key"};</script>');
+        }
+        if (url.includes("youtubei")) {
+          return responseJson({
+            playabilityStatus: { status: "OK" },
+            captions: { playerCaptionsTracklistRenderer: { captionTracks: [{ baseUrl: "https://captions.example/en", languageCode: "en" }] } },
+          });
         }
         return new Response("<transcript></transcript>");
       },
