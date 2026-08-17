@@ -54,8 +54,9 @@ type PlayerResponse = {
 };
 
 const YOUTUBE_WATCH_URL = "https://www.youtube.com/watch?v=";
-const YOUTUBE_PLAYER_URL = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
-const YOUTUBE_CLIENT_VERSION = "2.20241126.01.00";
+const YOUTUBE_PLAYER_URL = "https://www.youtube.com/youtubei/v1/player?key=";
+const YOUTUBE_CLIENT_NAME = "ANDROID";
+const YOUTUBE_CLIENT_VERSION = "20.10.38";
 const WEBSHARE_PROXY_HOST = "p.webshare.io:80";
 const TRANSCRIPT_UNAVAILABLE_PREFIX = "YouTube is blocking requests for video";
 
@@ -148,6 +149,10 @@ function playerResponseFromWatchPage(html: string): PlayerResponse | undefined {
     }
   }
   return undefined;
+}
+
+function innertubeApiKeyFromWatchPage(html: string): string | undefined {
+  return /"INNERTUBE_API_KEY":\s*"([A-Za-z0-9_-]+)"/.exec(html)?.[1];
 }
 
 function parseNumber(value: string | undefined): number {
@@ -324,12 +329,15 @@ export class YouTubeTranscriptService {
         throw requestFailedError(videoId, `HTTP ${watchResponse.status}`);
       }
 
-      let playerResponse = playerResponseFromWatchPage(await watchResponse.text());
+      const watchHtml = await watchResponse.text();
+      let playerResponse = playerResponseFromWatchPage(watchHtml);
       if (playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks === undefined) {
-        const response = await this.fetcher(YOUTUBE_PLAYER_URL, {
+        const apiKey = innertubeApiKeyFromWatchPage(watchHtml);
+        if (apiKey === undefined) throw requestFailedError(videoId, "watch page did not contain an Innertube API key");
+        const response = await this.fetcher(`${YOUTUBE_PLAYER_URL}${encodeURIComponent(apiKey)}`, {
           method: "POST",
           headers: { "content-type": "application/json", origin: "https://www.youtube.com", "user-agent": "Mozilla/5.0" },
-          body: JSON.stringify({ context: { client: { clientName: "WEB", clientVersion: YOUTUBE_CLIENT_VERSION } }, videoId }),
+          body: JSON.stringify({ context: { client: { clientName: YOUTUBE_CLIENT_NAME, clientVersion: YOUTUBE_CLIENT_VERSION } }, videoId }),
           dispatcher,
         });
         if (!response.ok) {

@@ -140,6 +140,35 @@ describe("YouTube transcript parsing and retrieval", () => {
     expect(calls[1]?.init.dispatcher).toBe(dispatcher);
   });
 
+  it("uses the watch page API key with the Android player client when captions are absent", async () => {
+    const calls: FetchCall[] = [];
+    const service = new YouTubeTranscriptService({
+      fetcher: async (url, init = {}) => {
+        calls.push({ url, init });
+        if (url.includes("watch")) {
+          return new Response(
+            '<script>var ytcfg = {"INNERTUBE_API_KEY":"test-key"}; var ytInitialPlayerResponse = {"playabilityStatus":{"status":"LOGIN_REQUIRED","reason":"Sign in"}};</script>',
+          );
+        }
+        if (url.includes("youtubei")) {
+          return responseJson({
+            playabilityStatus: { status: "OK" },
+            captions: { playerCaptionsTracklistRenderer: { captionTracks: [{ baseUrl: "https://captions.example/en", languageCode: "en" }] } },
+          });
+        }
+        return new Response('<transcript><text start="0" dur="1">Hello</text></transcript>');
+      },
+    });
+
+    await expect(service.fetchTranscript("dQw4w9WgXcQ")).resolves.toMatchObject({ fullText: "Hello" });
+    expect(calls[1]?.url).toBe("https://www.youtube.com/youtubei/v1/player?key=test-key");
+    expect(JSON.parse(calls[1]?.init.body ?? "{}")).toMatchObject({
+      context: { client: { clientName: "ANDROID", clientVersion: "20.10.38" } },
+      videoId: "dQw4w9WgXcQ",
+    });
+    expect(calls).toHaveLength(3);
+  });
+
   it("rejects caption responses without transcript segments", async () => {
     const service = new YouTubeTranscriptService({
       fetcher: async (url) => {
