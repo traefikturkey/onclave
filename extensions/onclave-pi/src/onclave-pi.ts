@@ -434,9 +434,7 @@ type FooterStatusRuntime = Pick<AdapterRuntime, "aliveAgents" | "card" | "state"
 
 export function refreshFooterStatus(runtime: FooterStatusRuntime): void {
   const clientColor = runtime.state === "connected" ? ANSI_GREEN : ANSI_RED;
-  const line =
-    `Onclave: ${clientColor}${runtime.card.agent_id}${ANSI_RESET}` +
-    ` | Peers: ${runtime.aliveAgents}`;
+  const line = `Onclave[${runtime.aliveAgents}]: ${clientColor}${runtime.card.agent_id}${ANSI_RESET}`;
   runtime.ui.setStatus?.(FOOTER_STATUS_KEY, line);
 }
 
@@ -456,7 +454,7 @@ async function buildAgentCard(pi: ExtensionAPI, ctx: ExtensionContext): Promise<
   const host = hostname();
   const flagId = readStringFlag(pi, "onclave-id");
   const agentId = flagId === undefined
-    ? sessionAgentId(host, project, ctx.sessionManager.getSessionId())
+    ? sessionAgentId(ctx.sessionManager.getSessionId())
     : sanitizeAgentId(flagId);
   const card: AgentCard = {
     agent_id: agentId,
@@ -470,11 +468,9 @@ async function buildAgentCard(pi: ExtensionAPI, ctx: ExtensionContext): Promise<
   return card;
 }
 
-function sessionAgentId(host: string, project: string, sessionId: string): string {
+function sessionAgentId(sessionId: string): string {
   const suffix = sanitizeAgentId(sessionId).replaceAll("-", "").slice(0, 12);
-  const base = sanitizeAgentId(`${host}-${project}`);
-  const prefix = base.slice(0, 63 - suffix.length).replace(/-+$/, "");
-  return `${prefix}-${suffix}`;
+  return `pi-${suffix}`;
 }
 
 function sanitizeAgentId(value: string): string {

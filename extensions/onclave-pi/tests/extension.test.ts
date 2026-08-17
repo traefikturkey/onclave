@@ -137,8 +137,8 @@ describe("Onclave v2 adapter registration", () => {
 
     expect(registrations).toHaveLength(2);
     expect(registrations[0]).not.toBe(registrations[1]);
-    expect(registrations[0]).toMatch(/-sessionaaaaa$/);
-    expect(registrations[1]).toMatch(/-sessionccccc$/);
+    expect(registrations[0]).toBe("pi-sessionaaaaa");
+    expect(registrations[1]).toBe("pi-sessionccccc");
 
     await shutdownSession(first);
     await shutdownSession(second);
@@ -165,7 +165,7 @@ describe("Onclave v2 adapter registration", () => {
 
     const { setStatus } = await startSession(registered);
     await vi.waitFor(() => {
-      expect(setStatus).toHaveBeenCalledWith("onclave-v2", expect.stringContaining("Peers: 1"));
+      expect(setStatus).toHaveBeenCalledWith("onclave-v2", expect.stringContaining("Onclave[1]:"));
     });
 
     await shutdownSession(registered);
@@ -301,14 +301,14 @@ describe("Onclave v2 footer status", () => {
 
     refreshFooterStatus({
       aliveAgents: 0,
-      card: { agent_id: "dev-wks-mglenn-.dotfiles-main" },
+      card: { agent_id: "pi-01a0115194f6" },
       state,
       ui: { setStatus },
     } as never);
 
     expect(setStatus).toHaveBeenCalledWith(
       "onclave-v2",
-      `Onclave: ${color}dev-wks-mglenn-.dotfiles-main\x1b[0m | Peers: 0`
+      `Onclave[0]: ${color}pi-01a0115194f6\x1b[0m`
     );
   });
 });
