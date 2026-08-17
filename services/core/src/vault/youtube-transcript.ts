@@ -344,15 +344,17 @@ export class YouTubeTranscriptService {
       const track = selectCaptionTrack(tracks, languages);
       if (track === undefined) throw new Error(`No transcript found for video: ${videoId}`);
 
-      const captionResponse = await this.fetcher(track.baseUrl, { dispatcher });
+      const captionUrl = track.baseUrl.replace("&fmt=srv3", "");
+      const captionResponse = await this.fetcher(captionUrl, { dispatcher });
       if (!captionResponse.ok) {
         if (captionResponse.status === 403 || captionResponse.status === 429) throw blockedError(videoId, `HTTP ${captionResponse.status}`);
         throw requestFailedError(videoId, `HTTP ${captionResponse.status}`);
       }
       const body = await captionResponse.text();
-      const segments = track.baseUrl.includes("fmt=json3")
+      const segments = captionUrl.includes("fmt=json3")
         ? parseTranscriptJson3(JSON.parse(body) as unknown)
         : parseTranscriptXml(body);
+      if (segments.length === 0) throw requestFailedError(videoId, "caption response contained no transcript segments");
       return {
         videoId,
         segments,

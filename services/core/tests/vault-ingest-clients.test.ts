@@ -122,7 +122,7 @@ describe("YouTube transcript parsing and retrieval", () => {
         calls.push({ url, init });
         if (url.includes("watch")) {
           return new Response(
-            '<script>var ytInitialPlayerResponse = {"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[{"baseUrl":"https://captions.example/en","languageCode":"en"}]}}};</script>',
+            '<script>var ytInitialPlayerResponse = {"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[{"baseUrl":"https://captions.example/en?signature=abc&fmt=srv3","languageCode":"en"}]}}};</script>',
           );
         }
         return new Response('<transcript><text start="0" dur="1">Hello</text></transcript>');
@@ -136,7 +136,25 @@ describe("YouTube transcript parsing and retrieval", () => {
     });
     expect(calls).toHaveLength(2);
     expect(calls[0]?.init.dispatcher).toBe(dispatcher);
+    expect(calls[1]?.url).toBe("https://captions.example/en?signature=abc");
     expect(calls[1]?.init.dispatcher).toBe(dispatcher);
+  });
+
+  it("rejects caption responses without transcript segments", async () => {
+    const service = new YouTubeTranscriptService({
+      fetcher: async (url) => {
+        if (url.includes("watch")) {
+          return new Response(
+            '<script>var ytInitialPlayerResponse = {"captions":{"playerCaptionsTracklistRenderer":{"captionTracks":[{"baseUrl":"https://captions.example/en","languageCode":"en"}]}}};</script>',
+          );
+        }
+        return new Response("<transcript></transcript>");
+      },
+    });
+
+    await expect(service.fetchTranscript("dQw4w9WgXcQ")).rejects.toThrow(
+      "caption response contained no transcript segments",
+    );
   });
 });
 
