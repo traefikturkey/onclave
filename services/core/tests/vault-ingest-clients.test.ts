@@ -145,6 +145,31 @@ describe("YouTube transcript parsing and retrieval", () => {
     expect(calls[2]?.init.dispatcher).toBe(dispatcher);
   });
 
+  it("reuses an owned proxy dispatcher across sequential transcript fetches", async () => {
+    const service = new YouTubeTranscriptService({
+      proxy: { username: "test-user", password: "test-password" },
+      fetcher: async (url) => {
+        if (url.includes("watch")) {
+          return new Response('<script>var ytcfg = {"INNERTUBE_API_KEY":"test-key"};</script>');
+        }
+        if (url.includes("youtubei")) {
+          return responseJson({
+            playabilityStatus: { status: "OK" },
+            captions: { playerCaptionsTracklistRenderer: { captionTracks: [{ baseUrl: "https://captions.example/en", languageCode: "en" }] } },
+          });
+        }
+        return new Response('<transcript><text start="0" dur="1">Hello</text></transcript>');
+      },
+    });
+
+    try {
+      await expect(service.fetchTranscript("dQw4w9WgXcQ")).resolves.toMatchObject({ fullText: "Hello" });
+      await expect(service.fetchTranscript("dQw4w9WgXcQ")).resolves.toMatchObject({ fullText: "Hello" });
+    } finally {
+      await service.close();
+    }
+  });
+
   it("uses the Android player response instead of watch page caption data", async () => {
     const calls: FetchCall[] = [];
     const service = new YouTubeTranscriptService({

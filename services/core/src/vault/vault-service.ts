@@ -174,6 +174,7 @@ export async function createVaultService(
         await overrides.close();
         return;
       }
+      await transcript.close?.();
       if (pricing instanceof LLMPricingService) await pricing.stopScheduler();
       await embeddings.close();
       await llm?.close();

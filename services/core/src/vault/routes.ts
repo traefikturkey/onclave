@@ -48,6 +48,7 @@ export type VaultRepository = UsageStorage & {
 
 export type VaultTranscriptService = {
   fetchTranscript(videoId: string): Promise<YouTubeTranscript>;
+  close?(): Promise<void>;
 };
 
 export type VaultYouTubeMetadataService = {

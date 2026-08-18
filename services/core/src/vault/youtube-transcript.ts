@@ -272,6 +272,10 @@ export class YouTubeTranscriptService {
     return extractYouTubeVideoId(urlOrId);
   }
 
+  async close(): Promise<void> {
+    await this.ownedDispatcher?.close();
+  }
+
   async fetchTranscript(videoId: string, languages: readonly string[] = ["en"]): Promise<YouTubeTranscript> {
     const dispatcher = this.dispatcher ?? this.ownedDispatcher;
     try {
@@ -329,8 +333,6 @@ export class YouTubeTranscriptService {
       if (error instanceof TranscriptUpstreamUnavailable) throw error;
       if (error instanceof Error && isTranscriptContentError(error)) throw error;
       throw requestFailedError(videoId, error instanceof Error ? error.message : String(error));
-    } finally {
-      if (this.ownedDispatcher !== undefined) await this.ownedDispatcher.close();
     }
   }
 }
