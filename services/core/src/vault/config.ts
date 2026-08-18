@@ -1,4 +1,5 @@
 export type LlmProviderType = "ollama" | "openai" | "anthropic" | "openrouter" | "none";
+export type EmbeddingProviderType = "ollama" | "openrouter";
 export type RerankerProviderType = "rerankers" | "llm" | "none";
 
 export type VaultConfig = {
@@ -19,6 +20,8 @@ export type VaultConfig = {
   s3Region: string;
   ollamaUrl: string;
   ollamaModel: string;
+  embeddingProvider: EmbeddingProviderType;
+  embeddingModel: string;
   doclingUrl: string;
   sshPublicKeysPath: string;
   webshareProxyUsername: string;
@@ -95,6 +98,12 @@ function llmProvider(env: NodeJS.ProcessEnv, name: string, fallback: LlmProvider
   throw new Error(`invalid ${name}: ${result}`);
 }
 
+function embeddingProvider(env: NodeJS.ProcessEnv, name: string, fallback: EmbeddingProviderType): EmbeddingProviderType {
+  const result = optional(env, name) ?? fallback;
+  if (result === "ollama" || result === "openrouter") return result;
+  throw new Error(`invalid ${name}: ${result}`);
+}
+
 function rerankerProvider(env: NodeJS.ProcessEnv, name: string, fallback: RerankerProviderType): RerankerProviderType {
   const result = optional(env, name) ?? fallback;
   if (result === "rerankers" || result === "llm" || result === "none") return result;
@@ -107,6 +116,8 @@ export function loadVaultConfig(env: NodeJS.ProcessEnv = process.env): VaultConf
   if (postgresPoolMinSize > postgresPoolMaxSize) {
     throw new Error("POSTGRES_POOL_MIN_SIZE must not exceed POSTGRES_POOL_MAX_SIZE");
   }
+  const ollamaModel = optional(env, "OLLAMA_MODEL") ?? "mxbai-embed-large";
+  const configuredEmbeddingProvider = embeddingProvider(env, "EMBEDDING_PROVIDER", "ollama");
   return {
     apiBaseUrl: optional(env, "API_BASE_URL") ?? "http://localhost:8000",
     appVersion: optional(env, "APP_VERSION") ?? "0.1.0",
@@ -124,7 +135,9 @@ export function loadVaultConfig(env: NodeJS.ProcessEnv = process.env): VaultConf
     s3Bucket: optional(env, "S3_BUCKET") ?? "menos",
     s3Region: optional(env, "S3_REGION") ?? "us-east-1",
     ollamaUrl: optional(env, "OLLAMA_URL") ?? "http://localhost:11434",
-    ollamaModel: optional(env, "OLLAMA_MODEL") ?? "mxbai-embed-large",
+    ollamaModel,
+    embeddingProvider: configuredEmbeddingProvider,
+    embeddingModel: optional(env, "EMBEDDING_MODEL") ?? (configuredEmbeddingProvider === "openrouter" ? "intfloat/e5-large-v2" : ollamaModel),
     doclingUrl: optional(env, "DOCLING_URL") ?? "http://docling-serve:5001",
     sshPublicKeysPath: optional(env, "SSH_PUBLIC_KEYS_PATH") ?? "/keys",
     webshareProxyUsername: required(env, "WEBSHARE_PROXY_USERNAME"),

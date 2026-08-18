@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { EmbeddingService, type OllamaFetcher } from "../src/vault/embeddings";
+import { createEmbeddingService, EmbeddingService, OpenRouterEmbeddingService, type OllamaFetcher } from "../src/vault/embeddings";
 import { SearchService, type SearchStorage } from "../src/vault/search";
 import type { VectorSearchFilters } from "../src/vault/storage";
 
@@ -52,6 +52,58 @@ describe("Ollama embeddings", () => {
     });
 
     await expect(service.embed("document")).rejects.toThrow("Embedding generation failed: HTTP 503 Service Unavailable");
+  });
+});
+
+describe("OpenRouter embeddings", () => {
+  it("batches inputs and restores response index order", async () => {
+    const calls: FetchCall[] = [];
+    const fetcher: OllamaFetcher = async (url, init) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({
+        data: [
+          { index: 1, embedding: [0.3, 0.4] },
+          { index: 0, embedding: [0.1, 0.2] },
+        ],
+      }), { status: 200 });
+    };
+    const service = new OpenRouterEmbeddingService("openrouter-key", "intfloat/e5-large-v2", fetcher);
+
+    await expect(service.embedBatch(["first", "second"])).resolves.toEqual([[0.1, 0.2], [0.3, 0.4]]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe("https://openrouter.ai/api/v1/embeddings");
+    expect(calls[0]?.init?.method).toBe("POST");
+    expect(calls[0]?.init?.headers).toEqual({
+      authorization: "Bearer openrouter-key",
+      "content-type": "application/json",
+    });
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      model: "intfloat/e5-large-v2",
+      input: ["passage: first", "passage: second"],
+    });
+  });
+
+  it("uses the E5 query prefix for semantic search", async () => {
+    const calls: FetchCall[] = [];
+    const service = new OpenRouterEmbeddingService("openrouter-key", "intfloat/e5-large-v2", async (url, init) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ data: [{ index: 0, embedding: [0.1, 0.2] }] }), { status: 200 });
+    });
+
+    await expect(service.embedQuery("find notes")).resolves.toEqual([0.1, 0.2]);
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
+      model: "intfloat/e5-large-v2",
+      input: ["query: find notes"],
+    });
+  });
+
+  it("requires a key when selected by configuration", () => {
+    expect(() => createEmbeddingService({
+      embeddingProvider: "openrouter",
+      embeddingModel: "intfloat/e5-large-v2",
+      ollamaUrl: "http://ollama:11434",
+      openrouterApiKey: undefined,
+    })).toThrow("openrouter_api_key must be set when using openrouter embedding provider");
   });
 });
 

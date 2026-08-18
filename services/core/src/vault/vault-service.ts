@@ -1,7 +1,7 @@
 import { Client as MinioClient } from "minio";
 import type { Pool } from "pg";
 import { createVaultPool } from "./db";
-import { createEmbeddingService, type EmbeddingService } from "./embeddings";
+import { createEmbeddingService, type EmbeddingClient } from "./embeddings";
 import type { KeyStore } from "./keys";
 import { KeyStore as FileKeyStore } from "./keys";
 import { createConfiguredLlmProvider, providerName, type UsageReportingLlmProvider } from "./llm-providers";
@@ -53,7 +53,7 @@ export type VaultServiceOverrides = {
   keyStore?: KeyStore;
   storage?: VaultObjectStorage;
   repository?: VaultRuntimeRepository;
-  embeddings?: EmbeddingService;
+  embeddings?: EmbeddingClient;
   search?: SearchServiceType;
   jobs?: PipelineOrchestratorType;
   pricing?: LLMPricingService;

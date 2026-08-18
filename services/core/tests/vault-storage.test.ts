@@ -137,6 +137,37 @@ describe("vault storage repository", () => {
     await new PostgresRepository(client).delete_content("content-1");
     expect(client.calls).toEqual([{ text: "DELETE FROM content WHERE id = $1", values: ["content-1"] }]);
   });
+
+  it("atomically replaces content chunks", async () => {
+    const calls: Call[] = [];
+    let released = false;
+    const transaction = {
+      query: async (text: string, values?: unknown[]) => {
+        calls.push({ text, values });
+        return { rows: [], rowCount: 1 };
+      },
+      release: () => {
+        released = true;
+      },
+    };
+    const pool = {
+      query: async () => ({ rows: [], rowCount: 0 }),
+      connect: async () => transaction,
+    };
+    const embedding = Array.from({ length: 1024 }, () => 0.5);
+
+    await new PostgresRepository(pool).replace_content_chunks("content-1", [
+      { content_id: "content-1", text: "replacement", chunk_index: 0, embedding },
+    ]);
+
+    expect(calls.map((call) => call.text)).toEqual([
+      "BEGIN",
+      "DELETE FROM chunk WHERE content_id=$1",
+      "INSERT INTO chunk (id,content_id,text,chunk_index,embedding,created_at) VALUES ($1,$2,$3,$4,$5::vector,$6)",
+      "COMMIT",
+    ]);
+    expect(released).toBe(true);
+  });
 });
 
 describe("vault configuration", () => {
@@ -159,6 +190,19 @@ describe("vault configuration", () => {
   it("requires canonical vault secrets", () => {
     expect(() => loadVaultConfig({})).toThrow("ONCLAVE_VAULT_POSTGRES_PASSWORD is required");
     expect(() => loadVaultConfig(configuredEnv({ ONCLAVE_VAULT_POSTGRES_PASSWORD: undefined, MENOS_POSTGRES_PASSWORD: "menos-password", POSTGRES_PASSWORD: "legacy-password" }))).toThrow("ONCLAVE_VAULT_POSTGRES_PASSWORD is required");
+  });
+
+  it("configures the embedding provider and model", () => {
+    const defaults = loadVaultConfig(configuredEnv());
+    expect(defaults.embeddingProvider).toBe("ollama");
+    expect(defaults.embeddingModel).toBe("mxbai-embed-large");
+
+    const openrouter = loadVaultConfig(configuredEnv({
+      ONCLAVE_VAULT_EMBEDDING_PROVIDER: "openrouter",
+      ONCLAVE_VAULT_EMBEDDING_MODEL: "intfloat/e5-large-v2",
+    }));
+    expect(openrouter.embeddingProvider).toBe("openrouter");
+    expect(openrouter.embeddingModel).toBe("intfloat/e5-large-v2");
   });
 
   it("uses the canonical pipeline version", () => {

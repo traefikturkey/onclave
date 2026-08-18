@@ -291,6 +291,29 @@ export class PostgresRepository {
   async get_chunk_counts(contentIds: string[]): Promise<Record<string, number>> { if (contentIds.length === 0) return {}; return Object.fromEntries((await this.database.query("SELECT content_id,count(*) AS count FROM chunk WHERE content_id = ANY($1) GROUP BY content_id", [contentIds])).rows.map((row) => [String(row.content_id), numberValue(row.count)])); }
   async delete_chunks(contentId: string): Promise<void> { await this.database.query("DELETE FROM chunk WHERE content_id=$1", [contentId]); }
 
+  async replace_content_chunks(contentId: string, chunks: ChunkModel[]): Promise<void> {
+    if (chunks.length === 0) throw new Error("reindexed content requires at least one chunk");
+    const pool = this.database as TransactionPool;
+    if (typeof pool.connect !== "function") throw new Error("database does not support transactions");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("DELETE FROM chunk WHERE content_id=$1", [contentId]);
+      const now = new Date();
+      for (const chunk of chunks) {
+        chunk.id ??= newId();
+        chunk.created_at ??= now;
+        await client.query("INSERT INTO chunk (id,content_id,text,chunk_index,embedding,created_at) VALUES ($1,$2,$3,$4,$5::vector,$6)", [chunk.id, contentId, chunk.text, chunk.chunk_index, vectorLiteral(chunk.embedding ?? []), chunk.created_at]);
+      }
+      await client.query("COMMIT");
+    } catch (error: unknown) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async vector_search(embedding: number[], limit: number, filters: VectorSearchFilters = {}): Promise<Row[]> {
     if (limit < 1 || limit > 1000) throw new Error("invalid search limit");
     const unexpected = Object.keys(filters).find((key) => !["content_type", "tags", "exclude_tags", "valid_tiers", "minimum_score"].includes(key));
