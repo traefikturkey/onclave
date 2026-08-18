@@ -15,9 +15,10 @@ function errorMessage(error: unknown): string {
 
 function embeddingFromResponse(value: unknown): number[] {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return [];
-  const embedding = (value as Record<string, unknown>).embedding;
-  if (!Array.isArray(embedding) || !embedding.every((item) => typeof item === "number")) return [];
-  return embedding;
+  const embeddings = (value as Record<string, unknown>).embeddings;
+  if (!Array.isArray(embeddings) || !Array.isArray(embeddings[0])) return [];
+  const embedding = embeddings[0];
+  return embedding.every((item) => typeof item === "number") ? embedding : [];
 }
 
 export class EmbeddingService {
@@ -39,10 +40,10 @@ export class EmbeddingService {
     try {
       let response: Response;
       try {
-        response = await this.fetcher(new URL("/api/embeddings", this.baseUrl).toString(), {
+        response = await this.fetcher(new URL("/api/embed", this.baseUrl).toString(), {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ model: this.model, prompt: text }),
+          body: JSON.stringify({ model: this.model, input: text, truncate: true }),
           signal: controller.signal,
         });
         if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`.trim());

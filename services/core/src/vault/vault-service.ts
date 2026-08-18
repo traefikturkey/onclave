@@ -28,6 +28,8 @@ import type { PipelineOrchestrator as PipelineOrchestratorType } from "./jobs";
 import type { SearchService as SearchServiceType } from "./search";
 import type { UsagePricingService } from "./usage";
 
+const EMBEDDING_CHUNK_CODE_POINTS = 400;
+
 type VaultUsageStorage = { record_llm_usage(usage: LlmUsage): Promise<void> };
 type VaultRuntimeRepository = VaultRepository & PricingSnapshotStorage & SearchStorage & VaultUsageStorage & PipelineStorage & JobStorage;
 
@@ -66,12 +68,13 @@ function errorValue(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function chunkText(text: string): string[] {
+export function chunkText(text: string): string[] {
   const normalized = text.trim();
   if (normalized === "") return [];
+  const codePoints = [...normalized];
   const chunks: string[] = [];
-  for (let offset = 0; offset < normalized.length; offset += 2000) {
-    chunks.push(normalized.slice(offset, offset + 2000));
+  for (let offset = 0; offset < codePoints.length; offset += EMBEDDING_CHUNK_CODE_POINTS) {
+    chunks.push(codePoints.slice(offset, offset + EMBEDDING_CHUNK_CODE_POINTS).join(""));
   }
   return chunks;
 }

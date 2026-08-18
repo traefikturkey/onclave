@@ -30,18 +30,19 @@ describe("Ollama embeddings", () => {
     const calls: FetchCall[] = [];
     const fetcher: OllamaFetcher = async (url, init) => {
       calls.push({ url, init });
-      return new Response(JSON.stringify({ embedding: [0.25, -0.5] }), { status: 200 });
+      return new Response(JSON.stringify({ embeddings: [[0.25, -0.5]] }), { status: 200 });
     };
     const service = new EmbeddingService("http://ollama:11434/", "mxbai-embed-large", fetcher);
 
     await expect(service.embedQuery("find notes")).resolves.toEqual([0.25, -0.5]);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.url).toBe("http://ollama:11434/api/embeddings");
+    expect(calls[0]?.url).toBe("http://ollama:11434/api/embed");
     expect(calls[0]?.init?.method).toBe("POST");
     expect(calls[0]?.init?.headers).toEqual({ "content-type": "application/json" });
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({
       model: "mxbai-embed-large",
-      prompt: "Represent this sentence for searching relevant passages: find notes",
+      input: "Represent this sentence for searching relevant passages: find notes",
+      truncate: true,
     });
   });
 

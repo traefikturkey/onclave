@@ -6,6 +6,17 @@ import { LLMPricingService, type PricingSnapshotStorage } from "../src/vault/llm
 import type { LlmGenerationOptions, LlmProvider } from "../src/vault/llm-providers";
 import { EdgeType, EntityType, JobStatus, type ChunkModel, type ContentEntityEdge, type ContentMetadata, type EntityModel, type JsonObject, type PipelineJob } from "../src/vault/models";
 import { UnifiedPipeline, type PipelineConfig, type PipelineEmbeddingService, type PipelineStorage } from "../src/vault/pipeline";
+import { chunkText } from "../src/vault/vault-service";
+
+describe("vault transcript chunking", () => {
+  it("preserves text while limiting chunks to 400 Unicode code points", () => {
+    const text = `${"a".repeat(399)}😀${"b".repeat(401)}`;
+    const chunks = chunkText(`\n${text}\n`);
+
+    expect(chunks.map((chunk) => [...chunk].length)).toEqual([400, 400, 1]);
+    expect(chunks.join("")).toBe(text);
+  });
+});
 
 const response = JSON.stringify({
   tags: ["typescript"],
