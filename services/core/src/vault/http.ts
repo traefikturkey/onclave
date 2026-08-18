@@ -85,6 +85,12 @@ export const VAULT_ROUTE_TABLE = [
     path: "/api/v1/content/{content_id}/reprocess",
     public: false,
   },
+  {
+    name: "contentEmbeddingsReindex",
+    method: "POST",
+    path: "/api/v1/content/{content_id}/reindex-embeddings",
+    public: false,
+  },
   { name: "ingest", method: "POST", path: "/api/v1/ingest", public: false },
   { name: "jobsList", method: "GET", path: "/api/v1/jobs", public: false },
   { name: "jobDetail", method: "GET", path: "/api/v1/jobs/{job_id}", public: false },

@@ -303,8 +303,18 @@ export class PostgresRepository {
       for (const chunk of chunks) {
         chunk.id ??= newId();
         chunk.created_at ??= now;
-        await client.query("INSERT INTO chunk (id,content_id,text,chunk_index,embedding,created_at) VALUES ($1,$2,$3,$4,$5::vector,$6)", [chunk.id, contentId, chunk.text, chunk.chunk_index, vectorLiteral(chunk.embedding ?? []), chunk.created_at]);
       }
+      await client.query(
+        "INSERT INTO chunk (id,content_id,text,chunk_index,embedding,created_at)\n            SELECT item.id,$1,item.text,item.chunk_index,item.embedding::vector,item.created_at\n            FROM unnest($2::text[],$3::text[],$4::integer[],$5::text[],$6::timestamptz[])\n            AS item(id,text,chunk_index,embedding,created_at)",
+        [
+          contentId,
+          chunks.map((chunk) => chunk.id as string),
+          chunks.map((chunk) => chunk.text),
+          chunks.map((chunk) => chunk.chunk_index),
+          chunks.map((chunk) => vectorLiteral(chunk.embedding ?? [])),
+          chunks.map((chunk) => chunk.created_at as Date),
+        ],
+      );
       await client.query("COMMIT");
     } catch (error: unknown) {
       await client.query("ROLLBACK");

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import { HttpError } from "./errors";
+import type { VaultEmbeddingReindexer } from "./embedding-reindex";
 import type { KeyStore } from "./keys";
 import { EntityType, JobStatus, type ChunkModel, type ContentEntityEdge, type ContentMetadata, type EntityModel, type JsonObject, type JsonValue } from "./models";
 import type { PipelineOrchestrator } from "./jobs";
@@ -70,6 +71,7 @@ export type VaultRouteDependencies = {
   transcript: VaultTranscriptService;
   youtube: VaultYouTubeMetadataService;
   docling: VaultDoclingClient;
+  embeddingReindexer: VaultEmbeddingReindexer;
   health: () => Record<string, unknown> | Promise<Record<string, unknown>>;
   ready: () => Promise<Record<string, unknown>>;
 };
@@ -463,6 +465,17 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
       }
       const job = await deps.jobs.reprocess({ contentId: id, contentText });
       return jsonResponse({ content_id: id, status: "submitted", job_id: job?.id ?? null });
+    },
+    contentEmbeddingsReindex: async (request) => {
+      const id = request.params.content_id ?? "";
+      const content = await deps.repository.get_content(id);
+      if (content === undefined) throw new HttpError(404, "Content not found");
+      try {
+        const result = await deps.embeddingReindexer.reindex(content);
+        return jsonResponse({ content_id: id, status: "completed", ...result });
+      } catch (error) {
+        throw new HttpError(500, `Embedding reindex failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
     },
     ingest: async (request) => {
       const body = parseJsonObject(request.body);

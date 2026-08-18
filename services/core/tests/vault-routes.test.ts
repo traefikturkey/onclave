@@ -186,6 +186,7 @@ describe("vault routes", () => {
         async fetchChannelVideosResponse(): Promise<{ source: "youtube-data-api-v3"; videos: [] }> { return { source: "youtube-data-api-v3", videos: [] }; },
       },
       docling: { async extractMarkdown(): Promise<{ markdown: string; title: string }> { return { markdown: "# Page\nBody", title: "Page" }; } },
+      embeddingReindexer: { async reindex(): Promise<{ chunk_count: number; model: string }> { return { chunk_count: 1, model: "test-embedding" }; } },
       readiness: { async postgres(): Promise<void> {}, async s3(): Promise<void> {}, async ollama(): Promise<void> {} },
     };
     const vault = await createVaultService(vaultConfig(keysPath), overrides);
@@ -250,6 +251,10 @@ describe("vault routes", () => {
     });
     expect((await request("/api/v1/content/missing/reprocess", "POST")).status).toBe(404);
     await expect((await request("/api/v1/content/video-1/reprocess", "POST")).json()).resolves.toMatchObject({ status: "already_completed" });
+    expect((await request("/api/v1/content/missing/reindex-embeddings", "POST")).status).toBe(404);
+    await expect((await request("/api/v1/content/video-1/reindex-embeddings", "POST")).json()).resolves.toEqual({
+      content_id: "video-1", status: "completed", chunk_count: 1, model: "test-embedding",
+    });
     await expect((await request("/api/v1/search", "POST", { query: "existing", limit: 1 })).json()).resolves.toMatchObject({ total: 1, results: [{ snippet: "existing transcript" }] });
     await expect((await request("/api/v1/youtube/channel?channel=@example")).json()).resolves.toEqual({ source: "youtube-data-api-v3", videos: [] });
     await expect((await request("/api/v1/auth/whoami")).json()).resolves.toEqual({ key_id: key.keyId });

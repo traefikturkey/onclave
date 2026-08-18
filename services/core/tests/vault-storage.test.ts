@@ -163,9 +163,12 @@ describe("vault storage repository", () => {
     expect(calls.map((call) => call.text)).toEqual([
       "BEGIN",
       "DELETE FROM chunk WHERE content_id=$1",
-      "INSERT INTO chunk (id,content_id,text,chunk_index,embedding,created_at) VALUES ($1,$2,$3,$4,$5::vector,$6)",
+      "INSERT INTO chunk (id,content_id,text,chunk_index,embedding,created_at)\n            SELECT item.id,$1,item.text,item.chunk_index,item.embedding::vector,item.created_at\n            FROM unnest($2::text[],$3::text[],$4::integer[],$5::text[],$6::timestamptz[])\n            AS item(id,text,chunk_index,embedding,created_at)",
       "COMMIT",
     ]);
+    expect(calls[2]?.values?.[0]).toBe("content-1");
+    expect(calls[2]?.values?.[2]).toEqual(["replacement"]);
+    expect(calls[2]?.values?.[3]).toEqual([0]);
     expect(released).toBe(true);
   });
 });

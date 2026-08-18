@@ -1,6 +1,7 @@
 import { Client as MinioClient } from "minio";
 import type { Pool } from "pg";
 import { createVaultPool } from "./db";
+import { EmbeddingReindexService, type VaultEmbeddingReindexer } from "./embedding-reindex";
 import { createEmbeddingService, type EmbeddingClient } from "./embeddings";
 import type { KeyStore } from "./keys";
 import { KeyStore as FileKeyStore } from "./keys";
@@ -15,7 +16,7 @@ import { YouTubeTranscriptService } from "./youtube-transcript";
 import { YouTubeMetadataService } from "./youtube-metadata";
 import { DoclingClient } from "./docling";
 import type { VaultConfig } from "./config";
-import type { LlmUsage } from "./models";
+import type { ChunkModel, LlmUsage } from "./models";
 import type {
   VaultDoclingClient,
   VaultObjectStorage,
@@ -31,7 +32,9 @@ import type { UsagePricingService } from "./usage";
 const EMBEDDING_CHUNK_CODE_POINTS = 400;
 
 type VaultUsageStorage = { record_llm_usage(usage: LlmUsage): Promise<void> };
-type VaultRuntimeRepository = VaultRepository & PricingSnapshotStorage & SearchStorage & VaultUsageStorage & PipelineStorage & JobStorage;
+type VaultRuntimeRepository = VaultRepository & PricingSnapshotStorage & SearchStorage & VaultUsageStorage & PipelineStorage & JobStorage & {
+  replace_content_chunks(contentId: string, chunks: ChunkModel[]): Promise<void>;
+};
 
 export type VaultReadiness = {
   status: "ready" | "degraded";
@@ -60,6 +63,7 @@ export type VaultServiceOverrides = {
   transcript?: VaultTranscriptService;
   youtube?: VaultYouTubeMetadataService;
   docling?: VaultDoclingClient;
+  embeddingReindexer?: VaultEmbeddingReindexer;
   readiness?: VaultReadinessChecks;
   close?: () => Promise<void>;
 };
@@ -138,6 +142,13 @@ export async function createVaultService(
   const pricing = overrides.pricing ?? new LLMPricingService(repository);
   if (overrides.pricing === undefined) await (pricing as LLMPricingService).initialize();
   const embeddings = overrides.embeddings ?? createEmbeddingService(config);
+  const embeddingReindexer = overrides.embeddingReindexer ?? new EmbeddingReindexService(
+    storage,
+    repository,
+    embeddings,
+    config.embeddingModel,
+    chunkText,
+  );
   const search = overrides.search ?? new SearchService(embeddings, repository);
   let llm: UsageReportingLlmProvider | undefined;
   let jobs = overrides.jobs;
@@ -171,6 +182,7 @@ export async function createVaultService(
     transcript,
     youtube,
     docling,
+    embeddingReindexer,
     ready: async (): Promise<VaultReadiness> => readinessResult(readiness),
     close: async (): Promise<void> => {
       if (overrides.close !== undefined) {
