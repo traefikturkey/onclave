@@ -142,9 +142,33 @@ describe("vault routes", () => {
       async create_pipeline_job(job: PipelineJob): Promise<PipelineJob> { if (job.id === undefined) throw new Error("job ID is required"); pipelineJobs.set(job.id, { ...job }); return pipelineJobs.get(job.id) ?? job; },
       async get_pipeline_job(id: string): Promise<PipelineJob | undefined> { return pipelineJobs.get(id); },
       async find_active_pipeline_job(resourceKey: string): Promise<PipelineJob | undefined> { return [...pipelineJobs.values()].find((job) => job.resource_key === resourceKey && (job.status === JobStatus.PENDING || job.status === JobStatus.PROCESSING)); },
+      async add_pipeline_job_subscriber(id: string, subscriberId: string): Promise<PipelineJob | undefined> {
+        const job = pipelineJobs.get(id);
+        if (job === undefined || ![JobStatus.PENDING, JobStatus.PROCESSING].includes(job.status ?? JobStatus.PENDING)) return undefined;
+        const subscribers = Array.isArray(job.metadata?.notify_agent_ids) ? job.metadata.notify_agent_ids.filter((value): value is string => typeof value === "string") : [];
+        const updated = { ...job, metadata: { ...job.metadata, notify_agent_ids: [...new Set([...subscribers, subscriberId])] } };
+        pipelineJobs.set(id, updated);
+        return updated;
+      },
+      async transition_pipeline_job_stage(id: string, stage: "context_fetch" | "llm_call" | "parse" | "chunking" | "embedding" | "persist", status: "pending" | "processing" | "completed" | "failed" | "skipped"): Promise<PipelineJob | undefined> {
+        const job = pipelineJobs.get(id);
+        if (job === undefined) return undefined;
+        const stages = job.stages ?? { context_fetch: { status: "pending" }, llm_call: { status: "pending" }, parse: { status: "pending" }, chunking: { status: "pending" }, embedding: { status: "pending" }, persist: { status: "pending" } };
+        const nextStages = { ...stages, [stage]: { ...stages[stage], status } };
+        const updated = { ...job, stages: nextStages, metadata: { ...job.metadata, stages: nextStages } };
+        pipelineJobs.set(id, updated);
+        return updated;
+      },
       async update_pipeline_job(id: string, status: JobStatus, timing: JobTiming, errors: JobErrors): Promise<PipelineJob | undefined> {
         const job = pipelineJobs.get(id);
         if (job === undefined) return undefined;
+        const updated = { ...job, status, started_at: timing[0] ?? job.started_at, finished_at: timing[1] ?? job.finished_at, error_code: errors[0] ?? job.error_code, error_message: errors[1] ?? job.error_message, error_stage: errors[2] ?? job.error_stage };
+        pipelineJobs.set(id, updated);
+        return updated;
+      },
+      async transition_pipeline_job_terminal(id: string, status: JobStatus, timing: JobTiming, errors: JobErrors, expectedStatuses: readonly JobStatus[]): Promise<PipelineJob | undefined> {
+        const job = pipelineJobs.get(id);
+        if (job === undefined || !expectedStatuses.includes(job.status ?? JobStatus.PENDING)) return undefined;
         const updated = { ...job, status, started_at: timing[0] ?? job.started_at, finished_at: timing[1] ?? job.finished_at, error_code: errors[0] ?? job.error_code, error_message: errors[1] ?? job.error_message, error_stage: errors[2] ?? job.error_stage };
         pipelineJobs.set(id, updated);
         return updated;
@@ -166,6 +190,7 @@ describe("vault routes", () => {
       async generate(): Promise<string> {
         return JSON.stringify({
           tags: ["typescript"], tier: "A", quality_score: 82, summary: "A concise summary.",
+          structured_summary: { version: 1, overview: "A concise overview.", key_points: ["Point one", "Point two"] },
           topics: [{ name: "Engineering > TypeScript", confidence: "high", edge_type: "discusses" }],
           pre_detected_validations: [],
           additional_entities: [{ type: "tool", name: "Vitest", confidence: "medium", edge_type: "mentions" }],
@@ -239,9 +264,13 @@ describe("vault routes", () => {
     expect(typeof ingest.job_id).toBe("string");
     if (typeof ingest.job_id !== "string" || typeof ingest.content_id !== "string") throw new Error("ingest did not return content and job IDs");
     await jobs.waitForIdle();
-    await expect((await request(`/api/v1/jobs/${ingest.job_id}`)).json()).resolves.toMatchObject({ status: "completed" });
+    await expect((await request(`/api/v1/jobs/${ingest.job_id}`)).json()).resolves.toMatchObject({
+      status: "completed",
+      stages: { context_fetch: { status: "completed" }, llm_call: { status: "completed" }, parse: { status: "completed" }, chunking: { status: "completed" }, embedding: { status: "completed" }, persist: { status: "completed" } },
+    });
     await expect((await request(`/api/v1/content/${ingest.content_id}`)).json()).resolves.toMatchObject({
       summary: "A concise summary.",
+      structured_summary: { version: 1, overview: "A concise overview.", key_points: ["Point one", "Point two"] },
       topics: ["TypeScript"],
       entities: ["Vitest"],
     });
@@ -249,6 +278,7 @@ describe("vault routes", () => {
       topics: ["TypeScript"],
       entities: ["Vitest"],
     });
+    await expect((await request("/api/v1/content/video-1")).json()).resolves.not.toHaveProperty("structured_summary");
     expect((await request("/api/v1/content/missing/reprocess", "POST")).status).toBe(404);
     await expect((await request("/api/v1/content/video-1/reprocess", "POST")).json()).resolves.toMatchObject({ status: "already_completed" });
     expect((await request("/api/v1/content/missing/reindex-embeddings", "POST")).status).toBe(404);

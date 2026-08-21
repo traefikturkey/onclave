@@ -10,9 +10,11 @@ import type {
   JsonValue,
   PipelineJob,
   PreDetectedValidation,
+  StructuredSummary,
   UnifiedResult,
 } from "./models";
 import { EdgeType, EntityType as EntityTypes } from "./models";
+import { PIPELINE_STAGES, type PipelineStage, type PipelineStageStatus } from "./job-stages";
 import type { LlmProvider } from "./llm-providers";
 
 const VALID_TIERS = new Set(["S", "A", "B", "C", "D"]);
@@ -56,7 +58,8 @@ Aim for a balanced distribution. Most content should be B or C tier.
 - Provide brief explanations (2-3 bullet points each)
 
 ### Summary
-- Generate a summary: a 2-3 sentence overview followed by 3-5 bullet points of main topics
+- Generate the legacy scalar summary as a 2-3 sentence overview followed by 3-5 bullet points of main topics
+- Also generate structured_summary using version 1 with a concise overview and 3-5 key points
 
 ### Topics
 - Extract 3-7 hierarchical topics
@@ -84,6 +87,11 @@ Respond ONLY with valid JSON (no markdown, no code blocks):
   "quality_score": 55,
   "score_explanation": ["Reason 1", "Reason 2"],
   "summary": "2-3 sentence overview.\\n\\n- Bullet 1\\n- Bullet 2",
+  "structured_summary": {
+    "version": 1,
+    "overview": "2-3 sentence overview.",
+    "key_points": ["Bullet 1", "Bullet 2", "Bullet 3"]
+  },
   "topics": [
     {"name": "AI > LLMs > RAG", "confidence": "high", "edge_type": "discusses"}
   ],
@@ -136,6 +144,7 @@ export type PipelineRequest = {
 };
 
 export type PipelineStorage = {
+  transition_pipeline_job_stage?(jobId: string, stage: PipelineStage, status: PipelineStageStatus, timing: readonly [Date | null | undefined, Date | null | undefined], errors: readonly [string | null | undefined, string | null | undefined], expectedStatuses: readonly PipelineStageStatus[]): Promise<unknown>;
   list_tags_with_counts(): Promise<readonly Record<string, unknown>[]>;
   get_topic_hierarchy(): Promise<readonly EntityModel[]>;
   get_tag_cooccurrence(): Promise<Record<string, string[]>>;
@@ -264,6 +273,18 @@ function explanations(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string | number | boolean => Boolean(item) && (typeof item === "string" || typeof item === "number" || typeof item === "boolean")).map(String) : [];
 }
 
+function structuredSummary(value: unknown): StructuredSummary | undefined {
+  const summary = record(value);
+  if (summary === undefined || (summary.version !== 1 && summary.version !== "1") || typeof summary.overview !== "string" || !Array.isArray(summary.key_points)) return undefined;
+  const overview = summary.overview.trim();
+  const keyPoints = summary.key_points
+    .filter((point): point is string => typeof point === "string")
+    .map((point) => point.trim())
+    .filter((point) => point !== "");
+  if (overview === "" || keyPoints.length === 0) return undefined;
+  return { version: 1, overview, key_points: keyPoints };
+}
+
 function extractJson(response: string): JsonObject | undefined {
   const cleaned = response.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
   const candidates = [
@@ -389,17 +410,43 @@ export class UnifiedPipeline {
     }
   }
 
+  private async updateStage(request: PipelineRequest, stage: PipelineStage, status: PipelineStageStatus, timing: readonly [Date | null | undefined, Date | null | undefined] = [undefined, undefined], errors: readonly [string | null | undefined, string | null | undefined] = [undefined, undefined]): Promise<void> {
+    if (request.jobId === undefined || this.storage.transition_pipeline_job_stage === undefined) return;
+    const expected: readonly PipelineStageStatus[] = status === "processing" ? ["pending"] : status === "skipped" ? ["pending"] : ["processing"];
+    await this.storage.transition_pipeline_job_stage(request.jobId, stage, status, timing, errors, expected);
+  }
+
+  private async skipAfter(request: PipelineRequest, stage: PipelineStage): Promise<void> {
+    const index = PIPELINE_STAGES.indexOf(stage);
+    for (const skipped of PIPELINE_STAGES.slice(index + 1)) await this.updateStage(request, skipped, "skipped", [undefined, new Date()]);
+  }
+
+  private async runStage<T>(request: PipelineRequest, stage: PipelineStage, operation: () => Promise<T>): Promise<T> {
+    await this.updateStage(request, stage, "processing", [new Date(), undefined]);
+    try {
+      const result = await operation();
+      await this.updateStage(request, stage, "completed", [undefined, new Date()]);
+      return result;
+    } catch (error: unknown) {
+      const failure = error instanceof PipelineStageError ? error : undefined;
+      await this.updateStage(request, stage, "failed", [undefined, new Date()], [failure?.code ?? "PIPELINE_EXCEPTION", (failure?.message ?? errorMessage(error)).slice(0, 500)]);
+      await this.skipAfter(request, stage);
+      throw error;
+    }
+  }
+
   private async process(request: PipelineRequest): Promise<PipelineRunResult> {
-    const context = await this.fetchContext(request.existingTopics);
+    const context = await this.runStage(request, "context_fetch", () => this.fetchContext(request.existingTopics));
     const provider = request.jobId === undefined || this.llm.withContext === undefined ? this.llm : this.llm.withContext(`pipeline:${request.jobId}`);
     const prompt = this.buildPrompt(request, context);
-    let response: string;
-    try {
-      response = await provider.generate(prompt, { temperature: 0.3, maxTokens: 3000, timeout: 120 });
-    } catch (error: unknown) {
-      throw new PipelineStageError("llm_call", "LLM_CALL_ERROR", errorMessage(error).slice(0, 500));
-    }
-    const parsed = await this.parseResponse(provider, response, context.existingTags);
+    const response = await this.runStage(request, "llm_call", async () => {
+      try {
+        return await provider.generate(prompt, { temperature: 0.3, maxTokens: 3000, timeout: 120 });
+      } catch (error: unknown) {
+        throw new PipelineStageError("llm_call", "LLM_CALL_ERROR", errorMessage(error).slice(0, 500));
+      }
+    });
+    const parsed = await this.runStage(request, "parse", () => this.parseResponse(provider, response, context.existingTags));
     const result = parsed.result;
     result.model = provider.model;
     result.processed_at = new Date().toISOString();
@@ -470,7 +517,7 @@ export class UnifiedPipeline {
 
     let corrected: { result: UnifiedResult; aliasMappings: [string, string][] } | undefined;
     try {
-      const correction = `Repair the previous response into the complete canonical JSON schema below. Preserve all correct fields from the previous response. Respond ONLY with valid JSON, no markdown or explanation.\n{"tags":["tag"],"new_tags":["tag"],"tier":"B","tier_explanation":["reason"],"quality_score":50,"score_explanation":["reason"],"summary":"summary","topics":[{"name":"Parent > Child","confidence":"high","edge_type":"discusses"}],"pre_detected_validations":[{"entity_id":"entity:id","edge_type":"mentions","confirmed":true}],"additional_entities":[{"type":"tool","name":"name","confidence":"medium","edge_type":"mentions"}]}\n"topics" must contain 3-7 objects with name, confidence, and edge_type. "additional_entities" must be an array but may be empty.\n\nPrevious response:\n${response.slice(0, 3000)}`;
+      const correction = `Repair the previous response into the complete canonical JSON schema below. Preserve all correct fields from the previous response. Respond ONLY with valid JSON, no markdown or explanation.\n{"tags":["tag"],"new_tags":["tag"],"tier":"B","tier_explanation":["reason"],"quality_score":50,"score_explanation":["reason"],"summary":"summary","structured_summary":{"version":1,"overview":"overview","key_points":["point 1","point 2","point 3"]},"topics":[{"name":"Parent > Child","confidence":"high","edge_type":"discusses"}],"pre_detected_validations":[{"entity_id":"entity:id","edge_type":"mentions","confirmed":true}],"additional_entities":[{"type":"tool","name":"name","confidence":"medium","edge_type":"mentions"}]}\n"structured_summary" is optional for legacy compatibility. When present, it must have version 1, an overview, and a key_points array. "topics" must contain 3-7 objects with name, confidence, and edge_type. "additional_entities" must be an array but may be empty.\n\nPrevious response:\n${response.slice(0, 3000)}`;
       corrected = this.parseUnifiedResponse(extractJson(await provider.generate(correction, { temperature: 0.1, maxTokens: 3000, timeout: 60 })), existingTags);
     } catch {
       corrected = undefined;
@@ -483,7 +530,7 @@ export class UnifiedPipeline {
 
   private parseUnifiedResponse(data: JsonObject | undefined, existingTags: string[]): { result: UnifiedResult; aliasMappings: [string, string][] } | undefined {
     if (data === undefined) return undefined;
-    const recognized = ["tags", "new_tags", "tier", "quality_score", "topics", "pre_detected_validations", "additional_entities", "summary"];
+    const recognized = ["tags", "new_tags", "tier", "quality_score", "topics", "pre_detected_validations", "additional_entities", "summary", "structured_summary"];
     if (!recognized.some((field) => field in data)) return undefined;
     const aliases: [string, string][] = [];
     const tags = validLabels(data.tags);
@@ -510,6 +557,7 @@ export class UnifiedPipeline {
       quality_score: score,
       score_explanation: explanations(data.score_explanation),
       summary: typeof data.summary === "string" ? data.summary : "",
+      structured_summary: structuredSummary(data.structured_summary),
       topics: this.parseTopics(data.topics),
       pre_detected_validations: this.parseValidations(data.pre_detected_validations),
       additional_entities: this.parseAdditionalEntities(data.additional_entities),
@@ -553,20 +601,28 @@ export class UnifiedPipeline {
   }
 
   private async persist(request: PipelineRequest, output: PipelineRunResult): Promise<void> {
-    const chunkTexts = this.chunking.chunkText(request.contentText);
-    if (chunkTexts.length === 0) throw new PipelineStageError("chunking", "CHUNKING_EMPTY", "Content produced no chunks");
-    let embeddings: number[][];
-    try {
-      embeddings = await this.embeddings.embedBatch(chunkTexts);
-    } catch (error: unknown) {
-      throw new PipelineStageError("embedding", "EMBEDDING_ERROR", errorMessage(error));
-    }
-    if (embeddings.length !== chunkTexts.length || embeddings.some((embedding) => embedding.length !== 1024)) {
-      throw new PipelineStageError("embedding", "EMBEDDING_DIMENSION_ERROR", "Embedding output did not match the chunk count and required dimension");
-    }
-    const chunks = chunkTexts.map((text, chunkIndex) => ({ content_id: request.contentId, text, chunk_index: chunkIndex, embedding: embeddings[chunkIndex] }));
-    const relationships = await this.resolveRelationships(request.contentId, output.result);
-    await this.storage.complete_content_processing(request.contentId, output.resultJson, request.pipelineVersion, chunks, relationships);
+    const chunkTexts = await this.runStage(request, "chunking", async () => {
+      const chunks = this.chunking.chunkText(request.contentText);
+      if (chunks.length === 0) throw new PipelineStageError("chunking", "CHUNKING_EMPTY", "Content produced no chunks");
+      return chunks;
+    });
+    const embeddings = await this.runStage(request, "embedding", async () => {
+      let result: number[][];
+      try {
+        result = await this.embeddings.embedBatch(chunkTexts);
+      } catch (error: unknown) {
+        throw new PipelineStageError("embedding", "EMBEDDING_ERROR", errorMessage(error));
+      }
+      if (result.length !== chunkTexts.length || result.some((embedding) => embedding.length !== 1024)) {
+        throw new PipelineStageError("embedding", "EMBEDDING_DIMENSION_ERROR", "Embedding output did not match the chunk count and required dimension");
+      }
+      return result;
+    });
+    await this.runStage(request, "persist", async () => {
+      const chunks = chunkTexts.map((text, chunkIndex) => ({ content_id: request.contentId, text, chunk_index: chunkIndex, embedding: embeddings[chunkIndex] }));
+      const relationships = await this.resolveRelationships(request.contentId, output.result);
+      await this.storage.complete_content_processing(request.contentId, output.resultJson, request.pipelineVersion, chunks, relationships);
+    });
   }
 
   private async resolveRelationships(contentId: string, result: UnifiedResult): Promise<ContentEntityEdge[]> {
@@ -594,6 +650,13 @@ export class UnifiedPipeline {
       quality_score: result.quality_score ?? 0,
       score_explanation: result.score_explanation ?? [],
       summary: result.summary ?? "",
+      ...(result.structured_summary === undefined ? {} : {
+        structured_summary: {
+          version: 1,
+          overview: result.structured_summary.overview,
+          key_points: [...result.structured_summary.key_points],
+        },
+      }),
       topics: (result.topics ?? []).map((topic) => ({ entity_type: topic.entity_type, name: topic.name, confidence: topic.confidence, edge_type: topic.edge_type, hierarchy: topic.hierarchy ?? null })),
       pre_detected_validations: (result.pre_detected_validations ?? []).map((validation) => ({ entity_id: validation.entity_id, edge_type: validation.edge_type, confirmed: validation.confirmed })),
       additional_entities: (result.additional_entities ?? []).map((entity) => ({ entity_type: entity.entity_type, name: entity.name, confidence: entity.confidence, edge_type: entity.edge_type, hierarchy: entity.hierarchy ?? null })),

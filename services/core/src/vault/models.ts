@@ -34,6 +34,8 @@ export enum DataTier {
   FULL = "full",
 }
 
+import type { PipelineStages } from "./job-stages";
+
 export type JsonPrimitive = boolean | number | string | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 export type JsonObject = { [key: string]: JsonValue };
@@ -52,6 +54,7 @@ export type PipelineJob = {
   created_at?: Date | null;
   started_at?: Date | null;
   finished_at?: Date | null;
+  stages?: PipelineStages;
 };
 
 export type ChunkModel = {
@@ -134,6 +137,12 @@ export type PreDetectedValidation = {
   confirmed: boolean;
 };
 
+export type StructuredSummary = {
+  version: 1;
+  overview: string;
+  key_points: string[];
+};
+
 export type UnifiedResult = {
   tags?: string[];
   new_tags?: string[];
@@ -142,6 +151,7 @@ export type UnifiedResult = {
   quality_score?: number;
   score_explanation?: string[];
   summary?: string;
+  structured_summary?: StructuredSummary;
   topics?: ExtractedEntity[];
   pre_detected_validations?: PreDetectedValidation[];
   additional_entities?: ExtractedEntity[];

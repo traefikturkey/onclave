@@ -18,6 +18,7 @@ import { Registry } from "./registry";
 import { coreOrigin } from "./core-origin";
 import { publishEnvelope, startRpcServer, type CoreServices } from "./rpc";
 import { loadTrustEntries } from "./trust";
+import { RECOMMENDATION_REQUEST_SCHEMA } from "./vault/recommendation-contract";
 
 export type CoreRuntime = {
   config: CoreConfig;
@@ -88,7 +89,7 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
           if (channel === undefined) throw new Error("Broker unavailable");
           publishEnvelope(channel, createEnvelope({
             performative: requestTurn ? "request" : "inform", from: coreOrigin(), to: agentId, body,
-            schema: "onclave.job.terminal.v1",
+            schema: requestTurn ? RECOMMENDATION_REQUEST_SCHEMA : "onclave.job.terminal.v1",
           }));
         },
       });

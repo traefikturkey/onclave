@@ -239,6 +239,7 @@ function contentDetail(content: ContentMetadata, processingStatus: string | unde
     updated_at: date(content.updated_at),
     processing_status: processingStatus ?? null,
     summary: fields.summary,
+    structured_summary: unified.structured_summary,
     quality_tier: typeof unified.tier === "string" && unified.tier !== "" ? unified.tier : null,
     quality_score: typeof unified.quality_score === "number" ? unified.quality_score : null,
     pipeline_tags: fields.pipelineTags,
@@ -566,7 +567,7 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
         author: request.keyId ?? null, tags, metadata: { source_url: url, canonical_url: canonicalUrl, resource_key: resourceKey },
       });
       const id = contentId(created) || urlHash;
-      const job = await deps.jobs.submit({ contentId: id, contentText: extracted.markdown, contentType: "web", title, resourceKey });
+      const job = await deps.jobs.submit({ contentId: id, contentText: extracted.markdown, contentType: "web", title, resourceKey, notifyAgentId });
       return jsonResponse({ title, content_id: id, content_type: "web", job_id: submittedJobId(job) });
     },
     jobsList: async (request) => {
@@ -581,7 +582,7 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
       if (job === undefined) throw new HttpError(404, "Job not found");
       return jsonResponse(request.query.verbose === "true" ? job : {
         job_id: job.job_id, content_id: job.content_id, status: job.status,
-        created_at: job.created_at, started_at: job.started_at, finished_at: job.finished_at,
+        created_at: job.created_at, started_at: job.started_at, finished_at: job.finished_at, stages: job.stages,
       });
     },
     jobCancel: async (request) => {
