@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   AnthropicProvider,
+  FallbackProvider,
   OllamaLLMProvider,
   OpenAIProvider,
   OpenRouterProvider,
+  LlmProviderFailure,
   type LlmFetcher,
   type LlmProvider,
+  type UsageReportingLlmProvider,
 } from "../src/vault/llm-providers";
 import { MeteringLLMProvider, type MeteredLlmUsage } from "../src/vault/llm-metering";
 import {
@@ -126,6 +129,107 @@ describe("vault LLM providers", () => {
       temperature: 0.7,
       system: "system",
     });
+  });
+
+  it.each([408, 425, 429, 500, 502, 503, 504])("retries every transient HTTP status: %s", async (status) => {
+    let calls = 0;
+    const provider = new OllamaLLMProvider("http://ollama.local", "model", async () => {
+      calls += 1;
+      return new Response("busy", { status });
+    }, { delay: async () => {} });
+
+    const error = await provider.generate("prompt").catch((value: unknown) => value);
+    expect(error).toMatchObject({ classification: "transient", attempts: 3, status });
+    expect(calls).toBe(3);
+  });
+
+  it("ignores Retry-After for non-429/503 transient responses", async () => {
+    const delays: number[] = [];
+    const provider = new OllamaLLMProvider("http://ollama.local", "model", async () => new Response("busy", {
+      status: 500,
+      headers: { "retry-after": "120" },
+    }), { random: () => 0.5, maxDelayMs: 1500, delay: async (milliseconds) => { delays.push(milliseconds); } });
+
+    await provider.generate("prompt").catch(() => undefined);
+    expect(delays).toEqual([500, 750]);
+  });
+
+  it("retries transient HTTP failures three times with capped jitter and exposes typed exhaustion", async () => {
+    const calls: FetchCall[] = [];
+    const delays: number[] = [];
+    const provider = new OllamaLLMProvider("http://ollama.local", "llama3", async (url, init) => {
+      calls.push({ url, init });
+      return new Response("busy", { status: 503, headers: { "retry-after": "120" } });
+    }, { random: () => 0.5, maxDelayMs: 1500, delay: async (milliseconds) => { delays.push(milliseconds); } });
+
+    const error = await provider.generate("prompt").catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(LlmProviderFailure);
+    expect(error).toMatchObject({ classification: "transient", attempts: 3, status: 503 });
+    expect((error as LlmProviderFailure).lastError).toEqual(new Error("HTTP 503"));
+    expect(calls).toHaveLength(3);
+    expect(delays).toEqual([1000, 1500]);
+  });
+
+  it("does not retry permanent HTTP failures or invalid successful responses", async () => {
+    const permanent = new OpenAIProvider("token", "model", async () => new Response("no", { status: 400 }));
+    const permanentError = await permanent.generate("prompt").catch((value: unknown) => value);
+    expect(permanentError).toMatchObject({ classification: "permanent", attempts: 1, status: 400 });
+
+    const invalid = new OllamaLLMProvider("http://ollama.local", "model", async () => new Response("{}", { status: 200 }));
+    const invalidError = await invalid.generate("prompt").catch((value: unknown) => value);
+    expect(invalidError).toMatchObject({ classification: "permanent", attempts: 1 });
+  });
+
+  it("rejects missing or non-string Ollama responses but preserves an empty string", async () => {
+    for (const body of [{}, { response: 42 }]) {
+      const provider = new OllamaLLMProvider("http://ollama.local", "model", async () => new Response(JSON.stringify(body), { status: 200 }));
+      await expect(provider.generate("prompt")).rejects.toMatchObject({ classification: "permanent", attempts: 1 });
+    }
+    const empty = new OllamaLLMProvider("http://ollama.local", "model", async () => new Response(JSON.stringify({ response: "" }), { status: 200 }));
+    await expect(empty.generate("prompt")).resolves.toBe("");
+  });
+
+  it("rethrows caller abort instead of falling back", async () => {
+    const controller = new AbortController();
+    const calls: string[] = [];
+    const first: UsageReportingLlmProvider = { model: "first", async generateWithUsage() { calls.push("first"); throw new Error("aborted"); }, async generate() { return ""; }, async close() {} };
+    const second: UsageReportingLlmProvider = { model: "second", async generateWithUsage() { calls.push("second"); return { text: "fallback" }; }, async generate() { return "fallback"; }, async close() {} };
+    controller.abort(new Error("caller stopped"));
+    await expect(new FallbackProvider([["first", first], ["second", second]]).generate("prompt", { signal: controller.signal })).rejects.toEqual(new Error("caller stopped"));
+    expect(calls).toEqual([]);
+  });
+
+  it("retries transport failures and propagates caller abort during backoff", async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const provider = new OllamaLLMProvider("http://ollama.local", "model", async () => {
+      calls += 1;
+      return new Response("busy", { status: 503 });
+    }, { delay: () => new Promise<void>(() => {}) });
+    const pending = provider.generate("prompt", { signal: controller.signal });
+    controller.abort(new Error("caller stopped"));
+    await expect(pending).rejects.toEqual(new Error("caller stopped"));
+    expect(calls).toBe(1);
+  });
+
+  it("retries internal timeout and transport errors", async () => {
+    let calls = 0;
+    const provider = new OllamaLLMProvider("http://ollama.local", "model", async (_url, init) => {
+      calls += 1;
+      if (calls === 1) {
+        await new Promise<void>((resolve) => init?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+        throw new Error("request timed out");
+      }
+      return new Response(JSON.stringify({ response: "ok" }), { status: 200 });
+    }, { delay: async () => {} });
+    await expect(provider.generate("prompt", { timeout: 0.001 })).resolves.toBe("ok");
+    expect(calls).toBe(2);
+
+    const transport = new OllamaLLMProvider("http://ollama.local", "model", async () => {
+      throw new Error("transport down");
+    }, { delay: async () => {} });
+    const error = await transport.generate("prompt").catch((value: unknown) => value);
+    expect(error).toMatchObject({ classification: "transient", attempts: 3 });
   });
 
   it("shapes OpenRouter requests and parses OpenAI-compatible usage", async () => {

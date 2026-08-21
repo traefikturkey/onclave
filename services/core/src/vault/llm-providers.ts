@@ -5,6 +5,7 @@ export type LlmGenerationOptions = {
   maxTokens?: number;
   temperature?: number;
   timeout?: number;
+  signal?: AbortSignal;
 };
 
 export type LlmGeneration = {
@@ -26,6 +27,30 @@ export type UsageReportingLlmProvider = LlmProvider & {
 export type LlmFetcher = (url: string, init?: RequestInit) => Promise<Response>;
 export type LlmProviderPurpose = "expansion" | "synthesis" | "unifiedPipeline";
 
+export type LlmFailureClassification = "transient" | "permanent";
+
+export class LlmProviderFailure extends Error {
+  readonly classification: LlmFailureClassification;
+  readonly attempts: number;
+  readonly status?: number;
+  readonly lastError: unknown;
+
+  constructor(message: string, details: { classification: LlmFailureClassification; attempts: number; status?: number; lastError: unknown }) {
+    super(message, { cause: details.lastError });
+    this.name = "LlmProviderFailure";
+    this.classification = details.classification;
+    this.attempts = details.attempts;
+    this.status = details.status;
+    this.lastError = details.lastError;
+  }
+}
+
+export type LlmRetryOptions = {
+  delay?: (milliseconds: number) => Promise<void>;
+  random?: () => number;
+  maxDelayMs?: number;
+};
+
 type JsonRecord = Record<string, unknown>;
 type ProviderRequest = {
   path: string;
@@ -38,12 +63,14 @@ type NormalizedLlmGenerationOptions = {
   maxTokens: number;
   temperature: number;
   timeout: number;
+  signal: AbortSignal | undefined;
 };
 
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_TEMPERATURE = 0.7;
 const DEFAULT_TIMEOUT_SECONDS = 60;
-const MAX_RETRIES = 3;
+const MAX_ATTEMPTS = 3;
+const DEFAULT_MAX_BACKOFF_MS = 30_000;
 
 function defaultFetcher(url: string, init?: RequestInit): Promise<Response> {
   return fetch(url, init);
@@ -74,6 +101,13 @@ function tokenCount(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function parseRetryAfter(value: string): number | undefined {
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const timestamp = Date.parse(value);
+  return Number.isNaN(timestamp) ? undefined : Math.max(0, timestamp - Date.now());
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -84,6 +118,7 @@ function generationOptions(options: LlmGenerationOptions): NormalizedLlmGenerati
     maxTokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
     temperature: options.temperature ?? DEFAULT_TEMPERATURE,
     timeout: options.timeout ?? DEFAULT_TIMEOUT_SECONDS,
+    signal: options.signal,
   };
 }
 
@@ -91,10 +126,16 @@ abstract class FetchLlmProvider implements UsageReportingLlmProvider {
   abstract readonly model: string;
   private readonly baseUrl: string;
   private readonly fetcher: LlmFetcher;
+  private readonly retryOptions: Required<LlmRetryOptions>;
 
-  protected constructor(baseUrl: string, fetcher: LlmFetcher) {
+  protected constructor(baseUrl: string, fetcher: LlmFetcher, retryOptions: LlmRetryOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.fetcher = fetcher;
+    this.retryOptions = {
+      delay: retryOptions.delay ?? delay,
+      random: retryOptions.random ?? Math.random,
+      maxDelayMs: retryOptions.maxDelayMs ?? DEFAULT_MAX_BACKOFF_MS,
+    };
   }
 
   protected abstract request(prompt: string, options: NormalizedLlmGenerationOptions): ProviderRequest;
@@ -107,39 +148,72 @@ abstract class FetchLlmProvider implements UsageReportingLlmProvider {
 
   async generateWithUsage(prompt: string, options: LlmGenerationOptions = {}): Promise<LlmGeneration> {
     const request = this.request(prompt, generationOptions(options));
-    const response = await this.post(request, generationOptions(options).timeout);
-    return this.parse(await response.json());
+    const normalized = generationOptions(options);
+    const response = await this.post(request, normalized.timeout, normalized.signal);
+    try {
+      return this.parse(await response.json());
+    } catch (error: unknown) {
+      throw new LlmProviderFailure(`${this.failurePrefix} returned an invalid response`, { classification: "permanent", attempts: 1, lastError: error });
+    }
   }
 
   async close(): Promise<void> {
     return Promise.resolve();
   }
 
-  private async post(request: ProviderRequest, timeoutSeconds: number): Promise<Response> {
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt += 1) {
+  private async post(request: ProviderRequest, timeoutSeconds: number, callerSignal?: AbortSignal): Promise<Response> {
+    let lastError: unknown;
+    let lastStatus: number | undefined;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+      if (callerSignal?.aborted) throw callerSignal.reason;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
+      const abortCaller = () => controller.abort(callerSignal?.reason);
+      callerSignal?.addEventListener("abort", abortCaller, { once: true });
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), timeoutSeconds * 1000);
-        try {
-          const response = await this.fetcher(`${this.baseUrl}${request.path}`, {
-            method: "POST",
-            headers: request.headers,
-            body: JSON.stringify(request.payload),
-            signal: controller.signal,
-          });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          return response;
-        } finally {
-          clearTimeout(timeout);
+        const response = await this.fetcher(`${this.baseUrl}${request.path}`, { method: "POST", headers: request.headers, body: JSON.stringify(request.payload), signal: controller.signal });
+        if (response.ok) return response;
+        lastStatus = response.status;
+        if (![408, 425, 429, 500, 502, 503, 504].includes(response.status)) {
+          throw new LlmProviderFailure(`${this.failurePrefix} failed: HTTP ${response.status}`, { classification: "permanent", attempts: attempt, status: response.status, lastError: new Error(`HTTP ${response.status}`) });
+        }
+        lastError = new Error(`HTTP ${response.status}`);
+        if (attempt < MAX_ATTEMPTS) {
+          const retryAfter = response.headers.get("retry-after");
+          const retryMs = retryAfter && (response.status === 429 || response.status === 503) ? parseRetryAfter(retryAfter) : undefined;
+          await this.waitBeforeRetry(attempt, retryMs, callerSignal);
         }
       } catch (error: unknown) {
-        if (attempt === MAX_RETRIES - 1) {
-          throw new Error(`${this.failurePrefix} failed after ${MAX_RETRIES} retries: ${errorMessage(error)}`, { cause: error });
-        }
-        await delay(1000 * (2 ** attempt));
+        if (callerSignal?.aborted) throw callerSignal.reason;
+        if (error instanceof LlmProviderFailure) throw error;
+        lastError = error;
+        if (attempt < MAX_ATTEMPTS) await this.waitBeforeRetry(attempt, undefined, callerSignal);
+      } finally {
+        clearTimeout(timeout);
+        callerSignal?.removeEventListener("abort", abortCaller);
       }
     }
-    throw new Error(`${this.failurePrefix} failed after ${MAX_RETRIES} retries`);
+    throw new LlmProviderFailure(`${this.failurePrefix} exhausted after ${MAX_ATTEMPTS} attempts: ${errorMessage(lastError)}`, { classification: "transient", attempts: MAX_ATTEMPTS, status: lastStatus, lastError });
+  }
+
+  private async waitBeforeRetry(attempt: number, retryAfter: number | undefined, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) throw signal.reason;
+    const cap = Math.min(this.retryOptions.maxDelayMs, 1000 * (2 ** (attempt - 1)));
+    const requestedDelay = retryAfter ?? this.retryOptions.random() * cap;
+    const milliseconds = Math.min(cap, Math.max(0, requestedDelay));
+    const wait = this.retryOptions.delay(milliseconds);
+    if (signal === undefined) {
+      await wait;
+      return;
+    }
+    await Promise.race([
+      wait,
+      new Promise<void>((_, reject) => {
+        const abort = () => reject(signal.reason);
+        signal.addEventListener("abort", abort, { once: true });
+        wait.finally(() => signal.removeEventListener("abort", abort)).catch(() => undefined);
+      }),
+    ]);
   }
 }
 
@@ -147,8 +221,8 @@ export class OllamaLLMProvider extends FetchLlmProvider {
   readonly model: string;
   protected readonly failurePrefix = "LLM generation";
 
-  constructor(baseUrl: string, model: string, fetcher: LlmFetcher = defaultFetcher) {
-    super(baseUrl, fetcher);
+  constructor(baseUrl: string, model: string, fetcher: LlmFetcher = defaultFetcher, retryOptions?: LlmRetryOptions) {
+    super(baseUrl, fetcher, retryOptions);
     this.model = model;
   }
 
@@ -168,7 +242,7 @@ export class OllamaLLMProvider extends FetchLlmProvider {
 
   protected parse(data: unknown): LlmGeneration {
     const response = asRecord(data, "Ollama");
-    const text = response.response === undefined ? "" : requiredText(response.response, "Ollama");
+    const text = requiredText(response.response, "Ollama");
     return {
       text,
       inputTokens: tokenCount(response.prompt_eval_count),
@@ -214,8 +288,8 @@ export class OpenAIProvider extends OpenAiCompatibleProvider {
   readonly apiKey: string;
   protected readonly failurePrefix = "OpenAI generation";
 
-  constructor(apiKey: string, model = "gpt-4o-mini", fetcher: LlmFetcher = defaultFetcher) {
-    super("https://api.openai.com/v1", fetcher);
+  constructor(apiKey: string, model = "gpt-4o-mini", fetcher: LlmFetcher = defaultFetcher, retryOptions?: LlmRetryOptions) {
+    super("https://api.openai.com/v1", fetcher, retryOptions);
     this.apiKey = apiKey;
     this.model = model;
   }
@@ -230,8 +304,8 @@ export class AnthropicProvider extends FetchLlmProvider {
   readonly apiKey: string;
   protected readonly failurePrefix = "Anthropic generation";
 
-  constructor(apiKey: string, model = "claude-3-5-haiku-20241022", fetcher: LlmFetcher = defaultFetcher) {
-    super("https://api.anthropic.com/v1", fetcher);
+  constructor(apiKey: string, model = "claude-3-5-haiku-20241022", fetcher: LlmFetcher = defaultFetcher, retryOptions?: LlmRetryOptions) {
+    super("https://api.anthropic.com/v1", fetcher, retryOptions);
     this.apiKey = apiKey;
     this.model = model;
   }
@@ -272,8 +346,8 @@ export class OpenRouterProvider extends OpenAiCompatibleProvider {
   readonly apiKey: string;
   protected readonly failurePrefix = "OpenRouter generation";
 
-  constructor(apiKey: string, model = "openai/gpt-4o-mini", fetcher: LlmFetcher = defaultFetcher) {
-    super("https://openrouter.ai/api/v1", fetcher);
+  constructor(apiKey: string, model = "openai/gpt-4o-mini", fetcher: LlmFetcher = defaultFetcher, retryOptions?: LlmRetryOptions) {
+    super("https://openrouter.ai/api/v1", fetcher, retryOptions);
     this.apiKey = apiKey;
     this.model = model;
   }
@@ -326,6 +400,7 @@ export class FallbackProvider implements UsageReportingLlmProvider {
   async generateWithUsage(prompt: string, options: LlmGenerationOptions = {}): Promise<LlmGeneration> {
     const errors: string[] = [];
     for (const [name, provider] of this.providers) {
+      if (options.signal?.aborted) throw options.signal.reason;
       try {
         const result = await provider.generateWithUsage(prompt, options);
         if (result.text.trim() === "") {
@@ -334,6 +409,7 @@ export class FallbackProvider implements UsageReportingLlmProvider {
         }
         return result;
       } catch (error: unknown) {
+        if (options.signal?.aborted) throw options.signal.reason;
         errors.push(`${name}: ${errorMessage(error)}`);
       }
     }
