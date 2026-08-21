@@ -43,6 +43,7 @@ function testConfig(dir: string): CoreConfig {
     queueTtlMs: 60000,
     queueMaxLength: 100,
     heartbeatStaleMs: 5000,
+    agentRetentionMs: 86400000,
     budgetLimits: { maxExchanges: 3, maxTotalTokens: 1000 },
     connectRetryBaseMs: 200,
     connectRetryMaxMs: 1000,

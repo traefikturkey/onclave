@@ -20,6 +20,7 @@ export type AgentListing = RegisteredAgent & { alive: boolean };
 export type RegistryOptions = {
   path: string;
   staleMs: number;
+  retentionMs: number;
   now?: () => Date;
 };
 
@@ -121,10 +122,25 @@ export class Registry {
     return age <= this.options.staleMs;
   }
 
-  list(): AgentListing[] {
-    return [...this.agents.values()].map((agent) => ({
-      ...agent,
-      alive: this.isAlive(agent),
-    }));
+  async pruneExpired(): Promise<number> {
+    return this.mutate(async () => {
+      const nowMs = this.now().getTime();
+      let removed = 0;
+      for (const [agentId, agent] of this.agents) {
+        const age = nowMs - Date.parse(agent.heartbeat_at);
+        if (!Number.isFinite(age) || age > this.options.retentionMs) {
+          this.agents.delete(agentId);
+          removed += 1;
+        }
+      }
+      if (removed > 0) await this.persist();
+      return removed;
+    });
+  }
+
+  list(includeStale = false): AgentListing[] {
+    return [...this.agents.values()]
+      .map((agent) => ({ ...agent, alive: this.isAlive(agent) }))
+      .filter((agent) => includeStale || agent.alive);
   }
 }

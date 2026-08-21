@@ -21,4 +21,19 @@ describe("AgentCard transport", () => {
     expect(isAgentCard({ ...card, transport: "amqp" })).toBe(true);
     expect(isAgentCard({ ...card, transport: "wss" })).toBe(false);
   });
+
+  it("parses live-only and diagnostic agent listings", () => {
+    expect(parseRpcRequest({ op: "list_agents" })).toEqual({
+      ok: true,
+      request: { op: "list_agents" },
+    });
+    expect(parseRpcRequest({ op: "list_agents", include_stale: true })).toEqual({
+      ok: true,
+      request: { op: "list_agents", include_stale: true },
+    });
+    expect(parseRpcRequest({ op: "list_agents", include_stale: "yes" })).toEqual({
+      ok: false,
+      error: "list_agents include_stale must be a boolean",
+    });
+  });
 });

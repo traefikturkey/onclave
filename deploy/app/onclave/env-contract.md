@@ -60,6 +60,7 @@ synthesis, and unified pipeline provider is `openrouter`.
 | `ONCLAVE_QUEUE_TTL_MS` | `604800000` |
 | `ONCLAVE_QUEUE_MAX_LENGTH` | `1000` |
 | `ONCLAVE_HEARTBEAT_STALE_MS` | `90000` |
+| `ONCLAVE_AGENT_RETENTION_MS` | `86400000` |
 | `ONCLAVE_MAX_EXCHANGES` | `16` |
 | `ONCLAVE_MAX_TOTAL_TOKENS` | `200000` |
 

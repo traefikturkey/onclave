@@ -149,7 +149,8 @@ async function handleSimpleOps(services: CoreServices, request: SimpleRpcRequest
     return { ok: true, removed };
   }
   if (request.op === "list_agents") {
-    return { ok: true, agents: services.registry.list() };
+    await services.registry.pruneExpired();
+    return { ok: true, agents: services.registry.list(request.include_stale === true) };
   }
   const state = services.conversations.get(request.conversation_id);
   if (state === undefined) {

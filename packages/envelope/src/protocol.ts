@@ -25,7 +25,7 @@ export type RpcRequest =
   | { op: "register"; protocol_version: number; card: AgentCard }
   | { op: "heartbeat"; agent_id: string; telemetry?: HeartbeatTelemetry }
   | { op: "unregister"; agent_id: string }
-  | { op: "list_agents" }
+  | { op: "list_agents"; include_stale?: boolean }
   | { op: "conversation_status"; conversation_id: string }
   | {
       op: "record_exchange";
@@ -140,7 +140,16 @@ export function parseRpcRequest(value: unknown): RpcParseResult {
     case "unregister":
       return parseAgentIdOp(value.op, value);
     case "list_agents":
-      return { ok: true, request: { op: "list_agents" } };
+      if (value.include_stale !== undefined && typeof value.include_stale !== "boolean") {
+        return { ok: false, error: "list_agents include_stale must be a boolean" };
+      }
+      return {
+        ok: true,
+        request: {
+          op: "list_agents",
+          ...(value.include_stale === true ? { include_stale: true } : {}),
+        },
+      };
     case "conversation_status":
       return parseConversationStatus(value);
     case "record_exchange":

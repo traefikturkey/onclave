@@ -39,6 +39,7 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
   const registry = new Registry({
     path: config.registryPath,
     staleMs: config.heartbeatStaleMs,
+    retentionMs: config.agentRetentionMs,
   });
   const conversations = new ConversationStore({
     path: config.conversationsPath,
@@ -49,7 +50,9 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
 
   const services: CoreServices = { config, registry, conversations, audit };
 
-  const restoredAgents = await registry.load();
+  await registry.load();
+  const expiredAgents = await registry.pruneExpired();
+  const restoredAgents = registry.list(true).length;
   const restoredConversations = await conversations.load();
   const trustEntries = await loadTrustEntries(config.trustDir);
   await audit("trust_loaded", { entries: trustEntries.length });
@@ -57,6 +60,7 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
     agents: restoredAgents,
     conversations: restoredConversations,
     trustEntries: trustEntries.length,
+    expiredAgents,
   });
 
   const deliveries = new AgentDeliveryService();

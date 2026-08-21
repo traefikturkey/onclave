@@ -56,7 +56,16 @@ type AdapterRuntime = {
   registered: boolean;
 };
 
+export function isPiSubagent(environment: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(
+    environment.PI_SUBAGENT_RUN_ID?.trim()
+      || environment.PI_SUBAGENT_TREE_RUN_ID?.trim()
+  );
+}
+
 export default function onclavePi(pi: ExtensionAPI): void {
+  if (isPiSubagent()) return;
+
   pi.registerFlag("onclave-id", {
     description: "Override the Onclave v2 agent id (default host-project-session)",
     type: "string",
@@ -545,11 +554,16 @@ function registerListTool(pi: ExtensionAPI, getRuntime: RuntimeGetter): void {
   pi.registerTool({
     name: "onclave_agents",
     label: "Onclave Agents",
-    description: "List agents registered with the Onclave core, with liveness.",
-    parameters: Type.Object({}),
-    async execute() {
+    description: "List live agents registered with the Onclave core, optionally including stale registrations.",
+    parameters: Type.Object({
+      include_stale: Type.Optional(Type.Boolean({ description: "Include stale registrations for diagnostics" })),
+    }),
+    async execute(_callId, params) {
       const runtime = requireRuntime(getRuntime);
-      const response = await requireClient(runtime).call({ op: "list_agents" });
+      const response = await requireClient(runtime).call({
+        op: "list_agents",
+        ...(params.include_stale === true ? { include_stale: true } : {}),
+      });
       if (response.ok !== true) throw new Error(`list_agents failed: ${String(response.error)}`);
       const agents = response.agents as Array<Record<string, unknown>>;
       const lines = agents.map(

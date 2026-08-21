@@ -71,6 +71,32 @@ describe("Onclave v2 adapter registration", () => {
     httpClient.publish.mockReset();
   });
 
+  it("does not register the extension in child Pi processes", () => {
+    const runId = process.env.PI_SUBAGENT_RUN_ID;
+    const treeRunId = process.env.PI_SUBAGENT_TREE_RUN_ID;
+    try {
+      process.env.PI_SUBAGENT_RUN_ID = "child-run";
+      const child = createFakePi();
+      onclavePi(child.pi as never);
+      expect(child.flags).toEqual([]);
+      expect(child.hooks).toEqual([]);
+      expect(child.commands).toEqual([]);
+      expect(child.tools).toEqual([]);
+
+      delete process.env.PI_SUBAGENT_RUN_ID;
+      process.env.PI_SUBAGENT_TREE_RUN_ID = "tree-child-run";
+      const treeChild = createFakePi();
+      onclavePi(treeChild.pi as never);
+      expect(treeChild.tools).toEqual([]);
+      expect(treeChild.hooks).toEqual([]);
+    } finally {
+      if (runId === undefined) delete process.env.PI_SUBAGENT_RUN_ID;
+      else process.env.PI_SUBAGENT_RUN_ID = runId;
+      if (treeRunId === undefined) delete process.env.PI_SUBAGENT_TREE_RUN_ID;
+      else process.env.PI_SUBAGENT_TREE_RUN_ID = treeRunId;
+    }
+  });
+
   it("registers lifecycle hooks, flags, tools, and the status command", () => {
     const registered = createFakePi();
 
