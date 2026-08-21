@@ -17,6 +17,7 @@ import {
   type RelatedContent,
 } from "./models";
 import { DataTier, EntitySource, JobStatus } from "./models";
+import { PIPELINE_STAGE_STATUSES, type PipelineStage, type PipelineStageStatus } from "./job-stages";
 
 const TIER_ORDER = ["S", "A", "B", "C", "D"];
 const CONTENT_COLUMNS = "id, content_type, title, description, mime_type, file_size, file_path, author, tags, tier, metadata, created_at, updated_at";
@@ -167,11 +168,191 @@ function hasVersionDrift(oldVersion: unknown, currentVersion: string): boolean {
 export type ContentListOptions = { offset?: number; limit?: number; content_type?: string; tags?: string[]; exclude_tags?: string[]; order_by?: string };
 export type VectorSearchFilters = { content_type?: string; tags?: string[]; exclude_tags?: string[]; valid_tiers?: string[]; minimum_score?: number };
 
+export type YoutubeLogicalContent = {
+  id: string;
+  video_id: string;
+  created_at: Date;
+  updated_at: Date;
+};
+
+export type YoutubeTranscriptVersion = {
+  id: string;
+  logical_content_id: string;
+  video_id: string;
+  canonicalization_version: string;
+  sha256: string;
+  object_key: string;
+  created_at: Date;
+};
+
+export type YoutubeTranscriptVersionInput = {
+  video_id: string;
+  canonicalization_version: string;
+  sha256: string;
+};
+
+const YOUTUBE_VERSION_COLUMNS = "v.id, v.logical_content_id, l.youtube_video_id AS video_id, v.canonicalization_version, v.sha256, v.object_key, v.created_at";
+
+function youtubeLogicalContentFromRow(row: Row): YoutubeLogicalContent {
+  return {
+    id: String(row.id),
+    video_id: String(row.youtube_video_id),
+    created_at: row.created_at as Date,
+    updated_at: row.updated_at as Date,
+  };
+}
+
+function youtubeTranscriptVersionFromRow(row: Row): YoutubeTranscriptVersion {
+  return {
+    id: String(row.id),
+    logical_content_id: String(row.logical_content_id),
+    video_id: String(row.video_id),
+    canonicalization_version: String(row.canonicalization_version),
+    sha256: String(row.sha256),
+    object_key: String(row.object_key),
+    created_at: row.created_at as Date,
+  };
+}
+
 export class PostgresRepository {
   private readonly database: SqlClient;
 
   constructor(database: SqlClient) {
     this.database = database;
+  }
+
+  async get_or_create_youtube_logical_content(videoId: string): Promise<YoutubeLogicalContent> {
+    const result = await this.database.query(
+      `INSERT INTO youtube_logical_content (id, youtube_video_id)
+       VALUES ($1, $2)
+       ON CONFLICT (youtube_video_id) DO UPDATE SET youtube_video_id = EXCLUDED.youtube_video_id
+       RETURNING id, youtube_video_id, created_at, updated_at`,
+      [newId(), videoId],
+    );
+    const row = result.rows[0];
+    if (row === undefined) throw new Error(`failed to create logical YouTube content: ${videoId}`);
+    return youtubeLogicalContentFromRow(row);
+  }
+
+  async get_or_create_youtube_transcript_version(input: YoutubeTranscriptVersionInput): Promise<YoutubeTranscriptVersion> {
+    const pool = this.database as Partial<TransactionPool>;
+    if (pool.connect === undefined) throw new Error("database does not support transactions");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const logicalResult = await client.query(
+        `INSERT INTO youtube_logical_content (id, youtube_video_id)
+         VALUES ($1, $2)
+         ON CONFLICT (youtube_video_id) DO UPDATE SET youtube_video_id = EXCLUDED.youtube_video_id
+         RETURNING id, youtube_video_id, created_at, updated_at`,
+        [newId(), input.video_id],
+      );
+      const logicalRow = logicalResult.rows[0];
+      if (logicalRow === undefined) throw new Error(`failed to create logical YouTube content: ${input.video_id}`);
+      const logical = youtubeLogicalContentFromRow(logicalRow);
+      const versionColumns = "id, logical_content_id, canonicalization_version, sha256, object_key, created_at";
+      const versionValues = [newId(), logical.id, input.canonicalization_version, input.sha256];
+      const versionInsert = await client.query(
+        `INSERT INTO youtube_transcript_version (id, logical_content_id, canonicalization_version, sha256)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (logical_content_id, canonicalization_version, sha256) DO NOTHING
+         RETURNING ${versionColumns}`,
+        versionValues,
+      );
+      const versionRow = versionInsert.rows[0] ?? (await client.query(
+        `SELECT ${versionColumns}
+         FROM youtube_transcript_version
+         WHERE logical_content_id = $1 AND canonicalization_version = $2 AND sha256 = $3`,
+        [logical.id, input.canonicalization_version, input.sha256],
+      )).rows[0];
+      if (versionRow === undefined) throw new Error(`failed to create YouTube transcript version: ${input.video_id}`);
+      const version = youtubeTranscriptVersionFromRow({ ...versionRow, video_id: logical.video_id });
+      const pointer = await client.query(
+        `INSERT INTO youtube_transcript_current (logical_content_id, version_id)
+         VALUES ($1, $2)
+         ON CONFLICT (logical_content_id) DO UPDATE SET version_id = EXCLUDED.version_id
+         RETURNING logical_content_id, version_id`,
+        [logical.id, version.id],
+      );
+      if (pointer.rowCount !== 1) throw new Error(`failed to update current YouTube transcript version: ${input.video_id}`);
+      await client.query("COMMIT");
+      return version;
+    } catch (error: unknown) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async insert_or_select_youtube_transcript_version(input: YoutubeTranscriptVersionInput): Promise<YoutubeTranscriptVersion> {
+    return this.get_or_create_youtube_transcript_version(input);
+  }
+
+  async set_current_youtube_transcript_version(videoId: string, versionId: string): Promise<YoutubeTranscriptVersion | undefined> {
+    const pool = this.database as Partial<TransactionPool>;
+    if (pool.connect === undefined) throw new Error("database does not support transactions");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        `WITH target AS (
+           SELECT l.id AS logical_content_id, v.id AS version_id
+           FROM youtube_logical_content AS l
+           JOIN youtube_transcript_version AS v ON v.logical_content_id = l.id
+           WHERE l.youtube_video_id = $1 AND v.id = $2
+         ), upserted AS (
+           INSERT INTO youtube_transcript_current (logical_content_id, version_id)
+           SELECT logical_content_id, version_id FROM target
+           ON CONFLICT (logical_content_id) DO UPDATE SET version_id = EXCLUDED.version_id
+           RETURNING logical_content_id, version_id
+         )
+         SELECT ${YOUTUBE_VERSION_COLUMNS}
+         FROM upserted
+         JOIN youtube_logical_content AS l ON l.id = upserted.logical_content_id
+         JOIN youtube_transcript_version AS v
+           ON v.logical_content_id = upserted.logical_content_id AND v.id = upserted.version_id`,
+        [videoId, versionId],
+      );
+      await client.query("COMMIT");
+      const row = result.rows[0];
+      return row === undefined ? undefined : youtubeTranscriptVersionFromRow(row);
+    } catch (error: unknown) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async get_current_youtube_transcript_version(videoId: string): Promise<YoutubeTranscriptVersion | undefined> {
+    const result = await this.database.query(
+      `SELECT ${YOUTUBE_VERSION_COLUMNS}
+       FROM youtube_logical_content AS l
+       JOIN youtube_transcript_current AS c ON c.logical_content_id = l.id
+       JOIN youtube_transcript_version AS v
+         ON v.logical_content_id = c.logical_content_id AND v.id = c.version_id
+       WHERE l.youtube_video_id = $1`,
+      [videoId],
+    );
+    const row = result.rows[0];
+    return row === undefined ? undefined : youtubeTranscriptVersionFromRow(row);
+  }
+
+  async list_youtube_transcript_versions(videoId: string): Promise<YoutubeTranscriptVersion[]> {
+    const result = await this.database.query(
+      `SELECT ${YOUTUBE_VERSION_COLUMNS}
+       FROM youtube_logical_content AS l
+       JOIN youtube_transcript_version AS v ON v.logical_content_id = l.id
+       WHERE l.youtube_video_id = $1
+       ORDER BY v.created_at ASC, v.id ASC`,
+      [videoId],
+    );
+    return result.rows.map(youtubeTranscriptVersionFromRow);
+  }
+
+  async get_youtube_transcript_history(videoId: string): Promise<YoutubeTranscriptVersion[]> {
+    return this.list_youtube_transcript_versions(videoId);
   }
 
   async connect(): Promise<void> {
@@ -424,7 +605,32 @@ export class PostgresRepository {
   async create_pipeline_job(job: PipelineJob): Promise<Row> { const result = await this.database.query("INSERT INTO pipeline_job(id,resource_key,content_id,status,pipeline_version,data_tier, error_code,error_message,error_stage,metadata,created_at,started_at,finished_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *", [job.id, job.resource_key, job.content_id, job.status ?? JobStatus.PENDING, job.pipeline_version ?? "", job.data_tier ?? DataTier.COMPACT, job.error_code ?? null, job.error_message ?? null, job.error_stage ?? null, job.metadata ?? {}, job.created_at ?? null, job.started_at ?? null, job.finished_at ?? null]); return result.rows[0] ?? job as Row; }
   async get_pipeline_job(jobId: string): Promise<Row | undefined> { return (await this.database.query("SELECT * FROM pipeline_job WHERE id=$1", [jobId])).rows[0]; }
   async find_active_pipeline_job(resourceKey: string): Promise<Row | undefined> { return (await this.database.query("SELECT * FROM pipeline_job WHERE resource_key=$1 AND status=ANY($2) ORDER BY created_at DESC,id LIMIT 1", [resourceKey, [JobStatus.PENDING, JobStatus.PROCESSING]])).rows[0]; }
+  async add_pipeline_job_subscriber(jobId: string, subscriberId: string): Promise<Row | undefined> {
+    return (await this.database.query(`UPDATE pipeline_job
+      SET metadata=jsonb_set(coalesce(metadata,'{}'::jsonb), '{notify_agent_ids}',
+        (SELECT jsonb_agg(agent_id ORDER BY agent_id) FROM (
+          SELECT DISTINCT value AS agent_id
+          FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(metadata->'notify_agent_ids')='array' THEN metadata->'notify_agent_ids' ELSE '[]'::jsonb END)
+          UNION SELECT metadata->>'notify_agent_id'
+          WHERE metadata->>'notify_agent_id' IS NOT NULL
+          UNION SELECT $2
+        ) subscribers))
+      WHERE id=$1 AND status=ANY($3) RETURNING *`, [jobId, subscriberId, [JobStatus.PENDING, JobStatus.PROCESSING]])).rows[0];
+  }
   async update_pipeline_job(jobId: string, status: JobStatus, timing: JobTiming, errors: JobErrors): Promise<Row | undefined> { return (await this.database.query("UPDATE pipeline_job SET status=$1,started_at=coalesce($2,started_at), finished_at=coalesce($3,finished_at),error_code=coalesce($4,error_code), error_message=coalesce($5,error_message),error_stage=coalesce($6,error_stage) WHERE id=$7 RETURNING *", [status, timing[0] ?? null, timing[1] ?? null, errors[0] ?? null, errors[1] ?? null, errors[2] ?? null, jobId])).rows[0]; }
+  async transition_pipeline_job_terminal(jobId: string, status: JobStatus, timing: JobTiming, errors: JobErrors, expectedStatuses: readonly JobStatus[]): Promise<Row | undefined> { return (await this.database.query("UPDATE pipeline_job SET status=$1,started_at=coalesce($2,started_at), finished_at=coalesce($3,finished_at),error_code=coalesce($4,error_code), error_message=coalesce($5,error_message),error_stage=coalesce($6,error_stage) WHERE id=$7 AND status=ANY($8) RETURNING *", [status, timing[0] ?? null, timing[1] ?? null, errors[0] ?? null, errors[1] ?? null, errors[2] ?? null, jobId, expectedStatuses])).rows[0]; }
+  async transition_pipeline_job_stage(jobId: string, stage: PipelineStage, status: PipelineStageStatus, timing: readonly [Date | null | undefined, Date | null | undefined], errors: readonly [string | null | undefined, string | null | undefined], expectedStatuses: readonly PipelineStageStatus[]): Promise<Row | undefined> {
+    if (!PIPELINE_STAGE_STATUSES.includes(status)) throw new Error(`invalid pipeline stage status: ${status}`);
+    const state: Record<string, unknown> = { status };
+    if (timing[0] !== undefined) state.started_at = timing[0]?.toISOString() ?? null;
+    if (timing[1] !== undefined) state.finished_at = timing[1]?.toISOString() ?? null;
+    if (errors[0] !== undefined) state.error_code = errors[0] ?? null;
+    if (errors[1] !== undefined) state.error_message = errors[1] ?? null;
+    return (await this.database.query(`UPDATE pipeline_job
+      SET metadata=jsonb_set(coalesce(metadata,'{}'::jsonb), ARRAY['stages',$2], coalesce(metadata->'stages'->$2, '{}'::jsonb) || $3::jsonb, true)
+      WHERE id=$1 AND (status=ANY($4) OR (status='failed' AND $3::jsonb->>'status'=ANY(ARRAY['failed','skipped']))) AND coalesce(metadata->'stages'->>$2,'pending')=ANY($5)
+      RETURNING *`, [jobId, stage, JSON.stringify(state), [JobStatus.PENDING, JobStatus.PROCESSING], expectedStatuses])).rows[0];
+  }
   async list_pipeline_jobs(contentId: string | undefined, status: JobStatus | undefined, limit: number, offset: number): Promise<[Row[], number]> { const clauses: string[] = []; const params: unknown[] = []; if (contentId !== undefined) { params.push(contentId); clauses.push(`content_id=$${params.length}`); } if (status !== undefined) { params.push(status); clauses.push(`status=$${params.length}`); } const where = clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`; const count = await this.database.query(`SELECT count(*) AS count FROM pipeline_job${where}`, params); const rows = await this.database.query(`SELECT * FROM pipeline_job${where} ORDER BY created_at DESC,id LIMIT $${params.length + 1} OFFSET $${params.length + 2}`, [...params, limit, offset]); return [rows.rows, numberValue(count.rows[0]?.count) || 0]; }
   async get_pipeline_job_stats(): Promise<{ total_jobs: number; completed_jobs: number; failed_jobs: number; cancelled_jobs: number; average_completion_seconds: number | null }> { const result = await this.database.query("SELECT count(*) AS total_jobs,count(*) FILTER (WHERE status='completed') AS completed_jobs,count(*) FILTER (WHERE status='failed') AS failed_jobs,count(*) FILTER (WHERE status='cancelled') AS cancelled_jobs,avg(extract(epoch FROM (finished_at-started_at))) FILTER (WHERE status='completed' AND started_at IS NOT NULL AND finished_at IS NOT NULL) AS average_completion_seconds FROM pipeline_job"); const row = result.rows[0] ?? {}; const average = row.average_completion_seconds; return { total_jobs: numberValue(row.total_jobs), completed_jobs: numberValue(row.completed_jobs), failed_jobs: numberValue(row.failed_jobs), cancelled_jobs: numberValue(row.cancelled_jobs), average_completion_seconds: average === null || average === undefined ? null : numberValue(average) }; }
   async purge_expired_jobs(): Promise<{ compact: number; full: number }> { const compact = await this.database.query("DELETE FROM pipeline_job WHERE data_tier='compact' AND finished_at < now()-interval '180 days'"); const full = await this.database.query("DELETE FROM pipeline_job WHERE data_tier='full' AND finished_at < now()-interval '60 days'"); return { compact: compact.rowCount ?? 0, full: full.rowCount ?? 0 }; }

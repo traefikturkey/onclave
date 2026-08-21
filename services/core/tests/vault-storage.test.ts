@@ -118,6 +118,95 @@ describe("vault storage repository", () => {
     ]);
   });
 
+  it("atomically adds a deduplicated subscriber only while a job is active", async () => {
+    const updated = { id: "job-1", status: JobStatus.PROCESSING, metadata: { notify_agent_ids: ["agent-a", "agent-b"] } };
+    const client = new FakeClient({ rows: [updated] });
+
+    const result = await new PostgresRepository(client).add_pipeline_job_subscriber("job-1", "agent-b");
+
+    expect(result).toBe(updated);
+    expect(client.calls[0]?.text).toContain("WHERE id=$1 AND status=ANY($3) RETURNING *");
+    expect(client.calls[0]?.text).toContain("jsonb_array_elements_text");
+    expect(client.calls[0]?.values).toEqual(["job-1", "agent-b", [JobStatus.PENDING, JobStatus.PROCESSING]]);
+  });
+
+  it("guards and persists a stage transition in job metadata", async () => {
+    const client = new FakeClient({ rows: [{ id: "job-1", status: JobStatus.PROCESSING }] });
+    const startedAt = new Date("2026-01-02T00:00:00.000Z");
+    const result = await new PostgresRepository(client).transition_pipeline_job_stage("job-1", "llm_call", "processing", [startedAt, undefined], [undefined, undefined], ["pending"]);
+    expect(result?.id).toBe("job-1");
+    expect(client.calls[0]?.text).toContain("metadata=jsonb_set");
+    expect(client.calls[0]?.text).toContain("coalesce(metadata->'stages'->>$2,'pending')=ANY($5)");
+    expect(client.calls[0]?.values).toEqual(["job-1", "llm_call", expect.stringContaining('"status":"processing"'), [JobStatus.PENDING, JobStatus.PROCESSING], ["pending"]]);
+  });
+
+  it("preserves stage started_at when completing a stage", async () => {
+    const client = new FakeClient({ rows: [{ id: "job-1" }] }, { rows: [{ id: "job-1" }] });
+    const repository = new PostgresRepository(client);
+    const startedAt = new Date("2026-01-02T00:00:00.000Z");
+
+    await repository.transition_pipeline_job_stage("job-1", "llm_call", "processing", [startedAt, undefined], [undefined, undefined], ["pending"]);
+    await repository.transition_pipeline_job_stage("job-1", "llm_call", "completed", [undefined, new Date("2026-01-02T00:05:00.000Z")], [undefined, undefined], ["processing"]);
+
+    expect(client.calls[1]?.values?.[2]).toBe(JSON.stringify({ status: "completed", finished_at: "2026-01-02T00:05:00.000Z" }));
+    expect(client.calls[1]?.text).toContain("coalesce(metadata->'stages'->$2, '{}'::jsonb) || $3::jsonb");
+  });
+
+  it("conditionally transitions a processing job to a terminal status", async () => {
+    const updated = { id: "job-1", status: JobStatus.COMPLETED };
+    const startedAt = new Date("2026-01-02T00:00:00.000Z");
+    const finishedAt = new Date("2026-01-02T00:05:00.000Z");
+    const client = new FakeClient({ rows: [updated] });
+
+    const result = await new PostgresRepository(client).transition_pipeline_job_terminal(
+      "job-1",
+      JobStatus.COMPLETED,
+      [startedAt, finishedAt],
+      ["", "", ""],
+      [JobStatus.PROCESSING],
+    );
+
+    expect(result).toBe(updated);
+    expect(client.calls).toEqual([{
+      text: "UPDATE pipeline_job SET status=$1,started_at=coalesce($2,started_at), finished_at=coalesce($3,finished_at),error_code=coalesce($4,error_code), error_message=coalesce($5,error_message),error_stage=coalesce($6,error_stage) WHERE id=$7 AND status=ANY($8) RETURNING *",
+      values: [JobStatus.COMPLETED, startedAt, finishedAt, "", "", "", "job-1", [JobStatus.PROCESSING]],
+    }]);
+  });
+
+  it("uses only pending as the cancellation compare-and-set state", async () => {
+    const client = new FakeClient({ rows: [{ id: "job-1", status: JobStatus.CANCELLED }] });
+    const finishedAt = new Date("2026-01-02T00:05:00.000Z");
+
+    const result = await new PostgresRepository(client).transition_pipeline_job_terminal(
+      "job-1",
+      JobStatus.CANCELLED,
+      [undefined, finishedAt],
+      [undefined, undefined, undefined],
+      [JobStatus.PENDING],
+    );
+
+    expect(result).toEqual({ id: "job-1", status: JobStatus.CANCELLED });
+    expect(client.calls[0]?.values).toEqual([JobStatus.CANCELLED, null, finishedAt, null, null, null, "job-1", [JobStatus.PENDING]]);
+  });
+
+  it("returns undefined when a terminal transition loses the processing compare-and-set", async () => {
+    const client = new FakeClient({ rows: [] });
+
+    const result = await new PostgresRepository(client).transition_pipeline_job_terminal(
+      "job-1",
+      JobStatus.FAILED,
+      [undefined, new Date("2026-01-02T00:05:00.000Z")],
+      ["PIPELINE_ERROR", "failed", "pipeline"],
+      [JobStatus.PROCESSING],
+    );
+
+    expect(result).toBeUndefined();
+    expect(client.calls).toEqual([{
+      text: "UPDATE pipeline_job SET status=$1,started_at=coalesce($2,started_at), finished_at=coalesce($3,finished_at),error_code=coalesce($4,error_code), error_message=coalesce($5,error_message),error_stage=coalesce($6,error_stage) WHERE id=$7 AND status=ANY($8) RETURNING *",
+      values: [JobStatus.FAILED, null, new Date("2026-01-02T00:05:00.000Z"), "PIPELINE_ERROR", "failed", "pipeline", "job-1", [JobStatus.PROCESSING]],
+    }]);
+  });
+
   it("calculates aggregate job completion statistics", async () => {
     const client = new FakeClient({ rows: [{ total_jobs: "7", completed_jobs: "4", failed_jobs: "2", cancelled_jobs: "1", average_completion_seconds: "12.5" }] });
     const stats = await new PostgresRepository(client).get_pipeline_job_stats();
@@ -144,6 +233,145 @@ describe("vault storage repository", () => {
     const client = new FakeClient({ rows: [], rowCount: 1 });
     await new PostgresRepository(client).delete_content("content-1");
     expect(client.calls).toEqual([{ text: "DELETE FROM content WHERE id = $1", values: ["content-1"] }]);
+  });
+
+  it("converges identical YouTube transcript digests through insert and conflict-then-select paths", async () => {
+    const calls: Call[] = [];
+    const logical = {
+      id: "logical-1",
+      youtube_video_id: "video-1",
+      created_at: new Date("2026-01-01T00:00:00.000Z"),
+      updated_at: new Date("2026-01-01T00:00:00.000Z"),
+    };
+    const version = {
+      id: "version-1",
+      logical_content_id: "logical-1",
+      video_id: "video-1",
+      canonicalization_version: "youtube-text-v1",
+      sha256: "a".repeat(64),
+      object_key: "youtube-text-v1:" + "a".repeat(64),
+      created_at: new Date("2026-01-01T00:00:01.000Z"),
+    };
+    let versionInsertCount = 0;
+    const transaction = {
+      query: async (text: string, values?: unknown[]) => {
+        calls.push({ text, values });
+        if (text.startsWith("INSERT INTO youtube_logical_content")) return { rows: [logical], rowCount: 1 };
+        if (text.startsWith("INSERT INTO youtube_transcript_version")) {
+          versionInsertCount += 1;
+          return versionInsertCount === 1 ? { rows: [version], rowCount: 1 } : { rows: [], rowCount: 0 };
+        }
+        if (text.startsWith("SELECT id, logical_content_id, canonicalization_version, sha256, object_key, created_at")) return { rows: [version], rowCount: 1 };
+        if (text.startsWith("INSERT INTO youtube_transcript_current")) return { rows: [{ logical_content_id: "logical-1", version_id: "version-1" }], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      },
+      release: () => {},
+    };
+    const pool = { query: async () => ({ rows: [], rowCount: 0 }), connect: async () => transaction };
+    const repository = new PostgresRepository(pool);
+    const input = { video_id: "video-1", canonicalization_version: "youtube-text-v1", sha256: "a".repeat(64) };
+
+    const first = await repository.get_or_create_youtube_transcript_version(input);
+    const second = await repository.get_or_create_youtube_transcript_version(input);
+
+    expect(first).toEqual(version);
+    expect(second).toEqual(first);
+    expect(calls.filter((call) => call.text === "BEGIN")).toHaveLength(2);
+    expect(calls.filter((call) => call.text === "COMMIT")).toHaveLength(2);
+    const versionInserts = calls.filter((call) => call.text.startsWith("INSERT INTO youtube_transcript_version"));
+    expect(versionInserts).toHaveLength(2);
+    expect(versionInserts[0]?.text).toContain("ON CONFLICT (logical_content_id, canonicalization_version, sha256) DO NOTHING");
+    expect(versionInserts[0]?.text).not.toContain("DO UPDATE");
+    expect(versionInserts[1]?.text).toBe(versionInserts[0]?.text);
+    expect(versionInserts[0]?.values?.slice(1)).toEqual(versionInserts[1]?.values?.slice(1));
+    expect(calls.filter((call) => call.text.startsWith("SELECT id, logical_content_id, canonicalization_version, sha256, object_key, created_at"))).toHaveLength(1);
+    expect(calls.filter((call) => call.text.startsWith("INSERT INTO youtube_transcript_current"))).toHaveLength(2);
+  });
+
+  it("keeps changed YouTube hashes in deterministic history and reads the current pointer", async () => {
+    const older = {
+      id: "version-a",
+      logical_content_id: "logical-1",
+      video_id: "video-1",
+      canonicalization_version: "youtube-text-v1",
+      sha256: "a".repeat(64),
+      object_key: "youtube-text-v1:" + "a".repeat(64),
+      created_at: new Date("2026-01-01T00:00:00.000Z"),
+    };
+    const newer = { ...older, id: "version-b", sha256: "b".repeat(64), object_key: "youtube-text-v1:" + "b".repeat(64), created_at: new Date("2026-01-01T00:00:01.000Z") };
+    const currentClient = new FakeClient({ rows: [newer] });
+    const historyClient = new FakeClient({ rows: [older, newer] });
+    const current = await new PostgresRepository(currentClient).get_current_youtube_transcript_version("video-1");
+    const history = await new PostgresRepository(historyClient).list_youtube_transcript_versions("video-1");
+
+    expect(current).toEqual(newer);
+    expect(history).toEqual([older, newer]);
+    expect(currentClient.calls[0]?.text).toContain("youtube_transcript_current");
+    expect(currentClient.calls[0]?.text).toContain("c.logical_content_id = l.id");
+    expect(historyClient.calls[0]?.text).toContain("l.youtube_video_id = $1");
+    expect(historyClient.calls[0]?.text).toContain("ORDER BY v.created_at ASC, v.id ASC");
+
+    const pointerCalls: Call[] = [];
+    const pointerTransaction = {
+      query: async (text: string, values?: unknown[]) => {
+        pointerCalls.push({ text, values });
+        return text.startsWith("WITH target AS") ? { rows: [newer], rowCount: 1 } : { rows: [], rowCount: 0 };
+      },
+      release: () => {},
+    };
+    const pointerPool = { query: async () => ({ rows: [], rowCount: 0 }), connect: async () => pointerTransaction };
+    const selected = await new PostgresRepository(pointerPool).set_current_youtube_transcript_version("video-1", "version-b");
+    expect(selected).toEqual(newer);
+    expect(pointerCalls.map((call) => call.text)).toEqual(["BEGIN", expect.stringContaining("INSERT INTO youtube_transcript_current"), "COMMIT"]);
+    expect(pointerCalls[1]?.text).toContain("l.youtube_video_id = $1 AND v.id = $2");
+    expect(pointerCalls[1]?.text).toContain("v.logical_content_id = l.id");
+    expect(pointerCalls[1]?.text).toContain("ON CONFLICT (logical_content_id)");
+  });
+
+  it("rolls back and releases the transaction when a YouTube version insert fails", async () => {
+    const calls: Call[] = [];
+    let released = false;
+    const transaction = {
+      query: async (text: string, values?: unknown[]) => {
+        calls.push({ text, values });
+        if (text.startsWith("INSERT INTO youtube_logical_content")) {
+          return {
+            rows: [{ id: "logical-1", youtube_video_id: "video-1", created_at: new Date(), updated_at: new Date() }],
+            rowCount: 1,
+          };
+        }
+        if (text.startsWith("INSERT INTO youtube_transcript_version")) throw new Error("version insert failed");
+        return { rows: [], rowCount: 0 };
+      },
+      release: () => {
+        released = true;
+      },
+    };
+    const pool = { query: async () => ({ rows: [], rowCount: 0 }), connect: async () => transaction };
+
+    await expect(new PostgresRepository(pool).get_or_create_youtube_transcript_version({
+      video_id: "video-1",
+      canonicalization_version: "youtube-text-v1",
+      sha256: "a".repeat(64),
+    })).rejects.toThrow("version insert failed");
+
+    expect(calls.map((call) => call.text)).toEqual([
+      "BEGIN",
+      expect.stringContaining("INSERT INTO youtube_logical_content (id, youtube_video_id)"),
+      expect.stringContaining("INSERT INTO youtube_transcript_version (id, logical_content_id, canonicalization_version, sha256)"),
+      "ROLLBACK",
+    ]);
+    expect(calls.some((call) => call.text === "COMMIT")).toBe(false);
+    expect(released).toBe(true);
+  });
+
+  it("does not fall back to non-transactional SQL for YouTube version writes", async () => {
+    const repository = new PostgresRepository(new FakeClient());
+    await expect(repository.get_or_create_youtube_transcript_version({
+      video_id: "video-1",
+      canonicalization_version: "youtube-text-v1",
+      sha256: "a".repeat(64),
+    })).rejects.toThrow("database does not support transactions");
   });
 
   it("atomically replaces content chunks", async () => {

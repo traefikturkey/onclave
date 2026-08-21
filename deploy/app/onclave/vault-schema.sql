@@ -151,3 +151,47 @@ CREATE TABLE IF NOT EXISTS llm_pricing_snapshot (
     refreshed_at timestamptz NOT NULL,
     source text NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS youtube_logical_content (
+    id text PRIMARY KEY,
+    youtube_video_id text NOT NULL UNIQUE,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS youtube_transcript_version (
+    id text PRIMARY KEY,
+    logical_content_id text NOT NULL REFERENCES youtube_logical_content(id) ON DELETE CASCADE,
+    canonicalization_version text NOT NULL CHECK (canonicalization_version <> ''),
+    sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+    object_key text GENERATED ALWAYS AS (canonicalization_version || ':' || sha256) STORED,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (logical_content_id, canonicalization_version, sha256),
+    UNIQUE (logical_content_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_youtube_transcript_version_history
+    ON youtube_transcript_version (logical_content_id, created_at, id);
+
+CREATE OR REPLACE FUNCTION prevent_youtube_transcript_version_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'youtube_transcript_version rows are immutable';
+END;
+$$;
+
+DROP TRIGGER IF EXISTS youtube_transcript_version_immutable ON youtube_transcript_version;
+CREATE TRIGGER youtube_transcript_version_immutable
+    BEFORE UPDATE OR DELETE ON youtube_transcript_version
+    FOR EACH ROW
+    EXECUTE FUNCTION prevent_youtube_transcript_version_mutation();
+
+CREATE TABLE IF NOT EXISTS youtube_transcript_current (
+    logical_content_id text PRIMARY KEY
+        REFERENCES youtube_logical_content(id) ON DELETE CASCADE,
+    version_id text NOT NULL,
+    FOREIGN KEY (logical_content_id, version_id)
+        REFERENCES youtube_transcript_version (logical_content_id, id)
+        ON DELETE RESTRICT
+);
