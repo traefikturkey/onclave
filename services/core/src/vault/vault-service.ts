@@ -66,6 +66,7 @@ export type VaultServiceOverrides = {
   embeddingReindexer?: VaultEmbeddingReindexer;
   readiness?: VaultReadinessChecks;
   close?: () => Promise<void>;
+  notify?: (agentId: string, body: string, requestTurn: boolean) => Promise<void>;
 };
 
 function errorValue(error: unknown): string {
@@ -161,6 +162,7 @@ export async function createVaultService(
     const pipeline = new UnifiedPipeline(metered, repository, config, { chunkText }, embeddings);
     jobs = new PipelineOrchestrator(pipeline, repository, {
       pipelineVersion: config.appVersion,
+      notify: overrides.notify,
     });
   }
   const transcript = overrides.transcript ?? new YouTubeTranscriptService({

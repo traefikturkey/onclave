@@ -93,6 +93,7 @@ export const VAULT_ROUTE_TABLE = [
   },
   { name: "ingest", method: "POST", path: "/api/v1/ingest", public: false },
   { name: "jobsList", method: "GET", path: "/api/v1/jobs", public: false },
+  { name: "jobsStats", method: "GET", path: "/api/v1/jobs/stats", public: false },
   { name: "jobDetail", method: "GET", path: "/api/v1/jobs/{job_id}", public: false },
   {
     name: "jobCancel",

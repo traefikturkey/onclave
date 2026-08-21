@@ -107,6 +107,13 @@ class FakeStorage implements PipelineStorage, JobStorage, PricingSnapshotStorage
     return [[...this.jobs.values()], this.jobs.size];
   }
 
+  async get_pipeline_job_stats(): Promise<{ total_jobs: number; completed_jobs: number; failed_jobs: number; cancelled_jobs: number; average_completion_seconds: number | null }> {
+    const jobs = [...this.jobs.values()];
+    const completed = jobs.filter((job) => job.status === JobStatus.COMPLETED);
+    const durations = completed.flatMap((job) => job.started_at != null && job.finished_at != null ? [(job.finished_at.getTime() - job.started_at.getTime()) / 1000] : []);
+    return { total_jobs: jobs.length, completed_jobs: completed.length, failed_jobs: jobs.filter((job) => job.status === JobStatus.FAILED).length, cancelled_jobs: jobs.filter((job) => job.status === JobStatus.CANCELLED).length, average_completion_seconds: durations.length === 0 ? null : durations.reduce((sum, value) => sum + value, 0) / durations.length };
+  }
+
   async update_content_processing_status(contentId: string, status: string): Promise<void> {
     this.statuses.push({ contentId, status });
   }
@@ -143,9 +150,9 @@ function config(overrides: Partial<PipelineConfig> = {}): PipelineConfig {
   };
 }
 
-function orchestrator(storage: FakeStorage, llm: LlmProvider, options: { pipeline?: PipelineConfig; fetcher?: (url: string, init?: RequestInit) => Promise<Response> } = {}): PipelineOrchestrator {
+function orchestrator(storage: FakeStorage, llm: LlmProvider, options: { pipeline?: PipelineConfig; fetcher?: (url: string, init?: RequestInit) => Promise<Response>; notify?: (agentId: string, body: string, requestTurn: boolean) => Promise<void> } = {}): PipelineOrchestrator {
   const pipeline = new UnifiedPipeline(llm, storage, options.pipeline ?? config(), { chunkText: (text: string): string[] => [text] }, new FakeEmbeddings(), options.fetcher);
-  return new PipelineOrchestrator(pipeline, storage, { pipelineVersion: "1.0.0" });
+  return new PipelineOrchestrator(pipeline, storage, { pipelineVersion: "1.0.0", notify: options.notify });
 }
 
 function staticProvider(text = response): LlmProvider {
@@ -201,6 +208,22 @@ describe("vault unified pipeline and jobs", () => {
     expect(storage.usages).toHaveLength(1);
     expect(storage.usages[0]?.context).toBe(`pipeline:${job?.id ?? ""}`);
     expect(storage.jobs.get(job?.id ?? "")?.status).toBe(JobStatus.COMPLETED);
+  });
+
+  it("notifies the authenticated caller with terminal timing data", async () => {
+    const storage = new FakeStorage();
+    const notifications: { agentId: string; body: string; requestTurn: boolean }[] = [];
+    const jobs = orchestrator(storage, staticProvider(), { notify: async (agentId, body, requestTurn) => { notifications.push({ agentId, body, requestTurn }); } });
+
+    await jobs.submit({ contentId: "content-notify", contentText: "content", contentType: "youtube", title: "Video", resourceKey: "yt:video", notifyAgentId: "caller-agent" });
+    await jobs.waitForIdle();
+
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0]).toMatchObject({ agentId: "caller-agent", requestTurn: true });
+    expect(notifications[0]?.body).toContain("YouTube ingestion completed.");
+    expect(notifications[0]?.body).toContain("A concise summary.");
+    expect(notifications[0]?.body).toContain("Inspect the current repository");
+    expect(notifications[0]?.body).toContain('"status":"completed"');
   });
 
   it("repairs an initial response with a whitespace-only topic before persisting", async () => {

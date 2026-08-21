@@ -118,6 +118,14 @@ describe("vault storage repository", () => {
     ]);
   });
 
+  it("calculates aggregate job completion statistics", async () => {
+    const client = new FakeClient({ rows: [{ total_jobs: "7", completed_jobs: "4", failed_jobs: "2", cancelled_jobs: "1", average_completion_seconds: "12.5" }] });
+    const stats = await new PostgresRepository(client).get_pipeline_job_stats();
+    expect(stats).toEqual({ total_jobs: 7, completed_jobs: 4, failed_jobs: 2, cancelled_jobs: 1, average_completion_seconds: 12.5 });
+    expect(client.calls[0]?.text).toContain("avg(extract(epoch FROM (finished_at-started_at)))");
+    expect(client.calls[0]?.text).toContain("status='completed'");
+  });
+
   it("inserts and queries LLM usage with optional filters", async () => {
     const client = new FakeClient({ rows: [] }, { rows: [{ total_calls: "1" }] }, { rows: [{ provider: "openrouter" }] });
     const repository = new PostgresRepository(client);

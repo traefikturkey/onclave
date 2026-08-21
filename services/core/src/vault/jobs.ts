@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import type { ContentMetadata, JobErrors, JobTiming, PipelineJob } from "./models";
+import type { ContentMetadata, JobErrors, JobTiming, JsonObject, PipelineJob } from "./models";
 import { DataTier, JobStatus } from "./models";
 import { PipelineStageError, type PipelineRequest, type PipelineRunResult, type UnifiedPipeline } from "./pipeline";
 
@@ -11,16 +11,19 @@ export type JobStorage = {
   find_active_pipeline_job(resourceKey: string): Promise<unknown>;
   update_pipeline_job(jobId: string, status: JobStatus, timing: JobTiming, errors: JobErrors): Promise<unknown>;
   list_pipeline_jobs(contentId: string | undefined, status: JobStatus | undefined, limit: number, offset: number): Promise<readonly [unknown[], number]>;
+  get_pipeline_job_stats(): Promise<JobStatsResponse>;
   update_content_processing_status(contentId: string, status: string, pipelineVersion?: string): Promise<void>;
   get_content?(contentId: string): Promise<ContentMetadata | undefined>;
 };
 
 export type JobOrchestratorConfig = {
   pipelineVersion: string;
+  notify?: (agentId: string, body: string, requestTurn: boolean) => Promise<void>;
 };
 
 export type JobSubmission = Omit<PipelineRequest, "jobId" | "pipelineVersion"> & {
   resourceKey: string;
+  notifyAgentId?: string;
 };
 
 export type ReprocessSubmission = {
@@ -51,6 +54,14 @@ export type JobDetailResponse = JobStatusResponse & {
 export type JobListResponse = {
   jobs: JobStatusResponse[];
   total: number;
+};
+
+export type JobStatsResponse = {
+  total_jobs: number;
+  completed_jobs: number;
+  failed_jobs: number;
+  cancelled_jobs: number;
+  average_completion_seconds: number | null;
 };
 
 export type CancelResponse = {
@@ -143,7 +154,7 @@ export class PipelineOrchestrator {
       status: JobStatus.PENDING,
       pipeline_version: this.config.pipelineVersion,
       data_tier: DataTier.COMPACT,
-      metadata: {},
+      metadata: submission.notifyAgentId === undefined ? {} : { notify_agent_id: submission.notifyAgentId },
       created_at: new Date(),
     };
     const job = pipelineJob(await this.storage.create_pipeline_job(pending), pending) ?? pending;
@@ -190,6 +201,10 @@ export class PipelineOrchestrator {
     }), total };
   }
 
+  async stats(): Promise<JobStatsResponse> {
+    return this.storage.get_pipeline_job_stats();
+  }
+
   async cancel(jobId: string): Promise<CancelResponse | undefined> {
     const job = pipelineJob(await this.storage.get_pipeline_job(jobId));
     if (job === undefined) return undefined;
@@ -198,7 +213,8 @@ export class PipelineOrchestrator {
     if (TERMINAL_STATUSES.has(status)) {
       return { job_id: resolvedId, status, message: `Job already in terminal state: ${status}` };
     }
-    await this.storage.update_pipeline_job(resolvedId, JobStatus.CANCELLED, [undefined, new Date()], [undefined, undefined, undefined]);
+    const cancelled = pipelineJob(await this.storage.update_pipeline_job(resolvedId, JobStatus.CANCELLED, [undefined, new Date()], [undefined, undefined, undefined]), job) ?? job;
+    await this.notifyTerminal(cancelled, JobStatus.CANCELLED);
     return { job_id: resolvedId, status: JobStatus.CANCELLED, message: "Job cancelled" };
   }
 
@@ -236,14 +252,46 @@ export class PipelineOrchestrator {
         if (current?.status === JobStatus.CANCELLED) return;
         await this.storage.update_pipeline_job(jobId, JobStatus.FAILED, [undefined, new Date()], ["PIPELINE_DISABLED", "Unified pipeline is disabled", "pipeline"]);
         await this.storage.update_content_processing_status(job.content_id, JobStatus.FAILED);
+        await this.notifyTerminal(pipelineJob(await this.storage.get_pipeline_job(jobId), job) ?? job, JobStatus.FAILED);
         return;
       }
+      const current = pipelineJob(await this.storage.get_pipeline_job(jobId));
+      if (current?.status === JobStatus.CANCELLED) return;
       const completed = await this.storage.update_pipeline_job(jobId, JobStatus.COMPLETED, [undefined, new Date()], [undefined, undefined, undefined]);
-      await this.pipeline.deliverCallback(pipelineJob(completed, job) ?? job, output.resultJson);
+      const completedJob = pipelineJob(completed, job) ?? job;
+      await this.pipeline.deliverCallback(completedJob, output.resultJson);
+      await this.notifyTerminal(completedJob, JobStatus.COMPLETED, output.resultJson);
     } catch (error: unknown) {
+      const current = pipelineJob(await this.storage.get_pipeline_job(jobId));
+      if (current?.status === JobStatus.CANCELLED) return;
       const failure = this.failure(error);
-      await this.storage.update_pipeline_job(jobId, JobStatus.FAILED, [undefined, new Date()], [failure.code, failure.message, failure.stage]);
+      const failed = pipelineJob(await this.storage.update_pipeline_job(jobId, JobStatus.FAILED, [undefined, new Date()], [failure.code, failure.message, failure.stage]), job) ?? job;
       await this.storage.update_content_processing_status(job.content_id, JobStatus.FAILED);
+      await this.notifyTerminal(failed, JobStatus.FAILED);
+    }
+  }
+
+  private async notifyTerminal(job: PipelineJob, status: JobStatus, result?: JsonObject): Promise<void> {
+    const agentId = job.metadata?.notify_agent_id;
+    if (typeof agentId !== "string" || agentId === "" || this.config.notify === undefined) return;
+    const startedAt = timestamp(job.started_at);
+    const finishedAt = timestamp(job.finished_at);
+    const durationSeconds = job.started_at != null && job.finished_at != null
+      ? Math.max(0, (job.finished_at.getTime() - job.started_at.getTime()) / 1000)
+      : null;
+    const summary = typeof result?.summary === "string" ? result.summary : undefined;
+    const event = {
+      event: "job_terminal", job_id: job.id, content_id: job.content_id, status,
+      started_at: startedAt, finished_at: finishedAt, duration_seconds: durationSeconds,
+      ...(summary === undefined ? {} : { summary }),
+    };
+    const body = status === JobStatus.COMPLETED
+      ? `YouTube ingestion completed.\n\nSummary:\n${summary ?? "No summary was generated."}\n\nJob data:\n${JSON.stringify(event)}\n\nInspect the current repository and provide a basic, concrete recommendation for how the video's ideas might apply here. Cite relevant repository paths. If it does not apply, say so. Do not modify files.`
+      : JSON.stringify(event);
+    try {
+      await this.config.notify(agentId, body, status === JobStatus.COMPLETED);
+    } catch {
+      // Terminal job state is authoritative even when notification delivery is unavailable.
     }
   }
 

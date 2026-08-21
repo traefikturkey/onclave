@@ -1,4 +1,5 @@
 import { mkdir } from "node:fs/promises";
+import { createEnvelope } from "@onclave/envelope";
 import type { Server } from "node:http";
 import { AgentDeliveryService } from "./agent-delivery";
 import { startBroker, type BrokerClient } from "./broker";
@@ -8,12 +9,14 @@ import { ConversationStore } from "./conversations";
 import { startDeadLetterConsumer } from "./dead-letter";
 import { startHealthServer } from "./health";
 import { createVaultHttpServer } from "./vault/http";
+import { HttpError } from "./vault/errors";
 import { createAgentRouteHandlers } from "./vault/agent-routes";
 import { createVaultRouteHandlers } from "./vault/routes";
 import { createVaultService, type VaultService } from "./vault/vault-service";
 import { log } from "./log";
 import { Registry } from "./registry";
-import { startRpcServer, type CoreServices } from "./rpc";
+import { coreOrigin } from "./core-origin";
+import { publishEnvelope, startRpcServer, type CoreServices } from "./rpc";
 import { loadTrustEntries } from "./trust";
 
 export type CoreRuntime = {
@@ -75,12 +78,26 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
       healthServer = startHealthServer(config.httpPort, broker);
     } else {
       const vaultConfig = config.vault;
-      vault = await createVaultService(vaultConfig);
+      vault = await createVaultService(vaultConfig, {
+        notify: async (agentId, body, requestTurn) => {
+          const channel = broker.channel();
+          if (channel === undefined) throw new Error("Broker unavailable");
+          publishEnvelope(channel, createEnvelope({
+            performative: requestTurn ? "request" : "inform", from: coreOrigin(), to: agentId, body,
+            schema: "onclave.job.terminal.v1",
+          }));
+        },
+      });
       healthServer = createVaultHttpServer({
         keyStore: vault.keyStore,
         handlers: {
           ...createVaultRouteHandlers({
             ...vault,
+            authorizeNotificationAgent: (agentId, keyId) => {
+              const agent = services.registry.get(agentId);
+              if (agent === undefined) throw new HttpError(404, "Notification agent is not registered");
+              if (keyId === undefined || agent.key_id !== keyId) throw new HttpError(403, "Notification agent is bound to a different key");
+            },
             health: () => {
               const status = broker.status();
               // Broker state is diagnostic only: the deployment gate requires a running HTTP service.

@@ -74,6 +74,7 @@ export type VaultRouteDependencies = {
   embeddingReindexer: VaultEmbeddingReindexer;
   health: () => Record<string, unknown> | Promise<Record<string, unknown>>;
   ready: () => Promise<Record<string, unknown>>;
+  authorizeNotificationAgent?: (agentId: string, keyId: string | undefined) => void;
 };
 
 type RequestObject = Record<string, unknown>;
@@ -168,7 +169,7 @@ function submittedJobId(job: { id?: string }): string {
   return job.id;
 }
 
-async function resubmitExistingIngest(deps: VaultRouteDependencies, content: ContentMetadata, resourceKey: string, fallbackTitle: string): Promise<string> {
+async function resubmitExistingIngest(deps: VaultRouteDependencies, content: ContentMetadata, resourceKey: string, fallbackTitle: string, notifyAgentId?: string): Promise<string> {
   const id = contentId(content);
   if (id === "") throw new Error("Existing content does not have an ID");
   let contentText: string;
@@ -183,6 +184,7 @@ async function resubmitExistingIngest(deps: VaultRouteDependencies, content: Con
     contentType: content.content_type,
     title: content.title ?? fallbackTitle,
     resourceKey,
+    notifyAgentId,
   });
   return submittedJobId(job);
 }
@@ -495,6 +497,11 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
         throw bodyValidationError("metadata", "Input should be a valid dictionary", "dict_type");
       }
       const clientMetadata: JsonObject = { ...(suppliedMetadata as JsonObject) };
+      const notifyAgentId = optionalText(body, "notify_agent_id");
+      if (notifyAgentId !== undefined) {
+        if (deps.authorizeNotificationAgent === undefined) throw new HttpError(503, "Job notifications are unavailable");
+        deps.authorizeNotificationAgent(notifyAgentId, request.keyId);
+      }
       const suppliedTitle = optionalText(body, "title");
       if (suppliedTitle !== undefined) clientMetadata.title = suppliedTitle;
       const tags = splitTags(request.query.tags) ?? [];
@@ -505,7 +512,7 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
         const existing = await deps.repository.find_content_by_resource_key(resourceKey) ?? await deps.repository.find_content_by_video_id(videoId);
         if (existing !== undefined) {
           const title = existing.title ?? `YouTube: ${videoId}`;
-          const jobId = await resubmitExistingIngest(deps, existing, resourceKey, title);
+          const jobId = await resubmitExistingIngest(deps, existing, resourceKey, title, notifyAgentId);
           return jsonResponse({ content_id: contentId(existing), content_type: existing.content_type, title, job_id: jobId });
         }
         let transcript: YouTubeTranscript | undefined;
@@ -538,7 +545,7 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
           metadata: youtubeMetadataJson(videoId, resourceKey, metadata, clientMetadata),
         });
         const id = contentId(created) || videoId;
-        const job = await deps.jobs.submit({ contentId: id, contentText: text, contentType: "youtube", title, resourceKey });
+        const job = await deps.jobs.submit({ contentId: id, contentText: text, contentType: "youtube", title, resourceKey, notifyAgentId });
         return jsonResponse({ title, content_id: id, content_type: "youtube", job_id: submittedJobId(job) });
       }
       const canonicalUrl = canonicalWebUrl(url);
@@ -547,7 +554,7 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
       const existing = await deps.repository.find_content_by_resource_key(resourceKey);
       if (existing !== undefined) {
         const title = existing.title ?? canonicalUrl;
-        const jobId = await resubmitExistingIngest(deps, existing, resourceKey, title);
+        const jobId = await resubmitExistingIngest(deps, existing, resourceKey, title, notifyAgentId);
         return jsonResponse({ content_id: contentId(existing), content_type: existing.content_type, title, job_id: jobId });
       }
       const extracted = await deps.docling.extractMarkdown(url);
@@ -567,6 +574,7 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
       const offset = integerQuery(request.query.offset, "offset", 0, 0, Number.MAX_SAFE_INTEGER);
       return jsonResponse(await deps.jobs.list(request.query.content_id, statusFromQuery(request.query.status), limit, offset));
     },
+    jobsStats: async () => jsonResponse(await deps.jobs.stats()),
     jobDetail: async (request) => {
       const id = request.params.job_id ?? "";
       const job = await deps.jobs.get(id);

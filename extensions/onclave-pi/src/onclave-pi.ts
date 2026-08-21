@@ -76,10 +76,26 @@ export default function onclavePi(pi: ExtensionAPI): void {
 
   let runtime: AdapterRuntime | null = null;
   let heartbeatTimer: NodeJS.Timeout | null = null;
+  const inheritedAgentId = process.env.ONCLAVE_AGENT_ID;
+  let exposedAgentId: string | undefined;
 
   pi.on("session_start", async (_event, ctx) => {
     try {
-      runtime = await startAdapter(pi, ctx, { audit, policyPath });
+      runtime = await startAdapter(pi, ctx, {
+        audit,
+        policyPath,
+        onRegistered: (agentId) => {
+          exposedAgentId = agentId;
+          process.env.ONCLAVE_AGENT_ID = agentId;
+        },
+        onDisconnected: () => {
+          if (process.env.ONCLAVE_AGENT_ID === exposedAgentId) {
+            if (inheritedAgentId === undefined) delete process.env.ONCLAVE_AGENT_ID;
+            else process.env.ONCLAVE_AGENT_ID = inheritedAgentId;
+          }
+          exposedAgentId = undefined;
+        },
+      });
       heartbeatTimer = setInterval(() => {
         void heartbeatTick(runtime).catch(() => undefined);
       }, HEARTBEAT_INTERVAL_MS);
@@ -101,6 +117,11 @@ export default function onclavePi(pi: ExtensionAPI): void {
       await shutdownAdapter(runtime, audit);
       runtime = null;
     }
+    if (process.env.ONCLAVE_AGENT_ID === exposedAgentId) {
+      if (inheritedAgentId === undefined) delete process.env.ONCLAVE_AGENT_ID;
+      else process.env.ONCLAVE_AGENT_ID = inheritedAgentId;
+    }
+    exposedAgentId = undefined;
   });
 
   pi.on("agent_end", async (event) => {
@@ -121,6 +142,8 @@ export default function onclavePi(pi: ExtensionAPI): void {
 type StartOptions = {
   audit: (event: AdapterAuditEventName, metadata?: AdapterAuditMetadata) => Promise<void>;
   policyPath: string;
+  onRegistered?: (agentId: string) => void;
+  onDisconnected?: () => void;
 };
 
 export type ApiBaseLoader = () => Promise<string | undefined>;
@@ -176,6 +199,7 @@ async function startAdapter(
       runtime.state = state;
       if (state === "disconnected") {
         runtime.registered = false;
+        options.onDisconnected?.();
         void options.audit("adapter_disconnect", { detail: detail ?? "" });
       }
       refreshFooterStatus(runtime);
@@ -201,6 +225,7 @@ async function onHttpReady(runtime: AdapterRuntime, options: StartOptions, signa
     throw new Error(detail);
   }
   runtime.registered = true;
+  options.onRegistered?.(runtime.card.agent_id);
   await updateAlivePeers(runtime);
   await options.audit("adapter_register", { agent_id: runtime.card.agent_id });
   await options.audit("adapter_connect", { agent_id: runtime.card.agent_id });
