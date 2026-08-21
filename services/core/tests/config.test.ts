@@ -13,7 +13,6 @@ describe("core configuration", () => {
     });
 
     expect(config.amqpUrl).toBe("amqp://rabbitmq.example.internal:5672/onclave");
-    expect(config.agentRetentionMs).toBe(86_400_000);
   });
 
   it("activates the vault only with its canonical password variable", () => {

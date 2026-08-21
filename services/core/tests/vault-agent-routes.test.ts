@@ -130,7 +130,6 @@ function config(dataDir: string): CoreConfig {
     queueTtlMs: 60_000,
     queueMaxLength: 100,
     heartbeatStaleMs: 5_000,
-    agentRetentionMs: 86_400_000,
     budgetLimits: { maxExchanges: 3, maxTotalTokens: 1_000 },
     connectRetryBaseMs: 100,
     connectRetryMaxMs: 1_000,
@@ -182,7 +181,7 @@ describe("signed agent vault routes", () => {
     const keysPath = join(dataDir, "authorized_keys");
     writeFileSync(keysPath, `${keyA.authorizedKeysLine}\n${keyB.authorizedKeysLine}\n`, "utf8");
     const coreConfig = config(dataDir);
-    registry = new Registry({ path: coreConfig.registryPath, staleMs: coreConfig.heartbeatStaleMs, retentionMs: coreConfig.agentRetentionMs });
+    registry = new Registry({ path: coreConfig.registryPath, staleMs: coreConfig.heartbeatStaleMs });
     const services: CoreServices = {
       config: coreConfig,
       registry,
@@ -338,7 +337,7 @@ describe("signed agent vault routes", () => {
     expect(registry.get("agent-a")).toMatchObject({ key_id: winningKey.keyId, name: "Agent A2" });
     expect(registry.get("agent-b")).toMatchObject({ key_id: winningKey.keyId });
 
-    const reloaded = new Registry({ path: join(dataDir, "registry.json"), staleMs: 5_000, retentionMs: 86_400_000 });
+    const reloaded = new Registry({ path: join(dataDir, "registry.json"), staleMs: 5_000 });
     await reloaded.load();
     expect(reloaded.get("agent-a")).toMatchObject({ key_id: winningKey.keyId, name: "Agent A2" });
   });

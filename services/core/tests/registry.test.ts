@@ -24,7 +24,7 @@ const card: AgentCard = {
 };
 
 function makeRegistry(now: () => Date, path?: string): Registry {
-  return new Registry({ path: path ?? join(dir, "registry.json"), staleMs: 1000, retentionMs: 10000, now });
+  return new Registry({ path: path ?? join(dir, "registry.json"), staleMs: 1000, now });
 }
 
 describe("Registry", () => {
@@ -48,30 +48,6 @@ describe("Registry", () => {
     expect(registry.list(true)[0].alive).toBe(false);
     expect(await registry.heartbeat("agent-a")).toBe(true);
     expect(registry.list()[0].alive).toBe(true);
-  });
-
-  it("prunes registrations after the retention period", async () => {
-    let currentMs = Date.parse("2026-07-18T10:00:00Z");
-    const path = join(dir, "registry.json");
-    const registry = makeRegistry(() => new Date(currentMs), path);
-    await registry.register(card);
-
-    currentMs += 11000;
-    expect(await registry.pruneExpired()).toBe(1);
-    expect(registry.list(true)).toEqual([]);
-
-    const reloaded = makeRegistry(() => new Date(currentMs), path);
-    expect(await reloaded.load()).toBe(0);
-  });
-
-  it("keeps stale registrations until the retention period expires", async () => {
-    let currentMs = Date.parse("2026-07-18T10:00:00Z");
-    const registry = makeRegistry(() => new Date(currentMs));
-    await registry.register(card);
-
-    currentMs += 5000;
-    expect(await registry.pruneExpired()).toBe(0);
-    expect(registry.list(true)).toMatchObject([{ agent_id: "agent-a", alive: false }]);
   });
 
   it("rejects heartbeats for unknown agents", async () => {

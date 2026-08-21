@@ -13,7 +13,6 @@ export type CoreConfig = {
   queueTtlMs: number;
   queueMaxLength: number;
   heartbeatStaleMs: number;
-  agentRetentionMs: number;
   budgetLimits: BudgetLimits;
   connectRetryBaseMs: number;
   connectRetryMaxMs: number;
@@ -51,7 +50,6 @@ export function loadCoreConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig
     queueTtlMs: parseIntEnv(env.ONCLAVE_QUEUE_TTL_MS, 86400000, "queue ttl"),
     queueMaxLength: parseIntEnv(env.ONCLAVE_QUEUE_MAX_LENGTH, 1000, "queue max length"),
     heartbeatStaleMs: parseIntEnv(env.ONCLAVE_HEARTBEAT_STALE_MS, 90000, "heartbeat stale ms"),
-    agentRetentionMs: parseIntEnv(env.ONCLAVE_AGENT_RETENTION_MS, 86400000, "agent retention ms"),
     budgetLimits: {
       maxExchanges: parseIntEnv(env.ONCLAVE_MAX_EXCHANGES, 16, "max exchanges"),
       maxTotalTokens: parseIntEnv(env.ONCLAVE_MAX_TOTAL_TOKENS, 200000, "max total tokens"),
