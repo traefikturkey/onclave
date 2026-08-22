@@ -1,9 +1,8 @@
-import type { AgentOrigin, Envelope, EnvelopeParseResult } from "./envelope";
-import { isAgentOrigin, parseEnvelope } from "./envelope";
-
-export const AGENT_QUEUE_PREFIX = "agent.";
+import { A2A_PROTOCOL_VERSION, isTaskState, parseMessage, type Message, type TaskStatusEvent } from "./a2a";
+import { isUlid } from "./ulid";
 
 type JsonRecord = Record<string, unknown>;
+export const AGENT_QUEUE_PREFIX = "agent.";
 
 export type AmqpPublishOptions = {
   persistent: true;
@@ -14,128 +13,55 @@ export type AmqpPublishOptions = {
   expiration?: string;
   headers: JsonRecord;
 };
+export type AmqpPublishSpec = { routingKey: string; content: Buffer; options: AmqpPublishOptions };
+export type A2AAmqpPublishSpec = AmqpPublishSpec & { kind: "message" | "task-status" };
+export type A2AConsumedMessage = { content: Buffer | Uint8Array; properties: AmqpConsumedProperties };
+export type AmqpConsumedProperties = { messageId?: unknown; correlationId?: unknown; expiration?: unknown; headers?: JsonRecord };
 
-export type AmqpPublishSpec = {
-  routingKey: string;
-  content: Buffer;
-  options: AmqpPublishOptions;
-};
-
-export type AmqpConsumedProperties = {
-  messageId?: unknown;
-  correlationId?: unknown;
-  expiration?: unknown;
-  headers?: JsonRecord | undefined;
-};
-
-export type AmqpConsumedMessage = {
-  content: Buffer | Uint8Array;
-  properties: AmqpConsumedProperties;
-};
-
-export function agentQueueName(agentId: string): string {
-  return `${AGENT_QUEUE_PREFIX}${agentId}`;
-}
-
-function buildHeaders(envelope: Envelope): JsonRecord {
-  const headers: JsonRecord = {
-    "x-onclave-v": envelope.v,
-    performative: envelope.performative,
-    hops: envelope.hops,
-    origin: JSON.stringify(envelope.from),
-    to: envelope.to,
-    sent_at: envelope.sent_at,
-  };
-  if (envelope.in_reply_to !== undefined) headers.in_reply_to = envelope.in_reply_to;
-  if (envelope.traceparent !== undefined) headers.traceparent = envelope.traceparent;
-  if (envelope.usage !== undefined) headers.usage = JSON.stringify(envelope.usage);
-  return headers;
-}
-
-export function toAmqpPublish(envelope: Envelope): AmqpPublishSpec {
-  const content: JsonRecord = { body: envelope.body };
-  if (envelope.schema !== undefined) content.schema = envelope.schema;
-  if (envelope.delegation !== undefined) content.delegation = envelope.delegation;
-  const options: AmqpPublishOptions = {
-    persistent: true,
-    contentType: "application/json",
-    messageId: envelope.id,
-    correlationId: envelope.conversation_id,
-    replyTo: agentQueueName(envelope.from.agent_id),
-    headers: buildHeaders(envelope),
-  };
-  if (envelope.ttl_ms !== undefined) {
-    options.expiration = String(envelope.ttl_ms);
-  }
-  return {
-    routingKey: envelope.to,
-    content: Buffer.from(JSON.stringify(content), "utf8"),
-    options,
-  };
-}
-
-// #lizard forgives: lizard's TS lexer merges the small helpers below into one
-// region; each individual function stays well under the complexity bound.
+export function agentQueueName(instanceId: string): string { return `${AGENT_QUEUE_PREFIX}${instanceId}`; }
 export function parseExpiration(value: unknown): number | undefined {
   if (typeof value !== "string") return undefined;
   const parsed = Number.parseInt(value, 10);
-  if (!Number.isInteger(parsed)) return undefined;
-  if (parsed <= 0) return undefined;
-  return parsed;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
-
-function isJsonRecord(value: unknown): value is JsonRecord {
-  if (value === null) return false;
-  if (typeof value !== "object") return false;
-  return !Array.isArray(value);
-}
-
-function parseJsonRecord(value: unknown): JsonRecord | undefined {
+function jsonRecord(value: unknown): value is JsonRecord { return value !== null && typeof value === "object" && !Array.isArray(value); }
+function parseJson(value: unknown): JsonRecord | undefined {
   if (typeof value !== "string") return undefined;
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return isJsonRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
+  try { const parsed: unknown = JSON.parse(value); return jsonRecord(parsed) ? parsed : undefined; } catch { return undefined; }
 }
 
-function parseOriginHeader(headers: JsonRecord): AgentOrigin | undefined {
-  const origin = parseJsonRecord(headers.origin);
-  return origin !== undefined && isAgentOrigin(origin) ? origin : undefined;
-}
-
-export function fromAmqpMessage(message: AmqpConsumedMessage): EnvelopeParseResult {
-  const headers = message.properties.headers ?? {};
-  const contentRecord = parseJsonRecord(Buffer.from(message.content).toString("utf8"));
-  if (contentRecord === undefined) {
-    return { ok: false, error: "message content is not a JSON object" };
-  }
-  const origin = parseOriginHeader(headers);
-  if (origin === undefined) {
-    return { ok: false, error: "origin header is not a valid agent origin card" };
-  }
-  const usage = headers.usage === undefined ? undefined : parseJsonRecord(headers.usage);
-  if (headers.usage !== undefined && usage === undefined) {
-    return { ok: false, error: "usage header is not a JSON object" };
-  }
-  // Optional fields left as undefined are treated as absent by parseEnvelope.
-  const candidate: JsonRecord = {
-    v: headers["x-onclave-v"],
-    id: message.properties.messageId,
-    conversation_id: message.properties.correlationId,
-    performative: headers.performative,
-    from: origin,
-    to: headers.to,
-    hops: headers.hops,
-    body: contentRecord.body,
-    sent_at: headers.sent_at,
-    in_reply_to: headers.in_reply_to,
-    ttl_ms: parseExpiration(message.properties.expiration),
-    traceparent: headers.traceparent,
-    schema: contentRecord.schema,
-    usage,
-    delegation: contentRecord.delegation,
+export function toA2AMessagePublish(message: Message): A2AAmqpPublishSpec {
+  const options: AmqpPublishOptions = {
+    persistent: true, contentType: "application/json", messageId: message.message_id,
+    correlationId: message.context_id, replyTo: agentQueueName(message.origin.instance_id),
+    headers: { "x-onclave-a2a-v": message.protocol_version, "x-onclave-a2a-kind": "message", type: message.type, context_id: message.context_id, origin: JSON.stringify(message.origin), destination: message.destination, sent_at: message.sent_at, hops: message.hops, ...(message.task_id === undefined ? {} : { task_id: message.task_id }), ...(message.trace_id === undefined ? {} : { trace_id: message.trace_id }) },
   };
-  return parseEnvelope(candidate);
+  if (message.ttl_ms !== undefined) options.expiration = String(message.ttl_ms);
+  return { kind: "message", routingKey: message.destination, content: Buffer.from(JSON.stringify({ body: message.body, schema: message.schema, usage: message.usage }), "utf8"), options };
+}
+
+export function toA2ATaskStatusPublish(event: TaskStatusEvent): A2AAmqpPublishSpec {
+  return { kind: "task-status", routingKey: event.destination, content: Buffer.from(JSON.stringify({ body: event.body, usage: event.usage }), "utf8"), options: { persistent: true, contentType: "application/json", messageId: event.event_id, correlationId: event.context_id, replyTo: agentQueueName(event.origin_instance_id), headers: { "x-onclave-a2a-v": event.protocol_version, "x-onclave-a2a-kind": "task-status", task_id: event.task_id, context_id: event.context_id, origin_instance_id: event.origin_instance_id, destination: event.destination, state: event.state, occurred_at: event.occurred_at, ...(event.message_id === undefined ? {} : { message_id: event.message_id }), ...(event.trace_id === undefined ? {} : { trace_id: event.trace_id }) } } };
+}
+
+export type A2AParseResult = { ok: true; message: Message } | { ok: false; error: string };
+export type A2AStatusParseResult = { ok: true; event: TaskStatusEvent } | { ok: false; error: string };
+export function fromA2AMessage(message: A2AConsumedMessage): A2AParseResult {
+  const headers = message.properties.headers ?? {};
+  if (headers["x-onclave-a2a-v"] !== A2A_PROTOCOL_VERSION || headers["x-onclave-a2a-kind"] !== "message") return { ok: false, error: "protocol_version_mismatch" };
+  let content: unknown;
+  try { content = JSON.parse(Buffer.from(message.content).toString("utf8")); } catch { return { ok: false, error: "message content is not valid JSON" }; }
+  if (!jsonRecord(content)) return { ok: false, error: "message content is not an object" };
+  const candidate = { protocol_version: headers["x-onclave-a2a-v"], message_id: message.properties.messageId, context_id: headers.context_id ?? message.properties.correlationId, task_id: headers.task_id, type: headers.type, origin: parseJson(headers.origin), destination: headers.destination, body: content.body, sent_at: headers.sent_at, hops: headers.hops, ttl_ms: parseExpiration(message.properties.expiration), schema: content.schema, usage: content.usage, trace_id: headers.trace_id };
+  const parsed = parseMessage(candidate);
+  return parsed.ok ? { ok: true, message: parsed.value } : parsed;
+}
+export function fromA2ATaskStatus(message: A2AConsumedMessage): A2AStatusParseResult {
+  const headers = message.properties.headers ?? {};
+  if (headers["x-onclave-a2a-v"] !== A2A_PROTOCOL_VERSION || headers["x-onclave-a2a-kind"] !== "task-status") return { ok: false, error: "protocol_version_mismatch" };
+  if (!isUlid(message.properties.messageId) || !isUlid(headers.task_id) || !isUlid(headers.context_id) || !isTaskState(headers.state) || typeof headers.origin_instance_id !== "string" || typeof headers.destination !== "string" || typeof headers.occurred_at !== "string" || Number.isNaN(Date.parse(headers.occurred_at))) return { ok: false, error: "task status headers are invalid" };
+  let content: unknown;
+  try { content = JSON.parse(Buffer.from(message.content).toString("utf8")); } catch { return { ok: false, error: "task status content is not valid JSON" }; }
+  if (!jsonRecord(content)) return { ok: false, error: "task status content is not an object" };
+  return { ok: true, event: { protocol_version: A2A_PROTOCOL_VERSION, event_id: message.properties.messageId, task_id: headers.task_id, context_id: headers.context_id, origin_instance_id: headers.origin_instance_id, destination: headers.destination, state: headers.state, occurred_at: headers.occurred_at, ...(headers.message_id === undefined ? {} : { message_id: String(headers.message_id) }), ...(content.body === undefined ? {} : { body: String(content.body) }), ...(content.usage === undefined ? {} : { usage: content.usage as TaskStatusEvent["usage"] }), ...(headers.trace_id === undefined ? {} : { trace_id: String(headers.trace_id) }) } };
 }

@@ -1,6 +1,4 @@
-import { isAgentOrigin } from "./envelope";
-import type { TokenUsage } from "./envelope";
-import { isPerformative, type Performative } from "./performative";
+import { isTaskState, type A2AUsage, type TaskState } from "./a2a";
 
 // Versioned adapter/core handshake: the core rejects register calls whose
 // protocol_version does not match so mismatches fail loudly.
@@ -26,16 +24,10 @@ export type RpcRequest =
   | { op: "heartbeat"; agent_id: string; telemetry?: HeartbeatTelemetry }
   | { op: "unregister"; agent_id: string }
   | { op: "list_agents"; include_stale?: boolean }
-  | { op: "conversation_status"; conversation_id: string }
-  | {
-      op: "record_exchange";
-      conversation_id: string;
-      message_id: string;
-      performative: Performative;
-      from_agent_id: string;
-      to_agent_id: string;
-      usage?: TokenUsage;
-    };
+  | { op: "create_task"; context_id: string; origin_instance_id: string; assignee_instance_id: string; task_id?: string; prior_task_id?: string }
+  | { op: "update_task"; task_id: string; state: TaskState; destination?: string; message_id?: string; body?: string; usage?: A2AUsage; trace_id?: string }
+  | { op: "get_task"; task_id: string }
+  | { op: "task_events"; task_id: string };
 
 export type RpcParseResult =
   | { ok: true; request: RpcRequest }
@@ -51,10 +43,20 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+function hasValidUsage(value: unknown): value is A2AUsage {
+  if (!isRecord(value)) return false;
+  return Number.isSafeInteger(value.input_tokens) && (value.input_tokens as number) >= 0 && Number.isSafeInteger(value.output_tokens) && (value.output_tokens as number) >= 0;
+}
+
 function hasValidCapabilities(value: unknown): boolean {
   if (value === undefined) return true;
   if (!Array.isArray(value)) return false;
   return value.every((entry) => typeof entry === "string");
+}
+
+function isAgentIdentity(value: unknown): boolean {
+  if (!isRecord(value) || !isNonEmptyString(value.agent_id) || !isNonEmptyString(value.name) || !isNonEmptyString(value.host)) return false;
+  return value.project === undefined || typeof value.project === "string";
 }
 
 export function isAgentCard(value: unknown): value is AgentCard {
@@ -64,7 +66,7 @@ export function isAgentCard(value: unknown): value is AgentCard {
   if (record.transport !== "amqp" && record.transport !== "https") return false;
   if (record.model !== undefined && !isNonEmptyString(record.model)) return false;
   if (!hasValidCapabilities(record.capabilities)) return false;
-  return isAgentOrigin(value);
+  return isAgentIdentity(value);
 }
 
 function parseRegister(record: JsonRecord): RpcParseResult {
@@ -91,42 +93,25 @@ function parseAgentIdOp(op: "heartbeat" | "unregister", record: JsonRecord): Rpc
   return { ok: true, request: { op, agent_id: record.agent_id } };
 }
 
-function parseConversationStatus(record: JsonRecord): RpcParseResult {
-  if (!isNonEmptyString(record.conversation_id)) {
-    return { ok: false, error: "conversation_status requires conversation_id" };
+function parseTaskOp(record: JsonRecord): RpcParseResult {
+  const op = record.op;
+  if (op === "create_task") {
+    if (!isNonEmptyString(record.context_id) || !isNonEmptyString(record.origin_instance_id) || !isNonEmptyString(record.assignee_instance_id)) return { ok: false, error: "create_task requires context_id, origin_instance_id, and assignee_instance_id" };
+    if (record.task_id !== undefined && !isNonEmptyString(record.task_id)) return { ok: false, error: "create_task task_id must be a string" };
+    if (record.prior_task_id !== undefined && !isNonEmptyString(record.prior_task_id)) return { ok: false, error: "create_task prior_task_id must be a string" };
+    return { ok: true, request: { op, context_id: record.context_id, origin_instance_id: record.origin_instance_id, assignee_instance_id: record.assignee_instance_id, ...(record.task_id === undefined ? {} : { task_id: record.task_id }), ...(record.prior_task_id === undefined ? {} : { prior_task_id: record.prior_task_id }) } };
   }
-  return {
-    ok: true,
-    request: { op: "conversation_status", conversation_id: record.conversation_id },
-  };
-}
-
-function parseRecordExchange(record: JsonRecord): RpcParseResult {
-  const required = ["conversation_id", "message_id", "from_agent_id", "to_agent_id"];
-  for (const field of required) {
-    if (!isNonEmptyString(record[field])) {
-      return { ok: false, error: `record_exchange requires ${field}` };
-    }
+  if (op === "update_task") {
+    if (!isNonEmptyString(record.task_id) || !isTaskState(record.state)) return { ok: false, error: "update_task requires task_id and valid state" };
+    if (record.destination !== undefined && !isNonEmptyString(record.destination)) return { ok: false, error: "update_task destination must be a string" };
+    if (record.message_id !== undefined && !isNonEmptyString(record.message_id)) return { ok: false, error: "update_task message_id must be a string" };
+    if (record.body !== undefined && typeof record.body !== "string") return { ok: false, error: "update_task body must be a string" };
+    if (record.usage !== undefined && !hasValidUsage(record.usage)) return { ok: false, error: "update_task usage is invalid" };
+    if (record.trace_id !== undefined && !isNonEmptyString(record.trace_id)) return { ok: false, error: "update_task trace_id must be a string" };
+    return { ok: true, request: { op, task_id: record.task_id, state: record.state, ...(record.destination === undefined ? {} : { destination: record.destination }), ...(record.message_id === undefined ? {} : { message_id: record.message_id }), ...(record.body === undefined ? {} : { body: record.body }), ...(record.usage === undefined ? {} : { usage: record.usage }), ...(record.trace_id === undefined ? {} : { trace_id: record.trace_id }) } };
   }
-  if (!isPerformative(record.performative)) {
-    return { ok: false, error: "record_exchange requires a valid performative" };
-  }
-  const usage = record.usage;
-  if (usage !== undefined && !isRecord(usage)) {
-    return { ok: false, error: "record_exchange usage must be an object" };
-  }
-  return {
-    ok: true,
-    request: {
-      op: "record_exchange",
-      conversation_id: record.conversation_id as string,
-      message_id: record.message_id as string,
-      performative: record.performative,
-      from_agent_id: record.from_agent_id as string,
-      to_agent_id: record.to_agent_id as string,
-      ...(usage !== undefined ? { usage: usage as TokenUsage } : {}),
-    },
-  };
+  if ((op === "get_task" || op === "task_events") && isNonEmptyString(record.task_id)) return { ok: true, request: { op, task_id: record.task_id } };
+  return { ok: false, error: `${String(op)} requires task_id` };
 }
 
 export function parseRpcRequest(value: unknown): RpcParseResult {
@@ -150,10 +135,11 @@ export function parseRpcRequest(value: unknown): RpcParseResult {
           ...(value.include_stale === true ? { include_stale: true } : {}),
         },
       };
-    case "conversation_status":
-      return parseConversationStatus(value);
-    case "record_exchange":
-      return parseRecordExchange(value);
+    case "create_task":
+    case "update_task":
+    case "get_task":
+    case "task_events":
+      return parseTaskOp(value);
     default:
       return { ok: false, error: `unknown rpc op: ${String(value.op)}` };
   }

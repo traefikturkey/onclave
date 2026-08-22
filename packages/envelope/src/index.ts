@@ -1,12 +1,39 @@
 export {
+  A2A_PROTOCOL_VERSION,
+  MESSAGE_TYPES,
+  TASK_STATES,
+  createMessage,
+  createTask,
+  createTaskStatusEvent,
+  isMessageType,
+  isTaskState,
+  isTerminalTaskState,
+  parseMessage,
+  transitionTask,
+  type A2AOrigin,
+  type A2AUsage,
+  type Message,
+  type MessageType,
+  type ParseResult,
+  type Task,
+  type TaskState,
+  type TaskStatusEvent,
+  type TransitionResult,
+} from "./a2a";
+export {
   AGENT_QUEUE_PREFIX,
   agentQueueName,
-  fromAmqpMessage,
+  fromA2AMessage,
+  fromA2ATaskStatus,
   parseExpiration,
-  toAmqpPublish,
-  type AmqpConsumedMessage,
+  toA2AMessagePublish,
+  toA2ATaskStatusPublish,
   type AmqpConsumedProperties,
   type AmqpPublishOptions,
+  type A2AAmqpPublishSpec,
+  type A2AConsumedMessage,
+  type A2AParseResult,
+  type A2AStatusParseResult,
   type AmqpPublishSpec,
 } from "./amqp";
 export {
@@ -17,47 +44,7 @@ export {
   type BudgetVerdict,
 } from "./budget";
 export { canonicalJson, type CanonicalJsonValue } from "./canonical-json";
-export {
-  DELEGATED_ACTIONS,
-  DELEGATION_VERSION,
-  MAX_DELEGATION_LIFETIME_MS,
-  createDelegationGrant,
-  isDelegatedAction,
-  parseDelegationGrant,
-  requestSha256,
-  verifyDelegationGrant,
-  type CreateDelegationGrantInput,
-  type DelegatedAction,
-  type DelegationGrant,
-  type DelegationVerificationResult,
-  type VerifyDelegationGrantInput,
-} from "./delegation";
-export {
-  DEFAULT_MAX_HOPS,
-  ENVELOPE_VERSION,
-  buildFailureReply,
-  buildInformReply,
-  buildNotUnderstoodReply,
-  createEnvelope,
-  incrementHops,
-  isAgentOrigin,
-  parseEnvelope,
-  type AgentOrigin,
-  type CreateEnvelopeInput,
-  type Envelope,
-  type EnvelopeParseResult,
-  type HopResult,
-  type ReplyInput,
-  type TokenUsage,
-} from "./envelope";
-export {
-  buildDelegatedRequestFraming,
-  buildInformDisplayText,
-  buildRequestFraming,
-  generateBoundary,
-  sanitizeField,
-} from "./framing";
-export { PERFORMATIVES, isPerformative, mayTriggerTurn, type Performative } from "./performative";
+export { DEFAULT_MAX_HOPS } from "./a2a";
 export {
   PROTOCOL_VERSION,
   isAgentCard,
