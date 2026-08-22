@@ -814,7 +814,7 @@ function alivePeerAgentIds(response: Record<string, unknown>, localAgentId: stri
   return [...recipients];
 }
 
-function formatReply(reply: Envelope | undefined, msgId: string): string {
+function formatReply(reply: Envelope | undefined): string {
   if (reply === undefined) return "pending";
   return `${reply.performative} from ${reply.from.agent_id}:\n${reply.body}`;
 }
@@ -830,7 +830,7 @@ function registerGetTool(pi: ExtensionAPI, getRuntime: RuntimeGetter): void {
     async execute(_callId, params) {
       const runtime = requireRuntime(getRuntime);
       const reply = runtime.correlation.getReply(params.msg_id);
-      return textResult(formatReply(reply, params.msg_id), {
+      return textResult(formatReply(reply), {
         msg_id: params.msg_id,
         status: reply === undefined ? "pending" : "complete",
         reply,
@@ -859,7 +859,7 @@ function registerAwaitTool(pi: ExtensionAPI, getRuntime: RuntimeGetter): void {
         await sleep(250);
         reply = runtime.correlation.getReply(params.msg_id);
       }
-      return textResult(formatReply(reply, params.msg_id), {
+      return textResult(formatReply(reply), {
         msg_id: params.msg_id,
         status: reply === undefined ? "timeout" : "complete",
         reply,
