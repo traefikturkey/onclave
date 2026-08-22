@@ -19,7 +19,6 @@ import {
 import { DataTier, EntitySource, JobStatus } from "./models";
 import { PIPELINE_STAGE_STATUSES, type PipelineStage, type PipelineStageStatus } from "./job-stages";
 
-const TIER_ORDER = ["S", "A", "B", "C", "D"];
 const CONTENT_COLUMNS = "id, content_type, title, description, mime_type, file_size, file_path, author, tags, tier, metadata, created_at, updated_at";
 const ENTITY_COLUMNS = "id, entity_type, name, normalized_name, description, hierarchy, metadata, created_at, updated_at, source";
 

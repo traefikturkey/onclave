@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { ContentMetadata, JobErrors, JobTiming, JsonObject, PipelineJob } from "./models";
 import { DataTier, JobStatus } from "./models";
 import { initialPipelineStages, pipelineStages, stagesMetadata, PIPELINE_STAGES, type PipelineStage, type PipelineStageStatus, type PipelineStages } from "./job-stages";
-import { PipelineStageError, type PipelineRequest, type PipelineRunResult, type UnifiedPipeline } from "./pipeline";
+import { PipelineStageError, type PipelineRequest, type UnifiedPipeline } from "./pipeline";
 import {
   RECOMMENDATION_REQUEST_SCHEMA,
   RECOMMENDATION_REQUEST_VERSION,

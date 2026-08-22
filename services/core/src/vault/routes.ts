@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { HttpError } from "./errors";
 import type { VaultEmbeddingReindexer } from "./embedding-reindex";

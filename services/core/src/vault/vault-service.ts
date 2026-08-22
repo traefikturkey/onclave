@@ -27,7 +27,6 @@ import type {
 } from "./routes";
 import type { PipelineOrchestrator as PipelineOrchestratorType } from "./jobs";
 import type { SearchService as SearchServiceType } from "./search";
-import type { UsagePricingService } from "./usage";
 
 const EMBEDDING_CHUNK_CODE_POINTS = 400;
 
