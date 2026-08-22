@@ -1,8 +1,8 @@
 ---
 created: 2026-07-18
 status: active
-source_prd: ./v2-PRD.md
-implementation_plan: ./v2-implementation-plan.md
+source_prd: ./PRD.md
+implementation_plan: ./implementation-plan.md
 branch: feature/v2-broker-core
 ---
 
@@ -12,8 +12,7 @@ branch: feature/v2-broker-core
 
 Phases 0 through 4 of the v2 implementation plan are complete on
 `feature/v2-broker-core`. The repo is a pnpm workspace hosting the shared
-envelope package, the containerized core service, and the v2 Pi adapter
-alongside the untouched v1 extension.
+envelope package, the containerized core service, and the supported Pi adapter.
 
 ## Phase Progress
 
@@ -54,7 +53,7 @@ with the adapter (10).
 
 ## Notes
 
-- v1 (`extensions/onclave-comms`) is untouched and its suites still pass.
+- The retired v1 in-session LAN adapter has been removed.
 - Sender adapters do not report exchanges; the receiving adapter calls
   `record_exchange` before any turn delivery, so each turn-triggering
   message is counted exactly once and the budget gate sits in front of

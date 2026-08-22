@@ -1,7 +1,7 @@
 ---
 created: 2026-05-22
 status: draft
-parent: ../extensions/onclave-comms/onclave-comms-PRD.md
+parent: ../extensions/onclave-pi/PRD.md
 ---
 
 # PRD: Secure LAN Pi Observer Subscriptions
@@ -192,7 +192,7 @@ Event names must use lowercase dotted namespaces.
 
 ### Parent Secure LAN Pi Communication PRD
 
-- `../extensions/onclave-comms/onclave-comms-PRD.md` defines hub discovery,
+- `../extensions/onclave-pi/PRD.md` defines hub discovery,
   authentication, trust, and direct prompt send/await behavior. This feature
   must build on that security model instead of creating separate agent network
   endpoints.

@@ -2,7 +2,7 @@
 created: 2026-05-25
 status: draft
 parents:
-  - ../extensions/onclave-comms/onclave-comms-PRD.md
+  - ../extensions/onclave-pi/PRD.md
   - observer-subscriptions-PRD.md
   - tailscale-aperture-guardrails-PRD.md
   - openclaw-hermes-integration-PRD.md
@@ -131,30 +131,16 @@ an all-in-one implementation file.
 
 ## Repository Migration Plan
 
-The repository migration should happen in small, low-surprise steps.
+The repository now separates the supported Pi adapter, shared contracts, and
+independent core service:
 
-### Phase 1: Rename and Consolidate the Existing Comms Subsystem
+- `extensions/onclave-pi/` owns the Pi adapter;
+- `packages/envelope/` owns shared wire contracts; and
+- `services/core/` owns durable communication and policy services.
 
-- Create a working branch before moving files.
-- Rename `extensions/pi-onclave/` to `extensions/onclave-comms/`.
-- Move code from `packages/core/src/onclave/` into
-  `extensions/onclave-comms/src/lib/`.
-- Move tests from `tests/onclave/` into `extensions/onclave-comms/tests/`.
-- Move `scripts/onclave-acceptance-host.ts` into
-  `extensions/onclave-comms/scripts/`.
-- Update root `package.json`, `justfile`, test commands, and import paths.
-- Preserve behavior while changing names and locations.
+The retired in-session LAN adapter must not be restored as a parallel runtime.
 
-Illustrative path mapping:
-
-| Current path | Near-term path |
-|--------------|----------------|
-| `extensions/pi-onclave/src/onclave.ts` | `extensions/onclave-comms/src/onclave-comms.ts` |
-| `packages/core/src/onclave/*` | `extensions/onclave-comms/src/lib/*` |
-| `tests/onclave/*` | `extensions/onclave-comms/tests/*` |
-| `scripts/onclave-acceptance-host.ts` | `extensions/onclave-comms/scripts/onclave-acceptance-host.ts` |
-
-### Phase 2: Add Factory-Specific Areas Only When Real Code Exists
+### Add Factory-Specific Areas Only When Real Code Exists
 
 Add new top-level areas only when they have concrete implementation value:
 
@@ -477,8 +463,8 @@ hub trust, and mobile notification categories.
 
 The repository structure should stay aligned with the implementation stack:
 
-- TypeScript remains the default language inside `extensions/onclave-comms/`
-  for the current communication subsystem work.
+- TypeScript remains the default language for `extensions/onclave-pi/`,
+  `packages/envelope/`, and `services/core/` communication work.
 - Root workspace tooling should continue to support a single monorepo developer
   workflow through `pnpm`, `just`, and repo-level test/typecheck commands.
 - New Go, mobile, or service-oriented code should not force an early repo split;

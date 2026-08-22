@@ -1,8 +1,7 @@
 ---
 created: 2026-07-17
 status: draft
-source_prd: ./v2-PRD.md
-decisions: ./decisions.md
+source_prd: ./PRD.md
 branch: feature/v2-broker-core
 ---
 
@@ -10,8 +9,8 @@ branch: feature/v2-broker-core
 
 ## Context
 
-Onclave v1 is a single Pi extension (`extensions/onclave-comms`) hosting an
-in-session hub. The v2 rework makes the core comms system an independent
+Onclave v1 used a single Pi extension hosting an in-session hub. The v2
+rework makes the core comms system an independent
 service deployed as a Docker container alongside RabbitMQ, with agent-specific
 adapter plugins. This plan covers the first two components: the core service
 and the Pi adapter, built on branch `feature/v2-broker-core`.
@@ -25,9 +24,7 @@ produces the real image, compose definition, and local development flow.
 - Repo: `traefikturkey/onclave`, currently a single-package TypeScript repo
   (pnpm, vitest, tsc, just). Windows Git Bash and Linux are both dev
   environments.
-- v1 (`extensions/onclave-comms`) must keep passing its tests untouched on
-  this branch until the v2 adapter reaches local-messaging parity. No v1 file
-  edits except doc updates.
+- The independent core and Pi adapter replace the former in-session LAN hub.
 - RabbitMQ owns delivery (durable queues, acks, TTL, dead-lettering). The
   core service owns policy: registry, envelope validation, performatives,
   budgets, trust posture, audit.
@@ -250,7 +247,7 @@ Tasks:
 
 Validation gate: adapter unit tests with a mocked channel (delivery modes,
 correlation strictness, reconnect state machine); manual smoke via
-`just pi-local-v2` (`pi -e ./extensions/onclave-pi`) against compose stack.
+`just pi-local` (`pi -e ./extensions/onclave-pi`) against the compose stack.
 
 ### Phase 4: Deterministic integration coverage
 

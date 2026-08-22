@@ -5,7 +5,6 @@ WORKDIR /app
 RUN corepack enable
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY extensions/onclave-comms/package.json extensions/onclave-comms/
 COPY extensions/onclave-pi/package.json extensions/onclave-pi/
 COPY packages/envelope/package.json packages/envelope/
 COPY services/core/package.json services/core/

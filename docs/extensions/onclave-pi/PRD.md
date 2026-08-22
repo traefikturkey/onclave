@@ -1,9 +1,7 @@
 ---
 created: 2026-07-17
 status: draft
-source_prd: ./onclave-comms-PRD.md
-decisions: ./decisions.md
-implementation_plan: ./v2-implementation-plan.md
+implementation_plan: ./implementation-plan.md
 ---
 
 # PRD: Onclave v2 - Independent Core, RabbitMQ Delivery, Agent Adapters

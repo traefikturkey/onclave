@@ -7,16 +7,10 @@
     "preflight:repo": "node ./scripts/preflight.mjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "onclave:acceptance-host": "tsx extensions/onclave-comms/scripts/onclave-acceptance-host.ts",
     "setup": "pnpm install",
     "check": "pnpm typecheck && pnpm test"
   },
-  "dependencies": {
-    "@noble/ed25519": "^3.0.0",
-    "selfsigned": "^5.5.0",
-    "ws": "^8.20.1",
-    "@earendil-works/pi-tui": "^0.75.5"
-  },
+  "dependencies": {},
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.75.4",
     "@earendil-works/pi-coding-agent": "^0.75.4",
@@ -30,7 +24,7 @@
   "packageManager": "pnpm@11.5.2",
   "pi": {
     "extensions": [
-      "./extensions/onclave-comms/src/onclave-comms.ts"
+      "./extensions/onclave-pi/src/onclave-pi.ts"
     ]
   }
 }

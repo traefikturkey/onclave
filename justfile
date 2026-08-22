@@ -63,13 +63,10 @@ deploy-lint: values-init
     docker compose -f infra/ansible/docker-compose.yml run --rm ansible ansible-lint playbooks/deploy.yml
 
 pi-local:
-    pi -e ./extensions/onclave-comms
-
-pi-local-v2:
     pi -e ./extensions/onclave-pi
 
 pi-local-no-extensions:
     pi --no-extensions
 
 pi-smoke:
-    pnpm exec vitest run extensions/onclave-comms/tests/extension.test.ts
+    pnpm exec vitest run extensions/onclave-pi/tests/extension.test.ts

@@ -222,19 +222,15 @@ that package README.
 
 ## Onclave-Specific Runtime Requirements
 
-For `extensions/onclave-comms`, additional runtime prerequisites apply when you
-run local Pi sessions or multi-host acceptance:
+For `extensions/onclave-pi`, local Pi sessions require:
 
-- `pi` must be installed locally;
-- firewalls must allow `48889/udp` for LAN discovery when discovery is used;
-- firewalls must allow inbound TCP for the selected WSS hub port; and
-- operators must exchange only public `ssh-ed25519` trust lines.
+- `pi` installed locally;
+- access to the configured Onclave API;
+- the configured secret source for `ONCLAVE_API_BASE`; and
+- the local SSH identity used to sign API requests.
 
-See these documents for the Onclave runtime flow:
-
-- `docs/extensions/onclave-comms/README.md`
-- `docs/extensions/onclave-comms/operator-guide.md`
-- `docs/extensions/onclave-comms/manual-acceptance.md`
+See `docs/extensions/onclave-pi/` for the adapter requirements, implementation
+plan, and current status.
 
 ## Recommended Fresh-Machine Flow
 
