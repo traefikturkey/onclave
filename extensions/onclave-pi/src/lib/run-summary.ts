@@ -1,7 +1,7 @@
-import type { TokenUsage } from "@onclave/envelope";
+import type { A2AUsage } from "@onclave/envelope";
 
 // Extracts the final assistant text and token usage from an agent run's
-// message list for reply envelopes.
+// message list for A2A task replies.
 
 type AssistantLike = {
   role?: unknown;
@@ -42,7 +42,7 @@ function usageNumber(value: unknown): number {
   return typeof value === "number" ? value : 0;
 }
 
-export function runUsage(messages: unknown[]): TokenUsage {
+export function runUsage(messages: unknown[]): A2AUsage {
   let input = 0;
   let output = 0;
   for (const message of messages) {

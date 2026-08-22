@@ -1,230 +1,67 @@
-import {
-  fromAmqpMessage,
-  mayTriggerTurn,
-  type AmqpConsumedMessage,
-  type DelegationGrant,
-  type Envelope,
-} from "@onclave/envelope";
+import { isTerminalTaskState, type Message, type TaskStatusEvent } from "@onclave/envelope";
 import type { AdapterAuditEventName, AdapterAuditMetadata } from "./audit";
+import type { CorrelationStore } from "./correlation";
 import type { SeenIds } from "./dedup";
 
 export type DeliveryDecision = "ack" | "reject";
+export type Delivered = { kind: "message"; message: Message } | { kind: "task-status"; status: TaskStatusEvent };
 
-export type BudgetCheckResult = {
-  deliver: boolean;
-  reason?: string;
-};
-
-export type DelegationCheckResult =
-  | { ok: true; grant: DelegationGrant }
-  | { ok: false; reason: string };
-
-// Every side effect is injected so the decision path is fully unit-testable.
-// deliverTurn is reachable only from the request/query branch; inform,
-// failure, and not_understood are structurally unable to reach it.
 export type DeliveryDeps = {
   localHost: string;
   seen: SeenIds;
+  correlation: CorrelationStore;
   isAutoAcceptedHost: (host: string) => Promise<boolean>;
-  confirmRemote: (envelope: Envelope) => Promise<boolean>;
-  recordExchange: (envelope: Envelope) => Promise<BudgetCheckResult>;
-  verifyDelegation: (envelope: Envelope) => Promise<DelegationCheckResult>;
-  deliverTurn: (envelope: Envelope) => void;
-  deliverDelegatedTurn: (envelope: Envelope, grant: DelegationGrant) => void;
-  deliverInert: (envelope: Envelope) => void;
-  publishFailureReply: (envelope: Envelope, reason: string) => void | Promise<void>;
-  publishNotUnderstood: (replyTo: string, error: string) => void | Promise<void>;
-  registerInbound: (envelope: Envelope) => void;
-  acceptReply: (envelope: Envelope) => boolean;
+  confirmRemote: (message: Message) => Promise<boolean>;
+  createTask?: (message: Message) => Promise<Message>;
+  markWorking?: (message: Message) => Promise<void>;
+  deliverTurn: (message: Message) => void;
+  deliverInert: (message: Message) => void;
+  deliverStatus: (event: TaskStatusEvent) => void;
+  publishFailure: (message: Message, reason: string) => void | Promise<void>;
+  registerInbound: (message: Message) => void;
   audit: (event: AdapterAuditEventName, metadata?: AdapterAuditMetadata) => Promise<void>;
 };
 
-export async function handleInboundMessage(
+export async function handleInbound(
   deps: DeliveryDeps,
-  message: AmqpConsumedMessage
+  delivered: Delivered
 ): Promise<DeliveryDecision> {
-  const parsed = fromAmqpMessage(message);
-  if (!parsed.ok) {
-    return handleMalformed(deps, message, parsed.error);
-  }
-  return handleInboundEnvelope(deps, parsed.envelope);
-}
-
-export async function handleInboundEnvelope(
-  deps: DeliveryDeps,
-  envelope: Envelope
-): Promise<DeliveryDecision> {
-  if (!deps.seen.add(envelope.id)) {
-    await deps.audit("message_deduplicated", { message_id: envelope.id });
+  if (delivered.kind === "task-status") {
+    if (!deps.seen.add(delivered.status.event_id)) return "ack";
+    const correlated = deps.correlation.acceptStatus(delivered.status);
+    deps.deliverStatus(delivered.status);
+    await deps.audit("task_status_delivered", { event_id: delivered.status.event_id, correlated, state: delivered.status.state });
     return "ack";
   }
-  if (mayTriggerTurn(envelope.performative)) {
-    return handleTurnCandidate(deps, envelope);
+  const message = delivered.message;
+  if (!deps.seen.add(message.message_id)) {
+    await deps.audit("message_deduplicated", { message_id: message.message_id });
+    return "ack";
   }
-  return handleInert(deps, envelope);
-}
-
-export async function handleInboundHttpDelivery(
-  deps: DeliveryDeps,
-  envelope: Envelope,
-  deliveryId: string,
-  dispose: (decision: DeliveryDecision) => Promise<void>
-): Promise<void> {
-  let decision: DeliveryDecision;
-  try {
-    decision = await handleInboundEnvelope(deps, envelope);
-  } catch (error) {
-    await deps
-      .audit("message_rejected", {
-        message_id: envelope.id,
-        detail: error instanceof Error ? error.message : String(error),
-      })
-      .catch(() => undefined);
-    decision = "reject";
+  if (message.type === "inform") {
+    // A direct response is still an inert inform at the receiver: correlate it
+    // for the waiting sender without allowing it to trigger a turn.
+    deps.correlation.acceptReply(message);
+    deps.deliverInert(message);
+    await deps.audit("message_delivered_inert", { message_id: message.message_id, from_instance_id: message.origin.instance_id });
+    return "ack";
   }
-
-  try {
-    await dispose(decision);
-  } catch (error) {
-    await deps
-      .audit("message_disposition_failed", {
-        message_id: envelope.id,
-        delivery_id: deliveryId,
-        disposition: decision,
-        detail: error instanceof Error ? error.message : String(error),
-      })
-      .catch(() => undefined);
-    throw error;
+  if (message.origin.host !== deps.localHost && !(await deps.isAutoAcceptedHost(message.origin.host))) {
+    await deps.audit("remote_confirm_prompted", { message_id: message.message_id, from_host: message.origin.host });
+    if (!(await deps.confirmRemote(message))) {
+      await deps.publishFailure(message, "declined_by_operator");
+      await deps.audit("remote_confirm_declined", { message_id: message.message_id, from_host: message.origin.host });
+      return "ack";
+    }
   }
-}
-
-async function handleMalformed(
-  deps: DeliveryDeps,
-  message: AmqpConsumedMessage,
-  error: string
-): Promise<DeliveryDecision> {
-  const target = replyToFromProperties(message);
-  if (target !== undefined) {
-    await deps.publishNotUnderstood(target, error);
-  }
-  await deps.audit("message_rejected", { detail: error });
-  return "reject";
-}
-
-function replyToFromProperties(message: AmqpConsumedMessage): string | undefined {
-  const properties = message.properties as { replyTo?: unknown };
-  return typeof properties.replyTo === "string" && properties.replyTo !== ""
-    ? properties.replyTo
-    : undefined;
-}
-
-async function handleInert(deps: DeliveryDeps, envelope: Envelope): Promise<DeliveryDecision> {
-  const correlated = deps.acceptReply(envelope);
-  if (correlated) {
-    await deps.audit("reply_received", {
-      message_id: envelope.id,
-      in_reply_to: envelope.in_reply_to,
-      conversation_id: envelope.conversation_id,
-      performative: envelope.performative,
-    });
-  }
-  deps.deliverInert(envelope);
-  await deps.audit("message_delivered_inert", {
-    message_id: envelope.id,
-    performative: envelope.performative,
-    from_agent_id: envelope.from.agent_id,
-  });
+  const tracked = deps.createTask === undefined ? message : await deps.createTask(message);
+  deps.registerInbound(tracked);
+  if (deps.markWorking !== undefined) await deps.markWorking(tracked);
+  deps.deliverTurn(tracked);
+  await deps.audit("message_delivered_turn", { message_id: message.message_id, type: message.type, context_id: message.context_id });
   return "ack";
 }
 
-async function handleTurnCandidate(deps: DeliveryDeps, envelope: Envelope): Promise<DeliveryDecision> {
-  const authorization = await authorizeTurn(deps, envelope);
-  if (!authorization.deliver) return "ack";
-  if (!(await passesBudget(deps, envelope))) return "ack";
-  deps.registerInbound(envelope);
-  deliverAuthorizedTurn(deps, envelope, authorization.delegation);
-  await auditTurnDelivery(deps, envelope);
-  return "ack";
-}
-
-type TurnAuthorization = { deliver: boolean; delegation?: DelegationGrant };
-
-async function authorizeTurn(
-  deps: DeliveryDeps,
-  envelope: Envelope
-): Promise<TurnAuthorization> {
-  if (envelope.delegation !== undefined) return authorizeDelegation(deps, envelope);
-  if (envelope.from.host === deps.localHost) return { deliver: true };
-  return { deliver: await confirmCrossHost(deps, envelope) };
-}
-
-async function authorizeDelegation(
-  deps: DeliveryDeps,
-  envelope: Envelope
-): Promise<TurnAuthorization> {
-  const verified = await deps.verifyDelegation(envelope);
-  if (!verified.ok) {
-    await deps.publishFailureReply(envelope, `delegation_rejected:${verified.reason}`);
-    await deps.audit("delegation_rejected", {
-      message_id: envelope.id,
-      grant_id: envelope.delegation?.grant_id,
-      reason: verified.reason,
-    });
-    return { deliver: false };
-  }
-  await deps.audit("delegation_accepted", {
-    message_id: envelope.id,
-    grant_id: verified.grant.grant_id,
-    from_agent_id: envelope.from.agent_id,
-  });
-  return { deliver: true, delegation: verified.grant };
-}
-
-async function passesBudget(deps: DeliveryDeps, envelope: Envelope): Promise<boolean> {
-  const budget = await deps.recordExchange(envelope);
-  if (budget.deliver) return true;
-  await deps.audit("message_budget_blocked", {
-    message_id: envelope.id,
-    conversation_id: envelope.conversation_id,
-    reason: budget.reason ?? "budget",
-  });
-  return false;
-}
-
-function deliverAuthorizedTurn(
-  deps: DeliveryDeps,
-  envelope: Envelope,
-  delegation?: DelegationGrant
-): void {
-  if (delegation === undefined) deps.deliverTurn(envelope);
-  else deps.deliverDelegatedTurn(envelope, delegation);
-}
-
-async function auditTurnDelivery(deps: DeliveryDeps, envelope: Envelope): Promise<void> {
-  await deps.audit("message_delivered_turn", {
-    message_id: envelope.id,
-    performative: envelope.performative,
-    conversation_id: envelope.conversation_id,
-    from_agent_id: envelope.from.agent_id,
-    from_host: envelope.from.host,
-  });
-}
-
-async function confirmCrossHost(deps: DeliveryDeps, envelope: Envelope): Promise<boolean> {
-  if (await deps.isAutoAcceptedHost(envelope.from.host)) {
-    return true;
-  }
-  await deps.audit("remote_confirm_prompted", {
-    message_id: envelope.id,
-    from_host: envelope.from.host,
-    from_agent_id: envelope.from.agent_id,
-  });
-  const confirmed = await deps.confirmRemote(envelope);
-  if (confirmed) return true;
-  await deps.publishFailureReply(envelope, "declined_by_operator");
-  await deps.audit("remote_confirm_declined", {
-    message_id: envelope.id,
-    from_host: envelope.from.host,
-  });
-  return false;
+export function shouldTriggerStatusTurn(event: TaskStatusEvent): boolean {
+  return event.state === "input-required" || isTerminalTaskState(event.state);
 }

@@ -14,15 +14,13 @@ export type AdapterAuditEventName =
   | "message_rejected"
   | "message_disposition_failed"
   | "message_budget_blocked"
-  | "delegation_issued"
-  | "delegation_accepted"
-  | "delegation_rejected"
   | "remote_confirm_prompted"
   | "remote_confirm_declined"
   | "reply_published"
   | "reply_received"
   | "correlation_miss"
-  | "inform_published";
+  | "inform_published"
+  | "task_status_delivered";
 
 export type AdapterAuditMetadata = Record<string, unknown>;
 
