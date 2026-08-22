@@ -1,302 +1,172 @@
 ---
 created: 2026-07-17
-status: draft
+status: aligned
 source_prd: ./PRD.md
 branch: feature/v2-broker-core
 ---
 
-# Implementation Plan: Onclave v2 Broker Core and Pi Adapter
+# Implementation Plan: Onclave A2A-Derived Message and Task Boundary
 
-## Context
+## Purpose
 
-Onclave v1 used a single Pi extension hosting an in-session hub. The v2
-rework makes the core comms system an independent
-service deployed as a Docker container alongside RabbitMQ, with agent-specific
-adapter plugins. This plan covers the first two components: the core service
-and the Pi adapter, built on branch `feature/v2-broker-core`.
+This document records the implementation boundary for the independent core and
+Pi adapter on `feature/v2-broker-core`. The core owns durable delivery and
+provider-neutral protocol state. The Pi adapter owns the last hop into a live Pi
+session. The model-facing contract is deliberately small and is not a complete
+A2A or MCP implementation.
 
-A `rabbitmq` and an `onclave` container already run on the operator's Docker
-host. This plan assumes the current `onclave` container is a placeholder and
-produces the real image, compose definition, and local development flow.
+## Runtime boundary
 
-## Constraints
+The core provides:
 
-- Repo: `traefikturkey/onclave`, currently a single-package TypeScript repo
-  (pnpm, vitest, tsc, just). Windows Git Bash and Linux are both dev
-  environments.
-- The independent core and Pi adapter replace the former in-session LAN hub.
-- RabbitMQ owns delivery (durable queues, acks, TTL, dead-lettering). The
-  core service owns policy: registry, envelope validation, performatives,
-  budgets, trust posture, audit.
-- Reuse v1 library modules where they fit: `audit.ts`, `authorized-keys.ts`,
-  `canonical-json.ts`, `state.ts`, `project-label.ts`.
-- Structural guarantees (inert inform, budget enforcement, strict
-  correlation) live in code paths, never in prompt text.
-- No secrets in the repo: broker credentials come from env/compose `.env`
-  (gitignored), with documented defaults for local dev only.
+- a private registry of independently registered Pi instances;
+- durable RabbitMQ-backed message and task-status delivery;
+- versioned message validation and explicit protocol-version rejection;
+- persisted contexts, immutable tasks, task status events, usage, audit, trust
+  checks, and origin routing; and
+- signed HTTPS routes used by adapters to register, publish, receive, and
+  disposition deliveries.
 
-## Language Decision
+The Pi adapter provides:
 
-Core service in **TypeScript (Node 22)**, not Go.
+- registration and liveness heartbeats for one independent Pi instance;
+- `onclave_instances` for live instance discovery;
+- `onclave_message` for `ask`, `request`, and `inform`;
+- validation before publication and deduplication on receipt;
+- turn-triggering delivery for `ask` and `request`, inert display delivery for
+  `inform`, and status delivery for task events; and
+- strict correlation between an inbound message and its Pi run.
 
-- With RabbitMQ containerized, the Go rationale from the daemon research
-  (Windows named-pipe DACLs, client auto-start, single-instance election,
-  idle-exit) no longer applies; Docker restart policies own the lifecycle.
-- One language lets the envelope schema, validation, and budget logic live in
-  a shared package consumed by both core and the Pi adapter, eliminating a
-  cross-language contract drift risk.
-- The repo's existing tooling (pnpm, vitest, tsc, just) carries over
-  unchanged.
+Pi-local subagent runs are not registered and are not addressed by this
+protocol. The dotfiles loader remains a thin loader and is outside this
+implementation boundary.
 
-Go remains open for a future component where it earns its place (for example
-a Joyride-integrated discovery sidecar). Recorded as Decision 10.
+## Shared contract
 
-## Objective
+The versioned A2A-derived package defines:
 
-A developer can run `docker compose up`, start two Pi sessions with the
-`onclave-pi` adapter on the host, and have them exchange request/response and
-inform messages through RabbitMQ with durable delivery, performative
-enforcement, conversation budgets, strict reply correlation, and audit - with
-`just check` green and an automated integration suite proving the flow.
-
-## MVP Boundary
-
-In scope: core service, Pi adapter, shared envelope package, compose stack,
-integration tests, and docs. Single broker host, single machine's agents
-(multi-machine works transport-wise but is not validated in this plan).
-
-Explicit deferrals:
-
-- MCP face for Claude Code and the Hermes webhook bridge (next plan; the
-  core's HTTP surface is scaffolded but only `/health` ships now).
-- Joyride DNS publication and multi-machine TLS/auth hardening.
-- Worktree leases.
-- v1 extension retirement and migration tooling.
-- Quorum queues / broker clustering (single-node classic durable queues).
-
-## Architecture
-
-```
-+---------------------------- docker host ----------------------------+
-|  rabbitmq:4-management            onclave-core (node:22-alpine)     |
-|  - vhost "onclave"                - AMQP client of rabbitmq         |
-|  - queue per agent                - registry + presence             |
-|  - topic exchange (events)        - envelope validation + budgets   |
-|  - DLX for expired/overflow      - trust store + audit JSONL       |
-|  volumes: rabbitmq-data           - /health HTTP endpoint           |
-|                                   volumes: onclave-data             |
-+---------------------------------------------------------------------+
-            ^ AMQP 5672 (LAN)                 ^
-            |                                 |
-   +--------+---------+             +---------+--------+
-   | pi session A     |             | pi session B     |
-   | onclave-pi       |             | onclave-pi       |
-   | adapter (amqplib)|             | adapter (amqplib)|
-   +------------------+             +------------------+
+```text
+Message: message_id, context_id, optional task_id, type, origin, destination,
+         body, sent_at, hops, optional ttl_ms, usage, schema, trace_id
+Task:    task_id, context_id, origin instance, assigned instance, state, usage,
+         timestamps, optional prior_task_id
+Event:   event_id, task_id, context_id, origin instance, destination, state,
+         timestamp, optional message, body, usage, and trace data
 ```
 
-### RabbitMQ topology (declared idempotently by core on startup)
+The supported message types are `ask`, `request`, and `inform`. The supported
+task states are `submitted`, `working`, `input-required`, `completed`,
+`failed`, `canceled`, and `rejected`. The version is explicit. A message or
+status event with another version is rejected as a protocol mismatch.
 
-- vhost: `onclave`.
-- Exchange `onclave.agents` (direct): routing key = `agent_id`; one durable
-  queue `agent.<agent_id>` per registered agent, `x-dead-letter-exchange`
-  set, per-queue `x-max-length` and message TTL from config.
-- Exchange `onclave.events` (topic): `inform` broadcasts and presence
-  heartbeats; adapters bind subscriptions by pattern (`presence.*`,
-  `inform.<project>.*`).
-- Exchange `onclave.dlx` (fanout) -> queue `onclave.dead-letter`: core
-  consumes, audits expiry/overflow, emits advisory `inform`.
-- Queue `onclave.core.rpc` (durable): registry and control operations
-  (`register`, `heartbeat`, `unregister`, `list_agents`, `conversation_status`)
-  as AMQP RPC with `reply-to`/`correlation-id`.
+The schema uses one required `type` enum and a flat object. Conditional fields
+are checked in adapter code:
 
-### Envelope mapping
+| Type | Required behavior | Optional fields |
+| --- | --- | --- |
+| `ask` | direct destination; wait once for response or task result | `context_id`, `task_id`, `timeout_ms` |
+| `request` | direct destination; publish asynchronously and return identifiers | `context_id`, `task_id` |
+| `inform` | point-to-point or broadcast; no task, reply, or turn | `context_id` |
 
-AMQP properties: `message-id` = envelope id (ULID), `correlation-id` =
-`conversation_id`, `expiration` = TTL, `reply-to` = sender queue.
-Headers: `performative`, `hops`, `origin` (agent card subset: agent_id, name,
-host, project), `in_reply_to`, `traceparent`. Body: JSON `{ body, schema? }`.
-Shared package validates on both send and receive; malformed messages are
-rejected at the adapter or dead-lettered by core with a `not_understood`
-reply.
+Invalid combinations fail before publication.
 
-### Policy enforcement split
+## Task processing
 
-- Core (on `onclave.core.rpc` and via a message-tap consumer on DLX plus
-  budget bookkeeping updates from adapters): registry truth, per-conversation
-  exchange/token budgets, budget-exceeded termination (`failure` to both
-  parties), audit of lifecycle/trust/advisories.
-- Adapter (the only place with session access): delivery mode - `request`/
-  `query` -> `sendMessage(..., { deliverAs: "followUp", triggerTurn: true })`
-  with provenance framing; `inform` -> display-only, `triggerTurn: false`;
-  strict `agent_end` correlation by message id (no latest-inbound fallback);
-  remote-origin request confirmation via `ctx.ui.confirm` when
-  `origin.host != local host`.
+For `ask` and `request`, the receiving adapter creates or resumes the tracked
+task and the core persists a `submitted` event to the origin. The adapter then
+records `working` before handing the framed message to Pi. A Pi response is an
+`inform` message carrying the context and usage; when a task exists, the core
+also records `completed` and routes that status event to the origin.
 
-## Repo Layout Changes
+The transition table is:
 
-Convert to a pnpm workspace; v1 stays where it is.
+| Current | Allowed next states |
+| --- | --- |
+| `submitted` | `working`, `input-required`, `failed`, `canceled`, `rejected` |
+| `working` | `working`, `input-required`, `completed`, `failed`, `canceled` |
+| `input-required` | `working`, `completed`, `failed`, `canceled` |
+| terminal | none; repeated same-state events are idempotent |
 
-```
-pnpm-workspace.yaml
-packages/
-  envelope/            # shared: schema, validation, performatives, budgets,
-                       # ULID, provenance framing text builders
-services/
-  core/                # onclave-core service + Dockerfile
-extensions/
-  onclave-comms/       # v1, untouched
-  onclave-pi/          # v2 Pi adapter extension
-docker/
-  compose.yaml         # rabbitmq + onclave-core
-  compose.test.yaml    # ephemeral rabbitmq for integration tests
-  .env.example
-```
+An `input-required` task can be resumed with the same task and context. A
+terminal task cannot be reopened. A later refinement creates a new task in the
+same context and can reference the prior task. Status events go to the
+originating instance and do not require model-managed subscriptions or wait
+loops. Only `input-required` and terminal events trigger an origin turn.
 
-## Phases
+`ask` timeout affects the sender's wait only. It does not cancel a created task.
+`request` returns after durable publication and does not claim that the receiver
+has accepted the task. `inform` is display-only and cannot trigger a turn.
 
-### Phase 0: Branch scaffold and compose stack
+## Transport and application acceptance
 
-Tasks:
+RabbitMQ acknowledgements, core publication, signed HTTPS responses, and
+adapter delivery disposition are transport concerns. The adapter's publish
+route returns HTTP `202` after the core accepts the message for delivery. This
+is not task acceptance by the receiver.
 
-1. Create `feature/v2-broker-core` branch (done; carries `v2-PRD.md` and
-   proposed decisions).
-2. Convert repo to pnpm workspace: root `pnpm-workspace.yaml`, move shared
-   dev deps up, keep root `just check` running v1 suites plus new packages.
-3. Add `docker/compose.yaml`: `rabbitmq:4-management` (volume, healthcheck on
-   `rabbitmq-diagnostics ping`, management UI on 15672) and `onclave-core`
-   service (build from `services/core/Dockerfile`, depends_on rabbitmq
-   healthy, `/data` volume, `/health` port). `docker/.env.example` documents
-   `RABBITMQ_DEFAULT_USER/PASS`, `ONCLAVE_AMQP_URL`.
-4. `services/core` skeleton: connects to AMQP with retry/backoff, declares
-   topology, serves `/health` (returns broker connectivity + declared
-   topology), structured logs to stdout.
-5. Justfile targets: `up`, `down`, `logs`, `core-dev` (tsx watch against
-   compose rabbitmq), `test-integration`.
+The receiver-created `submitted` status event is the application-level
+acceptance event. Task transitions, replies, budgets, trust checks, and origin
+status routing are application behavior. The model does not acknowledge
+transport messages, register callbacks, or manage delivery wait state.
 
-Validation gate: `docker compose -f docker/compose.yaml up -d` reaches
-healthy on both containers; `/health` reports connected; `just check` still
-green including untouched v1 tests.
+## Authority and safety
 
-### Phase 1: Shared envelope package
+A registered identity proves which instance signed a message. It does not prove
+that the body is safe and does not transfer operator authority. Peer content is
+untrusted input. Cross-host turn-triggering messages require explicit operator
+confirmation unless the configured host policy allows them. `inform` is inert
+regardless of body wording. Provenance framing, deduplication, hop and exchange
+limits, usage budgets, audit redaction, offline queues, and restart-safe state
+remain enforced in code.
 
-Tasks:
+## Tool and integration boundary
 
-1. `packages/envelope`: envelope type, performative enum, AMQP property/
-   header mapping helpers, ULID generation, validation (parse + classify +
-   reject), provenance framing text builder, budget accounting types,
-   `not_understood` reply builder.
-2. Port `canonical-json.ts` and reuse patterns from v1 where applicable.
-3. Unit tests: valid/invalid envelopes, header round-trip through AMQP
-   property shapes, hop increment/cap, TTL parsing, adversarial bodies in
-   `inform` (framing builder never emits instruction-voice text).
+Only these model-facing tools are registered:
 
-Validation gate: `pnpm --filter envelope test` green; package consumed by a
-compile-only smoke import in core and adapter stubs.
+- `onclave_instances`: parameterless, private-registry discovery.
+- `onclave_message`: the single `ask`/`request`/`inform` message entry point.
 
-### Phase 2: Core service
+MCP remains a future tool and context integration surface. A2A-derived
+semantics apply to independent Onclave instances. Pi-local subagents remain
+local and are excluded from registration. No MCP face, public Agent Card
+discovery, or complete A2A server is planned in this change.
 
-Tasks:
+The core keeps a future server-side seam for authenticated webhook events. A
+later implementation may classify an authenticated, idempotent external event
+as `inform` or `request` for a Pi adapter or Hermes consumer. There is no
+webhook endpoint, external ingress authentication workflow, or Hermes adapter
+in this implementation.
 
-1. Registry: agent cards (agent_id, name, host, project, model,
-   capabilities, heartbeat_at) persisted to `/data/registry.json` with the
-   v1 atomic-write pattern; presence marked stale on missed heartbeats;
-   `list_agents` RPC returns cards with liveness.
-2. RPC handlers on `onclave.core.rpc`: register (declares/binds the agent
-   queue), heartbeat, unregister, list_agents, conversation_status.
-3. Budget bookkeeping: per `conversation_id` exchange count and token totals
-   (adapters report usage in reply metadata); on breach, publish `failure`
-   to both parties, mark conversation closed, audit.
-4. Dead-letter consumer: audit expiry/overflow, emit advisory `inform` to
-   the originating agent.
-5. Trust/audit: port `audit.ts` JSONL with sensitive-field rejection to
-   `/data/audit.jsonl`; trust file loading scaffolded (`/data/trust/`) but
-   enforcement beyond AMQP auth deferred per PRD.
-6. Config: env-driven (AMQP URL, TTLs, queue bounds, budget defaults).
+## Protocol migration
 
-Validation gate: vitest integration suite (compose.test.yaml rabbitmq)
-covering register/heartbeat/list, queue declaration, DLX flow on TTL expiry,
-and budget termination with two fake adapters driven over raw amqplib.
+This is a protocol break, not a compatibility layer. The supported version must
+be negotiated or rejected explicitly by the core and adapter. The retired
+six-tool communication surface, custom authority model, and old message
+vocabulary are not active interfaces. Upgrade the core and adapters together;
+no live deployment or broker cutover is included here.
 
-### Phase 3: Pi adapter extension
+## Development and validation commands
 
-Tasks:
-
-1. `extensions/onclave-pi`: session_start -> connect (amqplib), register
-   with card built from session context (reuse `project-label.ts`),
-   heartbeat timer with context/queue telemetry, session_shutdown ->
-   unregister and close channel; connection loss -> reconnect with backoff,
-   re-register, resume consuming (queued messages then deliver - durability
-   demo).
-2. Consume `agent.<agent_id>`: validate via envelope package; ack after
-   successful hand-off; `request`/`query` -> provenance-framed
-   `sendMessage` with `triggerTurn: true`; `inform` -> display-only
-   message, no turn; malformed -> `not_understood` reply + reject (no
-   requeue).
-3. Strict reply capture: map in-flight inbound msg ids; `agent_end` matches
-   by id only, publishes reply envelope (`in_reply_to`, same
-   `conversation_id`, token usage metadata), audits and drops on no-match.
-4. Tools and commands: `onclave_agents` (list via RPC), `onclave_send`
-   (performative parameter, defaults `request`), `onclave_get` /
-   `onclave_await` (correlation store fed by consumed replies),
-   `onclave_inform` (explicit inert broadcast/point-to-point), `/onclave`
-   status command; footer status showing broker connectivity and live agents.
-5. Remote-origin confirmation: `origin.host != os.hostname()` -> 
-   `ctx.ui.confirm` before turn trigger; decline publishes `refuse`-style
-   `failure` reply and audits.
-
-Validation gate: adapter unit tests with a mocked channel (delivery modes,
-correlation strictness, reconnect state machine); manual smoke via
-`just pi-local` (`pi -e ./extensions/onclave-pi`) against the compose stack.
-
-### Phase 4: Deterministic integration coverage
-
-Tasks:
-
-1. Extend the component and broker integration suites to assert request/reply
-   correlation, inert inform handling, offline queue durability, exchange
-   budget termination, and metadata-only audit records.
-2. Cover two overlapping inbound requests resolving to their own message ids.
-
-Validation gate: deterministic unit and broker integration suites pass without
-starting Pi sessions or invoking models.
-
-### Phase 5: CI and branch finalization
-
-Tasks:
-
-1. GitHub Actions workflow: pnpm install, typecheck, unit tests, integration
-   tests with a rabbitmq service container, core image build.
-2. Update `README.md` (v2 overview + quick start). Decisions 6-10 are
-   already recorded as accepted in `decisions.md`; confirm they still match
-   the implementation as built.
-3. Branch review pass: `just check` and the full integration suite; open PR
-   against `main`.
-
-Validation gate: CI green on the PR; v1 suites still untouched and passing.
-
-## Validation Commands
+Run from the module root:
 
 ```bash
-just setup && just check                       # repo-wide, includes v1
-docker compose -f docker/compose.yaml up -d    # stack
-just test-integration                          # core + adapter vs rabbitmq
+just setup
+just check
+just test-integration
+just pi-local
 ```
 
-## Risks
+Package equivalents are:
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| amqplib reconnect edge cases in a TUI process | stuck consumers after network blips | reconnect state machine with tests; heartbeat gap detection; footer client name turns red when disconnected |
-| Workspace conversion breaks v1 tooling | v1 regression on the branch | phase 0 gate requires v1 suites green before any v2 code lands |
-| Budget bookkeeping depends on adapter-reported tokens | inflated/missing usage skews budgets | treat exchange-count budget as the hard stop; token budget advisory until usage reporting is proven |
-| Docker-host broker is a single point of failure | all agent comms down | out of scope by design (homelab trade recorded in PRD); compose restart policy; adapter degrades gracefully with clear status |
-| Prompt-injection via inform bodies | instruction smuggling into context | inform is display-only by code path; framing builder tested against instruction-voice output; no relay |
-| Credentials in compose | secret leakage | `.env` gitignored, `.env.example` only, per-adapter users documented for LAN hardening phase |
+```bash
+pnpm install
+pnpm run typecheck
+pnpm test
+pnpm exec vitest run --config vitest.integration.config.ts
+```
 
-## Rollback
-
-All work is additive on `feature/v2-broker-core`: new packages, new
-extension directory, new docker directory. Rollback = do not merge; v1
-extension and its tests are untouched. The Docker host placeholder container
-can be reverted to its prior definition independently.
+The T3 documentation boundary is validated by direct inspection of the
+registered tool names and schemas, the message and task descriptions, the
+protocol break, and the future-ingress statements. Full executable validation
+requires the existing unit and broker integration suites; this documentation
+change does not modify code or tests.

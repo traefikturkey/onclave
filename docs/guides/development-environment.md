@@ -135,12 +135,20 @@ These rules apply to the whole repository.
   than managed as isolated ad hoc folders.
 - The repository root owns the shared install lifecycle.
 
-Current workspace scope:
+Workspace packages:
 
 ```yaml
 packages:
+  - "packages/*"
+  - "services/*"
   - "extensions/*"
 ```
+
+The Onclave communication boundary is the versioned A2A-derived message and
+task contract documented in `docs/extensions/onclave-pi/PRD.md`. It connects
+independent Pi instances only. MCP remains a future tool and context
+integration surface, and Pi-local subagents are not registered Onclave
+instances.
 
 ### Root package responsibilities
 
@@ -186,7 +194,7 @@ Examples:
 
 - they are only needed by one package at runtime;
 - they define that package's public behavior; or
-- they are intentionally package-scoped for future extraction.
+- they are intentionally package-specific for future extraction.
 
 Examples:
 
@@ -230,7 +238,8 @@ For `extensions/onclave-pi`, local Pi sessions require:
 - the local SSH identity used to sign API requests.
 
 See `docs/extensions/onclave-pi/` for the adapter requirements, implementation
-plan, and current status.
+plan, current status, two-tool surface, and bounded A2A-derived message and task
+contract.
 
 ## Recommended Fresh-Machine Flow
 

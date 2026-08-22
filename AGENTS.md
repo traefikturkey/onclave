@@ -21,7 +21,7 @@ and the Pi adapter.
 ## Current structure
 
 - `extensions/onclave-pi/` contains the supported Pi adapter and its tests.
-- `packages/envelope/` contains shared message and delegation contracts.
+- `packages/envelope/` contains the shared versioned message, task, and status-event contracts.
 - `services/core/` contains the containerized Onclave API and broker service.
 - `deploy/` and `infra/` contain provider-neutral deployment assets.
 - `justfile` is the standard command surface.
