@@ -1,11 +1,11 @@
 import { mkdir } from "node:fs/promises";
-import { createEnvelope } from "@onclave/envelope";
+import { createMessage, ulid } from "@onclave/envelope";
 import type { Server } from "node:http";
 import { AgentDeliveryService } from "./agent-delivery";
 import { startBroker, type BrokerClient } from "./broker";
 import { appendAuditEvent, type AuditEventName, type AuditMetadata } from "./audit";
 import { loadCoreConfig, redactAmqpUrl, type CoreConfig } from "./config";
-import { ConversationStore } from "./conversations";
+import { TaskStore } from "./tasks";
 import { startDeadLetterConsumer } from "./dead-letter";
 import { startHealthServer } from "./health";
 import { createVaultHttpServer } from "./vault/http";
@@ -16,7 +16,7 @@ import { createVaultService, type VaultService } from "./vault/vault-service";
 import { log } from "./log";
 import { Registry } from "./registry";
 import { coreOrigin } from "./core-origin";
-import { publishEnvelope, startRpcServer, type CoreServices } from "./rpc";
+import { publishMessage, startRpcServer, type CoreServices } from "./rpc";
 import { loadTrustEntries } from "./trust";
 import { RECOMMENDATION_REQUEST_SCHEMA } from "./vault/recommendation-contract";
 
@@ -41,22 +41,24 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
     path: config.registryPath,
     staleMs: config.heartbeatStaleMs,
   });
-  const conversations = new ConversationStore({
-    path: config.conversationsPath,
-    limits: config.budgetLimits,
+  const tasks = new TaskStore({
+    path: config.a2aStatePath ?? `${config.dataDir}/a2a-state-v1.json`,
+    limits: { maxTotalTokens: config.budgetLimits.maxTotalTokens },
   });
   const audit = (event: AuditEventName, metadata: AuditMetadata = {}) =>
     appendAuditEvent(config.auditPath, event, metadata);
 
-  const services: CoreServices = { config, registry, conversations, audit };
+  const services: CoreServices = { config, registry, tasks, audit };
 
   const restoredAgents = await registry.load();
-  const restoredConversations = await conversations.load();
+  const restoredTasks = await tasks.load();
   const trustEntries = await loadTrustEntries(config.trustDir);
   await audit("trust_loaded", { entries: trustEntries.length });
   log("info", "core.state_loaded", {
     agents: restoredAgents,
-    conversations: restoredConversations,
+    a2aContexts: restoredTasks.contexts,
+    a2aTasks: restoredTasks.tasks,
+    a2aEvents: restoredTasks.events,
     trustEntries: trustEntries.length,
   });
 
@@ -83,8 +85,8 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
         notify: async (agentId, body, requestTurn) => {
           const channel = broker.channel();
           if (channel === undefined) throw new Error("Broker unavailable");
-          publishEnvelope(channel, createEnvelope({
-            performative: requestTurn ? "request" : "inform", from: coreOrigin(), to: agentId, body,
+          publishMessage(channel, createMessage({
+            type: requestTurn ? "ask" : "inform", origin: coreOrigin(), destination: agentId, context_id: ulid(), body,
             schema: requestTurn ? RECOMMENDATION_REQUEST_SCHEMA : "onclave.job.terminal.v1",
           }));
         },

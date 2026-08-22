@@ -1,4 +1,4 @@
-import { ENVELOPE_VERSION, PROTOCOL_VERSION } from "@onclave/envelope";
+import { A2A_PROTOCOL_VERSION, PROTOCOL_VERSION } from "@onclave/envelope";
 import { loadCoreConfig, redactAmqpUrl } from "./config";
 import { log } from "./log";
 import { startCore, type CoreRuntime } from "./service";
@@ -9,7 +9,7 @@ log("info", "core.starting", {
   amqpUrl: redactAmqpUrl(config.amqpUrl),
   httpPort: config.httpPort,
   vaultEnabled: config.vault !== undefined,
-  envelopeVersion: ENVELOPE_VERSION,
+  a2aVersion: A2A_PROTOCOL_VERSION,
   protocolVersion: PROTOCOL_VERSION,
 });
 

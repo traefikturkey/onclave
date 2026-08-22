@@ -1,8 +1,7 @@
 import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 
-// JSONL audit writer with sensitive-field rejection, ported from v1
-// onclave-comms audit.ts with core-service event names.
+// JSONL audit writer with sensitive-field rejection.
 export type AuditEventName =
   | "core_start"
   | "core_stop"
@@ -10,12 +9,11 @@ export type AuditEventName =
   | "agent_register_rejected"
   | "agent_unregister"
   | "agent_heartbeat_stale"
-  | "conversation_exchange"
-  | "conversation_budget_advisory"
-  | "conversation_terminated"
   | "dead_letter_received"
   | "dead_letter_unparseable"
   | "dead_letter_advisory_sent"
+  | "a2a_status_routed"
+  | "a2a_budget_blocked"
   | "rpc_rejected"
   | "trust_loaded";
 

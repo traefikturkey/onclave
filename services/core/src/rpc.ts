@@ -5,14 +5,14 @@ import {
   PROTOCOL_VERSION,
   QUEUE_CORE_RPC,
   agentQueueName,
-  createEnvelope,
   parseRpcRequest,
-  toAmqpPublish,
-  type Envelope,
+  toA2AMessagePublish,
+  toA2ATaskStatusPublish,
+  type Message,
   type RpcRequest,
 } from "@onclave/envelope";
 import type { AuditEventName, AuditMetadata } from "./audit";
-import type { ConversationStore } from "./conversations";
+import type { TaskStore } from "./tasks";
 import type { Registry } from "./registry";
 import type { CoreConfig } from "./config";
 import { coreOrigin } from "./core-origin";
@@ -23,7 +23,7 @@ export type AuditFn = (event: AuditEventName, metadata?: AuditMetadata) => Promi
 export type CoreServices = {
   config: CoreConfig;
   registry: Registry;
-  conversations: ConversationStore;
+  tasks?: TaskStore;
   audit: AuditFn;
 };
 
@@ -35,8 +35,8 @@ export function agentQueueArguments(config: CoreConfig): Record<string, unknown>
   };
 }
 
-export function publishEnvelope(channel: Channel, envelope: Envelope): void {
-  const spec = toAmqpPublish(envelope);
+export function publishMessage(channel: Channel, message: Message): void {
+  const spec = toA2AMessagePublish(message);
   channel.publish(EXCHANGE_AGENTS, spec.routingKey, spec.content, spec.options);
 }
 
@@ -74,69 +74,42 @@ async function handleRegister(
   return { ok: true, agent, queue, protocol_version: PROTOCOL_VERSION };
 }
 
-async function handleRecordExchange(
-  services: CoreServices,
-  channel: Channel,
-  request: Extract<RpcRequest, { op: "record_exchange" }>
-): Promise<object> {
-  const result = await services.conversations.recordExchange({
-    conversationId: request.conversation_id,
-    performative: request.performative,
-    fromAgentId: request.from_agent_id,
-    toAgentId: request.to_agent_id,
-    ...(request.usage !== undefined ? { usage: request.usage } : {}),
-  });
-  await services.audit("conversation_exchange", {
-    conversation_id: request.conversation_id,
-    message_id: request.message_id,
-    performative: request.performative,
-    from_agent_id: request.from_agent_id,
-    to_agent_id: request.to_agent_id,
-    exchanges: result.state.exchanges,
-    usage_total: result.state.usage_total,
-  });
-  if (!result.ok) {
-    await terminateConversation(services, channel, request, result.reason);
-    return { ok: false, error: result.reason, state: result.state };
+type TaskRpcRequest = Extract<RpcRequest, { op: "create_task" | "update_task" | "get_task" | "task_events" }>;
+
+async function handleTaskOp(services: CoreServices, channel: Channel, request: TaskRpcRequest): Promise<object> {
+  const tasks = services.tasks;
+  if (tasks === undefined) return { ok: false, error: "a2a_tasks_unavailable" };
+  if (request.op === "create_task") {
+    const task = await tasks.createTrackedTask({ contextId: request.context_id, originInstanceId: request.origin_instance_id, assigneeInstanceId: request.assignee_instance_id, ...(request.task_id === undefined ? {} : { taskId: request.task_id }), ...(request.prior_task_id === undefined ? {} : { priorTaskId: request.prior_task_id }) });
+    const submitted = await tasks.updateTask(task.task_id, "submitted", { destination: task.origin_instance_id });
+    if (submitted.ok) {
+      const spec = toA2ATaskStatusPublish(submitted.event);
+      channel.publish(EXCHANGE_AGENTS, spec.routingKey, spec.content, spec.options);
+      return { ok: true, task: submitted.task, event: submitted.event };
+    }
+    return { ok: true, task };
   }
-  if (result.advisory !== undefined) {
-    await services.audit("conversation_budget_advisory", {
-      conversation_id: request.conversation_id,
-      advisory: result.advisory,
-      usage_total: result.state.usage_total,
-    });
+  if (request.op === "get_task") {
+    const task = tasks.getTask(request.task_id);
+    return task === undefined ? { ok: false, error: "unknown_task" } : { ok: true, task };
   }
-  return { ok: true, state: result.state, ...(result.advisory ? { advisory: result.advisory } : {}) };
+  if (request.op === "task_events") return { ok: true, events: tasks.listEvents(request.task_id) };
+  const result = await tasks.updateTask(request.task_id, request.state, { ...(request.destination === undefined ? {} : { destination: request.destination }), ...(request.message_id === undefined ? {} : { messageId: request.message_id }), ...(request.body === undefined ? {} : { body: request.body }), ...(request.usage === undefined ? {} : { usage: request.usage }), ...(request.trace_id === undefined ? {} : { traceId: request.trace_id }) });
+  if (!result.ok) return { ok: false, error: result.error };
+  // Re-publish duplicates as an outbox retry. Persistent AMQP delivery plus
+  // event-idempotent consumers makes reconnect recovery safe.
+  const spec = toA2ATaskStatusPublish(result.event);
+  channel.publish(EXCHANGE_AGENTS, spec.routingKey, spec.content, spec.options);
+  await services.audit("a2a_status_routed", {
+    event_id: result.event.event_id,
+    task_id: result.event.task_id,
+    destination: result.event.destination,
+    duplicate: result.duplicate,
+  });
+  return { ok: true, task: result.task, event: result.event, duplicate: result.duplicate };
 }
 
-async function terminateConversation(
-  services: CoreServices,
-  channel: Channel,
-  request: Extract<RpcRequest, { op: "record_exchange" }>,
-  reason: string
-): Promise<void> {
-  const participants = services.conversations.get(request.conversation_id)?.participants ?? [
-    request.from_agent_id,
-    request.to_agent_id,
-  ];
-  for (const participant of participants) {
-    const failure = createEnvelope({
-      performative: "failure",
-      from: coreOrigin(),
-      to: participant,
-      body: `conversation ${request.conversation_id} terminated: ${reason}`,
-      conversationId: request.conversation_id,
-    });
-    publishEnvelope(channel, failure);
-  }
-  await services.audit("conversation_terminated", {
-    conversation_id: request.conversation_id,
-    reason,
-    participants,
-  });
-}
-
-type SimpleRpcRequest = Exclude<RpcRequest, { op: "register" } | { op: "record_exchange" }>;
+type SimpleRpcRequest = Exclude<RpcRequest, { op: "register" } | TaskRpcRequest>;
 
 async function handleSimpleOps(services: CoreServices, request: SimpleRpcRequest): Promise<object> {
   if (request.op === "heartbeat") {
@@ -151,11 +124,7 @@ async function handleSimpleOps(services: CoreServices, request: SimpleRpcRequest
   if (request.op === "list_agents") {
     return { ok: true, agents: services.registry.list(request.include_stale === true) };
   }
-  const state = services.conversations.get(request.conversation_id);
-  if (state === undefined) {
-    return { ok: false, error: "unknown_conversation" };
-  }
-  return { ok: true, state };
+  return { ok: false, error: "unknown_rpc_operation" };
 }
 
 export async function handleRpcRequest(
@@ -167,8 +136,11 @@ export async function handleRpcRequest(
   switch (request.op) {
     case "register":
       return handleRegister(services, channel, request, keyId);
-    case "record_exchange":
-      return handleRecordExchange(services, channel, request);
+    case "create_task":
+    case "update_task":
+    case "get_task":
+    case "task_events":
+      return handleTaskOp(services, channel, request);
     default:
       return handleSimpleOps(services, request);
   }

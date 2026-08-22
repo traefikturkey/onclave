@@ -1,83 +1,43 @@
 import type { Channel, ConsumeMessage } from "amqplib";
-import { QUEUE_DEAD_LETTER, createEnvelope, fromAmqpMessage } from "@onclave/envelope";
+import { createMessage, fromA2AMessage, fromA2ATaskStatus, QUEUE_DEAD_LETTER, toA2AMessagePublish } from "@onclave/envelope";
 import { CORE_AGENT_ID, coreOrigin } from "./core-origin";
 import { log } from "./log";
-import { publishEnvelope, type CoreServices } from "./rpc";
+import { publishMessage, type CoreServices } from "./rpc";
 
-type DeathInfo = {
-  reason: string;
-  queue: string;
-};
-
+type DeathInfo = { reason: string; queue: string };
 function extractDeath(message: ConsumeMessage): DeathInfo {
   const deaths = message.properties.headers?.["x-death"];
   if (Array.isArray(deaths) && deaths.length > 0) {
     const first = deaths[0] as unknown as Record<string, unknown>;
-    return {
-      reason: typeof first.reason === "string" ? first.reason : "unknown",
-      queue: typeof first.queue === "string" ? first.queue : "unknown",
-    };
+    return { reason: typeof first.reason === "string" ? first.reason : "unknown", queue: typeof first.queue === "string" ? first.queue : "unknown" };
   }
   return { reason: "unknown", queue: "unknown" };
 }
 
-async function handleDeadLetter(
-  services: CoreServices,
-  channel: Channel,
-  message: ConsumeMessage
-): Promise<void> {
+async function handleDeadLetter(services: CoreServices, channel: Channel, message: ConsumeMessage): Promise<void> {
   const death = extractDeath(message);
-  const parsed = fromAmqpMessage(message);
-  if (!parsed.ok) {
-    await services.audit("dead_letter_unparseable", {
-      reason: death.reason,
-      queue: death.queue,
-      detail: parsed.error,
-    });
+  const parsed = fromA2AMessage(message);
+  if (parsed.ok) {
+    await services.audit("dead_letter_received", { reason: death.reason, queue: death.queue, message_id: parsed.message.message_id, context_id: parsed.message.context_id, from_instance_id: parsed.message.origin.instance_id, to_instance_id: parsed.message.destination, type: parsed.message.type });
+    if (parsed.message.origin.instance_id !== CORE_AGENT_ID) {
+      const advisory = createMessage({ type: "inform", origin: coreOrigin(), destination: parsed.message.origin.instance_id, context_id: parsed.message.context_id, body: `message ${parsed.message.message_id} to ${parsed.message.destination} was dead-lettered (${death.reason}) from queue ${death.queue}` });
+      publishMessage(channel, advisory);
+      await services.audit("dead_letter_advisory_sent", { message_id: parsed.message.message_id, advisory_id: advisory.message_id, to_instance_id: parsed.message.origin.instance_id });
+    }
     return;
   }
-  const envelope = parsed.envelope;
-  await services.audit("dead_letter_received", {
-    reason: death.reason,
-    queue: death.queue,
-    message_id: envelope.id,
-    conversation_id: envelope.conversation_id,
-    from_agent_id: envelope.from.agent_id,
-    to_agent_id: envelope.to,
-    performative: envelope.performative,
-  });
-  if (envelope.from.agent_id === CORE_AGENT_ID) {
+  const status = fromA2ATaskStatus(message);
+  if (status.ok) {
+    await services.audit("dead_letter_received", { reason: death.reason, queue: death.queue, event_id: status.event.event_id, task_id: status.event.task_id, context_id: status.event.context_id, origin_instance_id: status.event.origin_instance_id, destination: status.event.destination, state: status.event.state });
     return;
   }
-  const advisory = createEnvelope({
-    performative: "inform",
-    from: coreOrigin(),
-    to: envelope.from.agent_id,
-    body: `message ${envelope.id} to ${envelope.to} was dead-lettered (${death.reason}) from queue ${death.queue}`,
-    conversationId: envelope.conversation_id,
-  });
-  publishEnvelope(channel, advisory);
-  await services.audit("dead_letter_advisory_sent", {
-    message_id: envelope.id,
-    advisory_id: advisory.id,
-    to_agent_id: envelope.from.agent_id,
-  });
+  await services.audit("dead_letter_unparseable", { reason: death.reason, queue: death.queue, detail: "protocol_version_mismatch or malformed A2A payload" });
 }
 
-export async function startDeadLetterConsumer(
-  services: CoreServices,
-  channel: Channel
-): Promise<void> {
+export async function startDeadLetterConsumer(services: CoreServices, channel: Channel): Promise<void> {
   await channel.consume(QUEUE_DEAD_LETTER, (message) => {
     if (message === null) return;
-    void handleDeadLetter(services, channel, message)
-      .catch((error: unknown) => {
-        const detail = error instanceof Error ? error.message : String(error);
-        log("error", "dead_letter.handler_failed", { message: detail });
-      })
-      .finally(() => {
-        channel.ack(message);
-      });
+    void handleDeadLetter(services, channel, message).catch((error: unknown) => log("error", "dead_letter.handler_failed", { message: error instanceof Error ? error.message : String(error) })).finally(() => channel.ack(message));
   });
   log("info", "dead_letter.listening", { queue: QUEUE_DEAD_LETTER });
 }

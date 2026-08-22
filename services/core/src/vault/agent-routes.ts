@@ -1,9 +1,9 @@
 import type { Channel } from "amqplib";
-import { parseEnvelope, parseRpcRequest, type AgentOrigin, type RpcRequest } from "@onclave/envelope";
+import { parseMessage, parseRpcRequest } from "@onclave/envelope";
 import { AgentDeliveryService, type DeliveryDisposition } from "../agent-delivery";
 import { AgentKeyMismatchError } from "../registry";
 import type { CoreServices } from "../rpc";
-import { handleRpcRequest, publishEnvelope } from "../rpc";
+import { handleRpcRequest, publishMessage } from "../rpc";
 import { HttpError } from "./errors";
 import { jsonResponse, rawResponse, type VaultHandlers } from "./http";
 
@@ -75,25 +75,11 @@ function requireExistingAgentKey(services: CoreServices, agentId: string, keyId:
   }
 }
 
-function requireAuthorizedOrigin(services: CoreServices, origin: AgentOrigin, keyId: string): void {
-  const agent = services.registry.get(origin.agent_id);
+function requireAuthorizedA2AOrigin(services: CoreServices, origin: { instance_id: string; name: string; host: string; project?: string }, keyId: string): void {
+  const agent = services.registry.get(origin.instance_id);
   if (agent === undefined) throw new HttpError(404, "Agent not found");
   if (agent.key_id !== keyId) throw new HttpError(403, "Agent is bound to a different key");
-  if (
-    agent.name !== origin.name
-    || agent.host !== origin.host
-    || agent.project !== origin.project
-  ) {
-    throw new HttpError(403, "Envelope origin does not match registered agent");
-  }
-}
-
-function requireRecordExchangeParticipant(services: CoreServices, request: Extract<RpcRequest, { op: "record_exchange" }>, keyId: string): void {
-  const fromAgent = services.registry.get(request.from_agent_id);
-  const toAgent = services.registry.get(request.to_agent_id);
-  if (fromAgent?.key_id !== keyId && toAgent?.key_id !== keyId) {
-    throw new HttpError(403, "Signing key is not bound to a record_exchange participant");
-  }
+  if (agent.name !== origin.name || agent.host !== origin.host || agent.project !== origin.project) throw new HttpError(403, "Message origin does not match registered instance");
 }
 
 function brokerChannel(deps: AgentRouteDependencies): Channel {
@@ -120,8 +106,6 @@ export function createAgentRouteHandlers(deps: AgentRouteDependencies): VaultHan
         requireExistingAgentKey(deps.services, parsed.request.card.agent_id, keyId);
       } else if (parsed.request.op === "heartbeat" || parsed.request.op === "unregister") {
         requireKnownAgentKey(deps.services, parsed.request.agent_id, keyId);
-      } else if (parsed.request.op === "record_exchange") {
-        requireRecordExchangeParticipant(deps.services, parsed.request, keyId);
       }
 
       try {
@@ -135,11 +119,14 @@ export function createAgentRouteHandlers(deps: AgentRouteDependencies): VaultHan
     },
     agentsMessages: (request) => {
       const keyId = requestKeyId(request.keyId);
-      const parsed = parseEnvelope(parseJsonObject(request.body));
-      if (!parsed.ok) throw bodyValidationError(parsed.error);
-      requireAuthorizedOrigin(deps.services, parsed.envelope.from, keyId);
-      publishEnvelope(brokerChannel(deps), parsed.envelope);
-      return jsonResponse({ ok: true, message_id: parsed.envelope.id }, 202);
+      const body = parseJsonObject(request.body);
+      const message = parseMessage(body);
+      if (message.ok) {
+        requireAuthorizedA2AOrigin(deps.services, message.value.origin, keyId);
+        publishMessage(brokerChannel(deps), message.value);
+        return jsonResponse({ ok: true, message_id: message.value.message_id }, 202);
+      }
+      throw bodyValidationError(`message is not a supported A2A message: ${message.error}`);
     },
     agentsMessagesNext: async (request) => {
       const keyId = requestKeyId(request.keyId);
@@ -152,7 +139,7 @@ export function createAgentRouteHandlers(deps: AgentRouteDependencies): VaultHan
         throw new HttpError(503, "Broker unavailable");
       }
       if (delivered === undefined) return rawResponse("", undefined, 204);
-      return jsonResponse({ delivery_id: delivered.deliveryId, envelope: delivered.envelope });
+      return jsonResponse({ delivery_id: delivered.deliveryId, kind: delivered.kind, ...(delivered.kind === "message" ? { message: delivered.message } : { status: delivered.status }) });
     },
     agentsMessageDisposition: (request) => {
       const keyId = requestKeyId(request.keyId);

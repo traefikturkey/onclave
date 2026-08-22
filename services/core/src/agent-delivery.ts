@@ -1,12 +1,21 @@
 import { randomUUID } from "node:crypto";
 import type { Channel, ConsumeMessage } from "amqplib";
-import { agentQueueName, fromAmqpMessage, type Envelope } from "@onclave/envelope";
+import {
+  agentQueueName,
+  fromA2AMessage,
+  fromA2ATaskStatus,
+  type Message,
+  type TaskStatusEvent,
+} from "@onclave/envelope";
 
 export const DEFAULT_DELIVERY_LEASE_MS = 30_000;
 
-export type DeliveredAgentMessage = {
+export type DeliveredA2AItem =
+  | { kind: "message"; message: Message }
+  | { kind: "task-status"; status: TaskStatusEvent };
+
+export type DeliveredAgentMessage = DeliveredA2AItem & {
   deliveryId: string;
-  envelope: Envelope;
 };
 
 type DeliveryLease = {
@@ -98,12 +107,26 @@ export class AgentDeliveryService {
           this.requeue(channel, message);
           return;
         }
-        const parsed = fromAmqpMessage(message);
-        if (!parsed.ok) {
-          this.reject(channel, message);
+        const kind = message.properties.headers?.["x-onclave-a2a-kind"];
+        if (kind === "message") {
+          const parsed = fromA2AMessage(message);
+          if (!parsed.ok) {
+            this.reject(channel, message);
+            return;
+          }
+          settle(this.claim(channel, message, keyId, { kind, message: parsed.message }));
           return;
         }
-        settle(this.claim(channel, message, keyId, parsed.envelope));
+        if (kind === "task-status") {
+          const parsed = fromA2ATaskStatus(message);
+          if (!parsed.ok) {
+            this.reject(channel, message);
+            return;
+          }
+          settle(this.claim(channel, message, keyId, { kind, status: parsed.event }));
+          return;
+        }
+        this.reject(channel, message);
       };
 
       timer = setTimeout(() => settle(undefined), waitMs);
@@ -138,12 +161,12 @@ export class AgentDeliveryService {
     if (channel !== undefined) this.releaseChannel(channel);
   }
 
-  private claim(channel: Channel, message: ConsumeMessage, keyId: string, envelope: Envelope): DeliveredAgentMessage {
+  private claim(channel: Channel, message: ConsumeMessage, keyId: string, item: DeliveredA2AItem): DeliveredAgentMessage {
     const deliveryId = randomUUID();
     const timer = setTimeout(() => this.expire(deliveryId), this.leaseMs);
     timer.unref();
     this.deliveries.set(deliveryId, { keyId, channel, message, timer });
-    return { deliveryId, envelope };
+    return { deliveryId, ...item };
   }
 
   private expire(deliveryId: string): void {

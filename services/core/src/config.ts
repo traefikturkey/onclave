@@ -7,7 +7,7 @@ export type CoreConfig = {
   httpPort: number;
   dataDir: string;
   registryPath: string;
-  conversationsPath: string;
+  a2aStatePath?: string;
   auditPath: string;
   trustDir: string;
   queueTtlMs: number;
@@ -44,7 +44,7 @@ export function loadCoreConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig
     httpPort: parsePort(env.ONCLAVE_HTTP_PORT, 8080),
     dataDir,
     registryPath: join(dataDir, "registry.json"),
-    conversationsPath: join(dataDir, "conversations.json"),
+    a2aStatePath: join(dataDir, "a2a-state-v1.json"),
     auditPath: join(dataDir, "audit.jsonl"),
     trustDir: join(dataDir, "trust"),
     queueTtlMs: parseIntEnv(env.ONCLAVE_QUEUE_TTL_MS, 86400000, "queue ttl"),

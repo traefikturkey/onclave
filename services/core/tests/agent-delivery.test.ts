@@ -1,14 +1,13 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 import type { Channel, ConsumeMessage } from "amqplib";
-import { agentQueueName, createEnvelope, toAmqpPublish, type AgentCard, type Envelope } from "@onclave/envelope";
+import { agentQueueName, createMessage, toA2AMessagePublish, type A2AOrigin, type Message } from "@onclave/envelope";
 import { AgentDeliveryService } from "../src/agent-delivery";
 
-const card: AgentCard = {
+const card = {
   agent_id: "agent-a",
   name: "Agent A",
   host: "test-host",
-  transport: "amqp",
 };
 
 type Consumer = {
@@ -48,8 +47,8 @@ class FakeChannel extends EventEmitter {
     this.queued.set(queue, messages);
   }
 
-  enqueue(agentId: string, envelope: Envelope): void {
-    const spec = toAmqpPublish(envelope);
+  enqueue(agentId: string, item: Message): void {
+    const spec = toA2AMessagePublish(item);
     const queue = agentQueueName(agentId);
     const message = {
       content: spec.content,
@@ -70,11 +69,13 @@ class FakeChannel extends EventEmitter {
   }
 }
 
-function envelope(): Envelope {
-  return createEnvelope({
-    performative: "request",
-    from: card,
-    to: card.agent_id,
+function message(): Message {
+  const origin: A2AOrigin = { instance_id: card.agent_id, name: card.name, host: card.host };
+  return createMessage({
+    context_id: "01J00000000000000000000000",
+    type: "request",
+    origin,
+    destination: card.agent_id,
     body: "hello",
   });
 }
@@ -88,19 +89,19 @@ describe("AgentDeliveryService", () => {
     const channel = new FakeChannel();
     const deliveries = new AgentDeliveryService({ leaseMs: 10 });
     deliveries.onChannelReady(channel as unknown as Channel);
-    const message = envelope();
+    const item = message();
 
     const firstPromise = deliveries.next(card.agent_id, "key-a", 100);
-    channel.enqueue(card.agent_id, message);
+    channel.enqueue(card.agent_id, item);
     const first = await firstPromise;
-    expect(first?.envelope).toEqual(message);
+    expect(first).toMatchObject({ kind: "message", message: item });
     await Promise.resolve();
 
     await sleep(25);
     expect(channel.rejected).toContainEqual({ message: expect.anything(), requeue: true });
 
     const second = await deliveries.next(card.agent_id, "key-a", 100);
-    expect(second?.envelope).toEqual(message);
+    expect(second).toMatchObject({ kind: "message", message: item });
     expect(second?.deliveryId).not.toBe(first?.deliveryId);
     expect(deliveries.dispose(second?.deliveryId ?? "", "key-a", "ack")).toBe("accepted");
     expect(channel.acknowledged).toHaveLength(1);
@@ -112,7 +113,7 @@ describe("AgentDeliveryService", () => {
     deliveries.onChannelReady(channel as unknown as Channel);
 
     const pending = deliveries.next(card.agent_id, "key-a", 100);
-    channel.enqueue(card.agent_id, envelope());
+    channel.enqueue(card.agent_id, message());
     const delivered = await pending;
     expect(deliveries.dispose(delivered?.deliveryId ?? "", "key-a", "reject")).toBe("accepted");
     expect(channel.rejected).toContainEqual({ message: expect.anything(), requeue: false });
