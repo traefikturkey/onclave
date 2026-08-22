@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { Type } from "typebox";
@@ -43,6 +44,8 @@ const FOOTER_STATUS_KEY = "onclave-v2";
 const ANSI_GREEN = "\x1b[32m";
 const ANSI_RED = "\x1b[31m";
 const ANSI_RESET = "\x1b[0m";
+export const ONCLAVE_ROOT_CAPABILITY_ENV = "ONCLAVE_PI_ROOT_CAPABILITY";
+export const ONCLAVE_SUBAGENT_SENTINEL_ENV = "ONCLAVE_PI_SUBAGENT_INELIGIBLE";
 
 type AdapterRuntime = {
   card: AgentCard;
@@ -60,11 +63,20 @@ export function isPiSubagent(environment: NodeJS.ProcessEnv = process.env): bool
   return Boolean(
     environment.PI_SUBAGENT_RUN_ID?.trim()
       || environment.PI_SUBAGENT_TREE_RUN_ID?.trim()
+      || environment[ONCLAVE_SUBAGENT_SENTINEL_ENV]?.trim()
   );
 }
 
+export function initializeRootCapability(environment: NodeJS.ProcessEnv = process.env): boolean {
+  if (isPiSubagent(environment)) return false;
+  if (!environment[ONCLAVE_ROOT_CAPABILITY_ENV]?.trim()) {
+    environment[ONCLAVE_ROOT_CAPABILITY_ENV] = randomUUID();
+  }
+  return true;
+}
+
 export default function onclavePi(pi: ExtensionAPI): void {
-  if (isPiSubagent()) return;
+  if (!initializeRootCapability()) return;
 
   pi.registerFlag("onclave-id", {
     description: "Override the Onclave v2 agent id (default host-project-session)",

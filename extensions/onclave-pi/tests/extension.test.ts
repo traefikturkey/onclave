@@ -55,7 +55,15 @@ vi.mock("../src/lib/http-signer", () => ({
   })),
 }));
 
-import onclavePi, { resolveAdapterApiBase, refreshFooterStatus, resolveApiBase } from "../src/onclave-pi";
+import onclavePi, {
+  initializeRootCapability,
+  isPiSubagent,
+  ONCLAVE_ROOT_CAPABILITY_ENV,
+  ONCLAVE_SUBAGENT_SENTINEL_ENV,
+  resolveAdapterApiBase,
+  refreshFooterStatus,
+  resolveApiBase,
+} from "../src/onclave-pi";
 
 type ToolResult = { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> };
 type RegisteredTool = {
@@ -69,6 +77,29 @@ describe("Onclave v2 adapter registration", () => {
   beforeEach(() => {
     httpClient.call.mockReset();
     httpClient.publish.mockReset();
+  });
+
+  it("mints a root capability, rejects direct children, and keeps nested children ineligible", () => {
+    const root: NodeJS.ProcessEnv = {};
+    expect(initializeRootCapability(root)).toBe(true);
+    const capability = root[ONCLAVE_ROOT_CAPABILITY_ENV];
+    expect(capability).toMatch(/^[0-9a-f-]{36}$/);
+    expect(initializeRootCapability({ [ONCLAVE_ROOT_CAPABILITY_ENV]: capability })).toBe(true);
+
+    expect(initializeRootCapability({
+      [ONCLAVE_ROOT_CAPABILITY_ENV]: capability,
+      PI_SUBAGENT_RUN_ID: "direct-child",
+    })).toBe(false);
+
+    const nested: NodeJS.ProcessEnv = {
+      [ONCLAVE_SUBAGENT_SENTINEL_ENV]: "1",
+      PI_SUBAGENT_RUN_ID: "nested-child",
+      PI_SUBAGENT_TREE_RUN_ID: "nested-tree-child",
+    };
+    delete nested.PI_SUBAGENT_RUN_ID;
+    delete nested.PI_SUBAGENT_TREE_RUN_ID;
+    expect(isPiSubagent(nested)).toBe(true);
+    expect(initializeRootCapability(nested)).toBe(false);
   });
 
   it("does not register the extension in child Pi processes", () => {
