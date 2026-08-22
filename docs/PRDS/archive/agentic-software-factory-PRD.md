@@ -1,13 +1,9 @@
 ---
 created: 2026-05-25
-status: draft
-parents:
-  - ../extensions/onclave-pi/PRD.md
-  - observer-subscriptions-PRD.md
-  - tailscale-aperture-guardrails-PRD.md
-  - openclaw-hermes-integration-PRD.md
-  - mobile-agent-comms-app-PRD.md
-  - technology-stack-architecture-PRD.md
+status: superseded
+superseded: 2026-08-21
+superseded_by: ../../extensions/onclave-pi/PRD.md
+supersession_reason: Replaced by the broker-backed core, envelope, and adapter architecture; its hub network and brokerless v1 constraints contradict the deployed system.
 ---
 
 # PRD: Onclave Agentic Software Factory

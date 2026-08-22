@@ -1,7 +1,9 @@
 ---
 created: 2026-05-22
-status: draft
-parent: ../extensions/onclave-pi/PRD.md
+status: superseded
+superseded: 2026-08-21
+superseded_by: ../../extensions/onclave-pi/PRD.md
+supersession_reason: Replaced by the broker-backed core and adapter architecture; the LAN hub, UDP discovery, and WSS routing assumptions no longer apply.
 ---
 
 # PRD: Secure LAN Pi Observer Subscriptions

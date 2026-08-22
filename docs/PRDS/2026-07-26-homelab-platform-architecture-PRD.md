@@ -306,7 +306,8 @@ project.
 - Research documents sit alongside implementation PRDs in both repos, inflating
   the apparent surface. `onramp-vNext/docs/prd/lakebed-backend-architecture-prd.md`
   is 1321 lines of reverse-engineering notes on a third-party product;
-  `onclave/docs/PRDS/agentic-software-factory-PRD.md` is similar. A
+  the superseded
+  `onclave/docs/PRDS/archive/agentic-software-factory-PRD.md` is similar. A
   `docs/research/` split would help.
 
 ## Document Location

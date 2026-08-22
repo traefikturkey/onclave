@@ -1,7 +1,9 @@
 ---
 created: 2026-05-22
-status: draft
-parent: ../extensions/onclave-pi/PRD.md
+status: superseded
+superseded: 2026-08-21
+superseded_by: ../../extensions/onclave-pi/PRD.md
+supersession_reason: Replaced by the deployed RabbitMQ, PostgreSQL, core service, and broker-backed adapter architecture; its brokerless v1 constraints no longer apply.
 ---
 
 # PRD: Technology Stack Architecture for Tailnet Pi Agent Platform
