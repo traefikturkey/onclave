@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import onclavePi, { validateMessageParams } from "../src/onclave-pi";
+import onclavePi, { setAdapterToolsActive, validateMessageParams } from "../src/onclave-pi";
 
 type Tool = { name: string; parameters?: unknown };
 function fakePi() {
   const tools: Tool[] = [];
+  let activeTools = ["read", "onclave_instances", "onclave_message"];
   const pi = {
     registerFlag: vi.fn(), on: vi.fn(), registerCommand: vi.fn(), registerTool: (tool: Tool) => tools.push(tool), getFlag: vi.fn(), sendMessage: vi.fn(),
+    getActiveTools: vi.fn(() => [...activeTools]),
+    setActiveTools: vi.fn((names: string[]) => { activeTools = [...names]; }),
   };
   return { pi, tools };
 }
@@ -23,6 +26,18 @@ describe("Onclave Pi T2 adapter", () => {
     expect(registered.tools.map((tool) => tool.name).sort()).toEqual(["onclave_instances", "onclave_message"]);
     const instances = registered.tools.find((tool) => tool.name === "onclave_instances");
     expect(instances?.parameters).toMatchObject({ type: "object", properties: {} });
+  });
+
+  it("tracks adapter tool visibility without changing unrelated tools", () => {
+    const registered = fakePi();
+    setAdapterToolsActive(registered.pi as never, false);
+    expect(registered.pi.setActiveTools).toHaveBeenLastCalledWith(["read"]);
+    setAdapterToolsActive(registered.pi as never, true);
+    expect(registered.pi.setActiveTools).toHaveBeenLastCalledWith([
+      "read",
+      "onclave_instances",
+      "onclave_message",
+    ]);
   });
 
   it("uses one flat provider-portable message schema", () => {

@@ -26,6 +26,7 @@ const FOOTER_STATUS_KEY = "onclave-v2";
 const ANSI_GREEN = "\x1b[32m";
 const ANSI_RED = "\x1b[31m";
 const ANSI_RESET = "\x1b[0m";
+const ADAPTER_TOOL_NAMES = ["onclave_instances", "onclave_message"] as const;
 export const ONCLAVE_ROOT_CAPABILITY_ENV = "ONCLAVE_PI_ROOT_CAPABILITY";
 export const ONCLAVE_SUBAGENT_SENTINEL_ENV = "ONCLAVE_PI_SUBAGENT_INELIGIBLE";
 
@@ -49,15 +50,26 @@ export default function onclavePi(pi: ExtensionAPI): void {
   const inherited = process.env.ONCLAVE_AGENT_ID;
   let exposed: string | undefined;
   pi.on("session_start", async (_event, ctx) => {
+    setAdapterToolsActive(pi, false);
     try {
-      runtime = await startAdapter(pi, ctx, { audit, policyPath, onRegistered: (id) => { exposed = id; process.env.ONCLAVE_AGENT_ID = id; }, onDisconnected: () => { if (process.env.ONCLAVE_AGENT_ID === exposed) { if (inherited === undefined) delete process.env.ONCLAVE_AGENT_ID; else process.env.ONCLAVE_AGENT_ID = inherited; } exposed = undefined; } });
+      runtime = await startAdapter(pi, ctx, { audit, policyPath, onRegistered: (id) => { exposed = id; process.env.ONCLAVE_AGENT_ID = id; setAdapterToolsActive(pi, true); }, onDisconnected: () => { setAdapterToolsActive(pi, false); if (process.env.ONCLAVE_AGENT_ID === exposed) { if (inherited === undefined) delete process.env.ONCLAVE_AGENT_ID; else process.env.ONCLAVE_AGENT_ID = inherited; } exposed = undefined; } });
       heartbeat = setInterval(() => { void heartbeatTick(runtime).catch(() => undefined); }, HEARTBEAT_INTERVAL_MS); heartbeat.unref?.();
     } catch (error) { ctx.ui.notify(`Onclave initialization failed: ${error instanceof Error ? error.message : String(error)}`, "error"); }
   });
-  pi.on("session_shutdown", async () => { if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; } if (runtime !== null) { await shutdownAdapter(runtime, audit); runtime = null; } if (process.env.ONCLAVE_AGENT_ID === exposed) { if (inherited === undefined) delete process.env.ONCLAVE_AGENT_ID; else process.env.ONCLAVE_AGENT_ID = inherited; } exposed = undefined; });
+  pi.on("session_shutdown", async () => { setAdapterToolsActive(pi, false); if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; } if (runtime !== null) { await shutdownAdapter(runtime, audit); runtime = null; } if (process.env.ONCLAVE_AGENT_ID === exposed) { if (inherited === undefined) delete process.env.ONCLAVE_AGENT_ID; else process.env.ONCLAVE_AGENT_ID = inherited; } exposed = undefined; });
   pi.on("agent_end", async (event) => { if (runtime !== null) await submitRunReply(runtime, event.messages, audit); });
   registerAdapterTools(pi, () => runtime, audit);
+  setAdapterToolsActive(pi, false);
   pi.registerCommand("onclave", { description: "Show Onclave instance status", handler: async (_args, ctx) => ctx.ui.notify(statusText(runtime), "info") });
+}
+
+export function setAdapterToolsActive(pi: Pick<ExtensionAPI, "getActiveTools" | "setActiveTools">, active: boolean): void {
+  const current = pi.getActiveTools();
+  const adapterTools = new Set<string>(ADAPTER_TOOL_NAMES);
+  const next = active
+    ? [...current, ...ADAPTER_TOOL_NAMES.filter((name) => !current.includes(name))]
+    : current.filter((name) => !adapterTools.has(name));
+  if (next.length !== current.length || next.some((name, index) => name !== current[index])) pi.setActiveTools(next);
 }
 
 type StartOptions = { audit: Audit; policyPath: string; onRegistered?: (instanceId: string) => void; onDisconnected?: () => void };
