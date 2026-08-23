@@ -36,6 +36,8 @@ describe("Onclave Pi T2 adapter", () => {
     expect(registered.pi.on).toHaveBeenCalledWith("session_start", expect.any(Function));
     expect(registered.pi.on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
     expect(registered.tools.map((tool) => tool.name).sort()).toEqual(["onclave_instances", "onclave_message"]);
+    expect(registered.pi.getActiveTools).not.toHaveBeenCalled();
+    expect(registered.pi.setActiveTools).not.toHaveBeenCalled();
   });
 
   it("registers nothing and starts no session hooks without a provisioned capability", () => {

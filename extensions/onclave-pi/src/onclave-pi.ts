@@ -53,7 +53,6 @@ export default function onclavePi(pi: ExtensionAPI): void {
   pi.on("session_shutdown", async () => { setAdapterToolsActive(pi, false); if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; } if (runtime !== null) { await shutdownAdapter(runtime, audit); runtime = null; } if (process.env.ONCLAVE_AGENT_ID === exposed) { if (inherited === undefined) delete process.env.ONCLAVE_AGENT_ID; else process.env.ONCLAVE_AGENT_ID = inherited; } exposed = undefined; });
   pi.on("agent_end", async (event) => { if (runtime !== null) await submitRunReply(runtime, event.messages, audit); });
   registerAdapterTools(pi, () => runtime, audit);
-  setAdapterToolsActive(pi, false);
   pi.registerCommand("onclave", { description: "Show Onclave instance status", handler: async (_args, ctx) => ctx.ui.notify(statusText(runtime), "info") });
 }
 
