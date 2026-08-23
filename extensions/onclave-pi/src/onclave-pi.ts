@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { Type } from "typebox";
@@ -16,8 +15,9 @@ import { loadDefaultRequestSigner } from "./lib/http-signer";
 import { isAutoAccepted, loadAdapterPolicy } from "./lib/policy";
 import { resolveProjectLabel } from "./lib/project-label";
 import { lastAssistantText, runUsage } from "./lib/run-summary";
+import { initializeRootCapability, isPiSubagent, ONCLAVE_ROOT_CAPABILITY_ENV, ONCLAVE_SUBAGENT_SENTINEL_ENV } from "./lib/root-capability";
 
-export { resolveApiBase };
+export { initializeRootCapability, isPiSubagent, ONCLAVE_ROOT_CAPABILITY_ENV, ONCLAVE_SUBAGENT_SENTINEL_ENV, resolveApiBase };
 const MAX_MESSAGE_LENGTH = 100_000;
 const MAX_WAIT_TIMEOUT_MS = 300_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -27,15 +27,9 @@ const ANSI_GREEN = "\x1b[32m";
 const ANSI_RED = "\x1b[31m";
 const ANSI_RESET = "\x1b[0m";
 const ADAPTER_TOOL_NAMES = ["onclave_instances", "onclave_message"] as const;
-export const ONCLAVE_ROOT_CAPABILITY_ENV = "ONCLAVE_PI_ROOT_CAPABILITY";
-export const ONCLAVE_SUBAGENT_SENTINEL_ENV = "ONCLAVE_PI_SUBAGENT_INELIGIBLE";
-
 type Runtime = { card: AgentCard; link: HttpLink; client: OnclaveHttpClient; state: ConnectionState; correlation: CorrelationStore; seen: SeenIds; ui: ExtensionContext["ui"]; sendMessage: (message: unknown, options: { triggerTurn: boolean; deliverAs: "followUp" }) => void; aliveInstances: number; registered: boolean };
 type Audit = (event: AdapterAuditEventName, metadata?: AdapterAuditMetadata) => Promise<void>;
 type RuntimeGetter = () => Runtime | null;
-
-export function isPiSubagent(environment: NodeJS.ProcessEnv = process.env): boolean { return Boolean(environment.PI_SUBAGENT_RUN_ID?.trim() || environment.PI_SUBAGENT_TREE_RUN_ID?.trim() || environment[ONCLAVE_SUBAGENT_SENTINEL_ENV]?.trim()); }
-export function initializeRootCapability(environment: NodeJS.ProcessEnv = process.env): boolean { if (isPiSubagent(environment)) return false; if (!environment[ONCLAVE_ROOT_CAPABILITY_ENV]?.trim()) environment[ONCLAVE_ROOT_CAPABILITY_ENV] = randomUUID(); return true; }
 
 export default function onclavePi(pi: ExtensionAPI): void {
   if (!initializeRootCapability()) return;
