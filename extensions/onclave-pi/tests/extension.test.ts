@@ -1,6 +1,5 @@
-import { spawnSync } from "node:child_process";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import onclavePi, { initializeRootCapability, ONCLAVE_ROOT_CAPABILITY_ENV, ONCLAVE_SUBAGENT_SENTINEL_ENV, setAdapterToolsActive, validateMessageParams } from "../src/onclave-pi";
+import onclavePi, { isPiSubagent, setAdapterToolsActive, validateMessageParams } from "../src/onclave-pi";
 
 type Tool = { name: string; parameters?: unknown };
 function fakePi() {
@@ -18,18 +17,14 @@ describe("Onclave Pi T2 adapter", () => {
   beforeEach(() => {
     delete process.env.PI_SUBAGENT_RUN_ID;
     delete process.env.PI_SUBAGENT_TREE_RUN_ID;
-    delete process.env[ONCLAVE_SUBAGENT_SENTINEL_ENV];
-    process.env[ONCLAVE_ROOT_CAPABILITY_ENV] = "root-capability";
   });
 
   afterEach(() => {
     delete process.env.PI_SUBAGENT_RUN_ID;
     delete process.env.PI_SUBAGENT_TREE_RUN_ID;
-    delete process.env[ONCLAVE_SUBAGENT_SENTINEL_ENV];
-    delete process.env[ONCLAVE_ROOT_CAPABILITY_ENV];
   });
 
-  it("registers the adapter for an authorized root", () => {
+  it("registers the adapter for a normal Pi process", () => {
     const registered = fakePi();
     onclavePi(registered.pi as never);
     expect(registered.pi.registerFlag).toHaveBeenCalled();
@@ -78,12 +73,12 @@ describe("Onclave Pi T2 adapter", () => {
     expect(runtime.link.stop).toHaveBeenCalledOnce();
   });
 
-  it("registers nothing and starts no session hooks without a provisioned capability", () => {
-    delete process.env[ONCLAVE_ROOT_CAPABILITY_ENV];
+  it("registers nothing and starts no session hooks in a direct subagent", () => {
+    process.env.PI_SUBAGENT_RUN_ID = "child-run";
     const heartbeat = vi.spyOn(globalThis, "setInterval");
     const registered = fakePi();
     onclavePi(registered.pi as never);
-    expect(initializeRootCapability()).toBe(false);
+    expect(isPiSubagent()).toBe(true);
     expect(registered.pi.registerFlag).not.toHaveBeenCalled();
     expect(registered.pi.on).not.toHaveBeenCalled();
     expect(registered.pi.registerCommand).not.toHaveBeenCalled();
@@ -92,23 +87,12 @@ describe("Onclave Pi T2 adapter", () => {
     heartbeat.mockRestore();
   });
 
-  it("denies a direct child even when it inherits the root capability", () => {
-    expect(initializeRootCapability({ [ONCLAVE_ROOT_CAPABILITY_ENV]: "root-capability", PI_SUBAGENT_RUN_ID: "child-run" })).toBe(false);
+  it("identifies a tree subagent", () => {
+    expect(isPiSubagent({ PI_SUBAGENT_TREE_RUN_ID: "tree-child-run" })).toBe(true);
   });
 
-  it("denies a broker child even when it inherits the root capability", () => {
-    expect(initializeRootCapability({ [ONCLAVE_ROOT_CAPABILITY_ENV]: "root-capability", [ONCLAVE_SUBAGENT_SENTINEL_ENV]: "broker-child" })).toBe(false);
-  });
-
-  it("denies a real subprocess with child markers removed and no capability", () => {
-    const tsx = `${process.cwd()}/node_modules/tsx/dist/cli.mjs`;
-    const result = spawnSync(process.execPath, [tsx, "-e", 'import { initializeRootCapability } from "./extensions/onclave-pi/src/lib/root-capability.ts"; delete process.env.ONCLAVE_PI_ROOT_CAPABILITY; delete process.env.PI_SUBAGENT_RUN_ID; delete process.env.PI_SUBAGENT_TREE_RUN_ID; delete process.env.ONCLAVE_PI_SUBAGENT_INELIGIBLE; console.log(initializeRootCapability())'], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: { ...process.env, [ONCLAVE_ROOT_CAPABILITY_ENV]: "" },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe("false");
+  it("does not identify an unmarked Pi process as a subagent", () => {
+    expect(isPiSubagent({})).toBe(false);
   });
 
   it("registers only parameterless instance discovery and the unified message tool", () => {

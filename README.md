@@ -87,30 +87,20 @@ just test-integration
 
 ## Pi adapter
 
-Load the supported adapter from this checkout. A root capability must be
-provisioned before Pi loads the adapter; the adapter never creates one:
+Load the supported adapter from this checkout:
 
 ```bash
-export ONCLAVE_PI_ROOT_CAPABILITY="local-root-capability"
 just pi-local
 ```
 
-PowerShell:
-
-```powershell
-$env:ONCLAVE_PI_ROOT_CAPABILITY = "local-root-capability"
-just pi-local
-```
-
-Equivalent command, with the capability already present in the environment:
+Equivalent command:
 
 ```bash
 pi -e ./extensions/onclave-pi
 ```
 
-Pi-local subagents and broker child processes are denied even when they inherit
-the root capability. A child with its markers removed is also denied when no
-capability was provisioned before adapter load.
+Normal Pi processes load the adapter. Pi subagents do not load it when
+`PI_SUBAGENT_RUN_ID` or `PI_SUBAGENT_TREE_RUN_ID` is present.
 
 The adapter registers the current Pi session as an independent Onclave
 instance. Its only model-facing tools are:

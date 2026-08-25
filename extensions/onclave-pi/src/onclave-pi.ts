@@ -16,9 +16,9 @@ import { loadDefaultRequestSigner } from "./lib/http-signer";
 import { isAutoAccepted, loadAdapterPolicy } from "./lib/policy";
 import { resolveProjectLabel } from "./lib/project-label";
 import { lastAssistantText, runUsage } from "./lib/run-summary";
-import { initializeRootCapability, isPiSubagent, ONCLAVE_ROOT_CAPABILITY_ENV, ONCLAVE_SUBAGENT_SENTINEL_ENV } from "./lib/root-capability";
+import { isPiSubagent } from "./lib/subagent-eligibility";
 
-export { initializeRootCapability, isPiSubagent, ONCLAVE_ROOT_CAPABILITY_ENV, ONCLAVE_SUBAGENT_SENTINEL_ENV, resolveApiBase };
+export { isPiSubagent, resolveApiBase };
 const MAX_MESSAGE_LENGTH = 100_000;
 const MAX_WAIT_TIMEOUT_MS = 300_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -47,7 +47,7 @@ type OnclavePiOptions = {
 class StaleAdapterStartError extends Error {}
 
 export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = {}): void {
-  if (!initializeRootCapability()) return;
+  if (isPiSubagent()) return;
   pi.registerFlag("onclave-id", { description: "Override the Onclave instance id", type: "string", default: undefined });
   pi.registerFlag("onclave-url", { description: "HTTPS API base URL for Onclave", type: "string", default: undefined });
   const dir = join(getAgentDir(), "onclave");
