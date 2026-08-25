@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { Type } from "typebox";
@@ -30,8 +31,22 @@ const ADAPTER_TOOL_NAMES = ["onclave_instances", "onclave_message"] as const;
 type Runtime = { card: AgentCard; link: HttpLink; client: OnclaveHttpClient; state: ConnectionState; correlation: CorrelationStore; seen: SeenIds; ui: ExtensionContext["ui"]; sendMessage: (message: unknown, options: { triggerTurn: boolean; deliverAs: "followUp" }) => void; aliveInstances: number; registered: boolean };
 type Audit = (event: AdapterAuditEventName, metadata?: AdapterAuditMetadata) => Promise<void>;
 type RuntimeGetter = () => Runtime | null;
+type SessionStartHandler = (event: { reason?: string }, ctx: ExtensionContext) => void | Promise<void>;
+export type OnclaveStartupMeasurement = {
+  reason: string;
+  durationMs: number;
+  status: "ok" | "error" | "cancelled";
+};
+type OnclavePiOptions = {
+  registerSessionStart?: (handler: SessionStartHandler) => void;
+  recordStartup?: (measurement: OnclaveStartupMeasurement) => void;
+  nowMs?: () => number;
+  startAdapter?: typeof startAdapter;
+};
 
-export default function onclavePi(pi: ExtensionAPI): void {
+class StaleAdapterStartError extends Error {}
+
+export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = {}): void {
   if (!initializeRootCapability()) return;
   pi.registerFlag("onclave-id", { description: "Override the Onclave instance id", type: "string", default: undefined });
   pi.registerFlag("onclave-url", { description: "HTTPS API base URL for Onclave", type: "string", default: undefined });
@@ -41,16 +56,52 @@ export default function onclavePi(pi: ExtensionAPI): void {
   const audit: Audit = (event, metadata = {}) => appendAdapterAuditEvent(auditPath, event, metadata);
   let runtime: Runtime | null = null;
   let heartbeat: NodeJS.Timeout | null = null;
+  let generation = 0;
   const inherited = process.env.ONCLAVE_AGENT_ID;
   let exposed: string | undefined;
-  pi.on("session_start", async (_event, ctx) => {
+  const nowMs = options.nowMs ?? (() => performance.now());
+  const initializeAdapter = options.startAdapter ?? startAdapter;
+  const registerSessionStart = options.registerSessionStart ?? ((handler) => pi.on("session_start", handler));
+  registerSessionStart((event, ctx) => {
+    const currentGeneration = ++generation;
+    const startedAt = nowMs();
+    const reason = event.reason ?? "startup";
     setAdapterToolsActive(pi, false);
-    try {
-      runtime = await startAdapter(pi, ctx, { audit, policyPath, onRegistered: (id) => { exposed = id; process.env.ONCLAVE_AGENT_ID = id; setAdapterToolsActive(pi, true); }, onDisconnected: () => { setAdapterToolsActive(pi, false); if (process.env.ONCLAVE_AGENT_ID === exposed) { if (inherited === undefined) delete process.env.ONCLAVE_AGENT_ID; else process.env.ONCLAVE_AGENT_ID = inherited; } exposed = undefined; } });
-      heartbeat = setInterval(() => { void heartbeatTick(runtime).catch(() => undefined); }, HEARTBEAT_INTERVAL_MS); heartbeat.unref?.();
-    } catch (error) { ctx.ui.notify(`Onclave initialization failed: ${error instanceof Error ? error.message : String(error)}`, "error"); }
+    void initializeAdapter(pi, ctx, {
+      audit,
+      policyPath,
+      isCurrent: () => generation === currentGeneration,
+      onRegistered: (id) => {
+        if (generation !== currentGeneration) return;
+        exposed = id;
+        process.env.ONCLAVE_AGENT_ID = id;
+        setAdapterToolsActive(pi, true);
+      },
+      onDisconnected: () => {
+        setAdapterToolsActive(pi, false);
+        if (process.env.ONCLAVE_AGENT_ID === exposed) {
+          if (inherited === undefined) delete process.env.ONCLAVE_AGENT_ID;
+          else process.env.ONCLAVE_AGENT_ID = inherited;
+        }
+        exposed = undefined;
+      },
+    }).then((startedRuntime) => {
+      if (generation !== currentGeneration) {
+        void shutdownAdapter(startedRuntime, audit).catch(() => undefined);
+        options.recordStartup?.({ reason, durationMs: nowMs() - startedAt, status: "cancelled" });
+        return;
+      }
+      runtime = startedRuntime;
+      heartbeat = setInterval(() => { void heartbeatTick(runtime).catch(() => undefined); }, HEARTBEAT_INTERVAL_MS);
+      heartbeat.unref?.();
+      options.recordStartup?.({ reason, durationMs: nowMs() - startedAt, status: "ok" });
+    }).catch((error) => {
+      const stale = error instanceof StaleAdapterStartError || generation !== currentGeneration;
+      options.recordStartup?.({ reason, durationMs: nowMs() - startedAt, status: stale ? "cancelled" : "error" });
+      if (!stale) ctx.ui.notify(`Onclave initialization failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+    });
   });
-  pi.on("session_shutdown", async () => { setAdapterToolsActive(pi, false); if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; } if (runtime !== null) { await shutdownAdapter(runtime, audit); runtime = null; } if (process.env.ONCLAVE_AGENT_ID === exposed) { if (inherited === undefined) delete process.env.ONCLAVE_AGENT_ID; else process.env.ONCLAVE_AGENT_ID = inherited; } exposed = undefined; });
+  pi.on("session_shutdown", async () => { generation += 1; setAdapterToolsActive(pi, false); if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; } if (runtime !== null) { await shutdownAdapter(runtime, audit); runtime = null; } if (process.env.ONCLAVE_AGENT_ID === exposed) { if (inherited === undefined) delete process.env.ONCLAVE_AGENT_ID; else process.env.ONCLAVE_AGENT_ID = inherited; } exposed = undefined; });
   pi.on("agent_end", async (event) => { if (runtime !== null) await submitRunReply(runtime, event.messages, audit); });
   registerAdapterTools(pi, () => runtime, audit);
   pi.registerCommand("onclave", { description: "Show Onclave instance status", handler: async (_args, ctx) => ctx.ui.notify(statusText(runtime), "info") });
@@ -65,13 +116,16 @@ export function setAdapterToolsActive(pi: Pick<ExtensionAPI, "getActiveTools" | 
   if (next.length !== current.length || next.some((name, index) => name !== current[index])) pi.setActiveTools(next);
 }
 
-type StartOptions = { audit: Audit; policyPath: string; onRegistered?: (instanceId: string) => void; onDisconnected?: () => void };
+type StartOptions = { audit: Audit; policyPath: string; isCurrent?: () => boolean; onRegistered?: (instanceId: string) => void; onDisconnected?: () => void };
 export type ApiBaseLoader = () => Promise<string | undefined>;
 export async function resolveAdapterApiBase(explicitUrl: string | undefined, environment: NodeJS.ProcessEnv = process.env, loader: ApiBaseLoader = () => loadApiBaseFromBws(environment)): Promise<string> { if (explicitUrl !== undefined || environment.ONCLAVE_API_BASE !== undefined) return resolveApiBase(explicitUrl, environment); const base = await loader(); if (base === undefined) throw new Error("Onclave BWS bootstrap is missing BITWARDEN_ACCESS_KEY"); return resolveApiBase(base, {}); }
 
 async function startAdapter(pi: ExtensionAPI, ctx: ExtensionContext, options: StartOptions): Promise<Runtime> {
   const card = await buildAgentCard(pi, ctx);
-  const client = new OnclaveHttpClient({ apiBase: await resolveAdapterApiBase(readStringFlag(pi, "onclave-url")), signer: await loadDefaultRequestSigner() });
+  const apiBase = await resolveAdapterApiBase(readStringFlag(pi, "onclave-url"));
+  const signer = await loadDefaultRequestSigner();
+  if (options.isCurrent?.() === false) throw new StaleAdapterStartError("Onclave session was replaced during initialization");
+  const client = new OnclaveHttpClient({ apiBase, signer });
   const runtime = { card, link: undefined as unknown as HttpLink, client, state: "disconnected" as ConnectionState, correlation: new CorrelationStore(), seen: new SeenIds(), ui: ctx.ui, sendMessage: (message: unknown, options: { triggerTurn: boolean; deliverAs: "followUp" }) => pi.sendMessage(message as never, options), aliveInstances: 0, registered: false };
   runtime.link = new HttpLink({ retryBaseMs: 500, retryMaxMs: 15_000, onReady: (signal) => onHttpReady(runtime, options, signal), poll: (signal) => receive(runtime, options, signal), onStateChange: (state, detail) => { runtime.state = state; if (state === "disconnected") { runtime.registered = false; options.onDisconnected?.(); void options.audit("adapter_disconnect", { detail: detail ?? "" }); } refreshFooterStatus(runtime); } });
   runtime.link.start(); refreshFooterStatus(runtime); return runtime;

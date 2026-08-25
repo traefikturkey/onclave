@@ -40,6 +40,44 @@ describe("Onclave Pi T2 adapter", () => {
     expect(registered.pi.setActiveTools).not.toHaveBeenCalled();
   });
 
+  it("starts initialization after session_start returns and records its duration", async () => {
+    const registered = fakePi();
+    let sessionStart: ((event: { reason?: string }, ctx: never) => void) | undefined;
+    let resolveStart: ((runtime: unknown) => void) | undefined;
+    let now = 10;
+    const recordStartup = vi.fn();
+    const runtime = {
+      card: { agent_id: "pi-test", name: "pi-test", host: "test", transport: "https" },
+      link: { stop: vi.fn(async () => undefined) },
+      client: {},
+      state: "disconnected",
+      correlation: { clear: vi.fn() },
+      seen: {},
+      ui: { setStatus: vi.fn() },
+      sendMessage: vi.fn(),
+      aliveInstances: 0,
+      registered: false,
+    };
+    onclavePi(registered.pi as never, {
+      registerSessionStart: (handler: typeof sessionStart) => { sessionStart = handler; },
+      recordStartup,
+      nowMs: () => now,
+      startAdapter: () => new Promise((resolve) => { resolveStart = resolve; }),
+    } as never);
+
+    const returned = sessionStart?.({ reason: "reload" }, { ui: { notify: vi.fn() } } as never);
+    expect(returned).toBeUndefined();
+    expect(recordStartup).not.toHaveBeenCalled();
+
+    now = 35;
+    resolveStart?.(runtime);
+    await vi.waitFor(() => expect(recordStartup).toHaveBeenCalledWith({ reason: "reload", durationMs: 25, status: "ok" }));
+
+    const shutdown = registered.pi.on.mock.calls.find(([event]) => event === "session_shutdown")?.[1];
+    await shutdown?.();
+    expect(runtime.link.stop).toHaveBeenCalledOnce();
+  });
+
   it("registers nothing and starts no session hooks without a provisioned capability", () => {
     delete process.env[ONCLAVE_ROOT_CAPABILITY_ENV];
     const heartbeat = vi.spyOn(globalThis, "setInterval");
