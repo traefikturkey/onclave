@@ -1,7 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import onclavePi, { isPiSubagent, setAdapterToolsActive, validateMessageParams } from "../src/onclave-pi";
 
-type Tool = { name: string; parameters?: unknown };
+type Tool = { name: string; parameters?: unknown; promptGuidelines?: string[] };
 function fakePi() {
   const tools: Tool[] = [];
   let activeTools = ["read", "onclave_instances", "onclave_message"];
@@ -100,7 +100,10 @@ describe("Onclave Pi T2 adapter", () => {
     onclavePi(registered.pi as never);
     expect(registered.tools.map((tool) => tool.name).sort()).toEqual(["onclave_instances", "onclave_message"]);
     const instances = registered.tools.find((tool) => tool.name === "onclave_instances");
+    const message = registered.tools.find((tool) => tool.name === "onclave_message");
     expect(instances?.parameters).toMatchObject({ type: "object", properties: {} });
+    expect(instances?.promptGuidelines).toEqual(expect.arrayContaining([expect.any(String)]));
+    expect(message?.promptGuidelines).toEqual(expect.arrayContaining([expect.any(String)]));
   });
 
   it("tracks adapter tool visibility without changing unrelated tools", () => {
