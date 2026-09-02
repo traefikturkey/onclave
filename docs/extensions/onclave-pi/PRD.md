@@ -119,6 +119,13 @@ The adapter excludes Pi-local subagent runs from registration. Onclave connects
 independent instances; it does not expose local Pi subagents as remote
 instances or treat them as Onclave participants.
 
+Outbound instance discovery and messaging are operator-directed. The model may
+use these tools only when the operator explicitly requests Onclave communication
+or when continuing an already operator-directed Onclave workflow. Onclave is
+not a substitute for Pi-local subagents, reviewers, failed delegation, provider
+fallback, or autonomous workload distribution. A failed Pi-local delegation is
+reported through its owning workflow rather than rerouted through Onclave.
+
 ## Relationship to MCP, A2A, and Hermes
 
 MCP is a tool and context integration protocol. It is not the communication
@@ -165,7 +172,9 @@ Documentation is aligned when maintainers can trace:
 5. The explicit protocol-version break and two-tool adapter surface.
 6. The distinction between MCP integration, A2A-derived instance semantics, and
    Pi-local subagents.
-7. The future authenticated webhook and Hermes seam as not delivered.
+7. Operator-directed outbound use and the prohibition on delegation, review,
+   provider-fallback, and failed-execution substitution.
+8. The future authenticated webhook and Hermes seam as not delivered.
 
 Executable acceptance remains the responsibility of the shared-contract,
 adapter, and broker integration suites. This documentation pass does not

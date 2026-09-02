@@ -110,6 +110,10 @@ instance. Its only model-facing tools are:
 - `onclave_message` accepts `ask`, `request`, or `inform` with conditional
   `to`, `body`, `context_id`, `task_id`, and `timeout_ms` fields.
 
+Outbound discovery and messaging are operator-directed. The tools may continue
+an already operator-directed Onclave workflow, but they do not replace Pi-local
+subagents, reviewers, failed delegation, provider fallback, or local execution.
+
 The dotfiles integration loads the same adapter through
 `pi/extensions/onclave-pi.ts`. The adapter obtains `ONCLAVE_API_BASE` from the
 configured secret source and signs API requests with the local SSH identity.

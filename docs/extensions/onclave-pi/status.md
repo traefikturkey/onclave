@@ -48,6 +48,12 @@ The adapter does not register Pi-local subagents as instances. MCP integration
 is not delivered. The A2A-derived semantics apply only to communication between
 independent Onclave instances.
 
+Outbound discovery and messaging are operator-directed. Runtime tool guidance
+permits explicit operator requests and continuation of an already
+operator-directed Onclave workflow. It prohibits using Onclave for Pi-local
+subagents, reviewers, failed delegation, provider fallback, local execution, or
+autonomous workload distribution.
+
 ## Acceptance and authority
 
 RabbitMQ acknowledgement, core publication, signed HTTPS `202`, and adapter
@@ -86,7 +92,8 @@ git diff --check
 
 Direct documentation inspection must confirm the two-tool surface, the three
 message types, all task states and transition rules, transport versus
-application acceptance, the authority boundary, the protocol break, and the
-undelivered webhook and Hermes seam. Any failure in those gates or any mismatch
-with executable behavior is a remaining release gap, not a documentation
-claim.
+application acceptance, the authority boundary, operator-directed outbound use,
+the prohibition on Pi-local delegation substitution, the protocol break, and
+the undelivered webhook and Hermes seam. Any failure in those gates or any
+mismatch with executable behavior is a remaining release gap, not a
+documentation claim.
