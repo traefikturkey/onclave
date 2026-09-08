@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import onclavePi, { isPiSubagent, setAdapterToolsActive, validateMessageParams } from "../src/onclave-pi";
+import onclavePi, { buildAgentCard, isPiSubagent, setAdapterToolsActive, validateMessageParams } from "../src/onclave-pi";
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({ getAgentDir: () => ".test-profile" }));
 vi.mock("../src/lib/audit", () => ({ appendAdapterAuditEvent: vi.fn(async () => undefined) }));
@@ -25,6 +25,16 @@ describe("Onclave Pi T2 adapter", () => {
   afterEach(() => {
     delete process.env.PI_SUBAGENT_RUN_ID;
     delete process.env.PI_SUBAGENT_TREE_RUN_ID;
+  });
+
+  it("derives a compact six-character instance id from the Pi session", async () => {
+    const registered = fakePi();
+    registered.pi.getFlag.mockReturnValue(undefined);
+    const card = await buildAgentCard(registered.pi as never, {
+      cwd: process.cwd(),
+      sessionManager: { getSessionId: () => "01a08233-adcb-rest" },
+    } as never);
+    expect(card.agent_id).toBe("pi-01a082");
   });
 
   it("registers the adapter for a normal Pi process", () => {
