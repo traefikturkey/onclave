@@ -4,7 +4,7 @@ import type { RequestSigner } from "./http-signer";
 const API_ROOT_PATH = "/api/v1/";
 const AGENTS_PATH = "agents";
 export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
-export type OnclaveHttpClientOptions = { apiBase: string; signer: RequestSigner; fetchFn?: FetchFn };
+export type OnclaveHttpClientOptions = { apiBase: string; signer: RequestSigner; fetchFn?: FetchFn; signal?: AbortSignal };
 export type Delivery = { deliveryId: string; kind: "message" | "task-status"; message?: Message; status?: TaskStatusEvent };
 type JsonRecord = Record<string, unknown>;
 function record(value: unknown): value is JsonRecord { return value !== null && typeof value === "object" && !Array.isArray(value); }
@@ -53,6 +53,8 @@ export class OnclaveHttpClient {
     const parsed: unknown = await response.json(); if (!record(parsed)) throw new Error("Onclave API returned an invalid JSON response"); return parsed;
   }
   private async request(method: string, path: string, body: object | undefined, signal?: AbortSignal): Promise<Response> {
+    signal = signal && this.options.signal ? AbortSignal.any([signal, this.options.signal]) : signal ?? this.options.signal;
+    signal?.throwIfAborted();
     const url = new URL(path, this.apiBase);
     const bytes = body === undefined ? undefined : Buffer.from(JSON.stringify(body), "utf8");
     const headers = this.options.signer.signRequest(method, `${url.pathname}${url.search}`, url.host, bytes);

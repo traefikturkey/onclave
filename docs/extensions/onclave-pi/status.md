@@ -32,8 +32,12 @@ claim a live deployment or a broker cutover.
   same task and context. Terminal refinement creates a new task in the same
   context and may reference the prior task.
 - Status events are durably routed to the originating instance. The adapter
-  triggers a caller turn only for `input-required` and terminal outcomes;
-  intermediate status is display-only.
+  triggers a caller turn only for correlated `input-required` and terminal outcomes;
+  intermediate and unmatched status is display-only. Intermediate status does not
+  finish an ask wait. Correlation is not restored after restart/reload.
+- Pi 0.85.x settled-run events distinguish successful completion, provider failure,
+  and cancellation after automatic retries. The adapter does not infer
+  input-required from natural-language responses.
 
 ## Adapter surface
 
@@ -44,7 +48,9 @@ Only two model-facing tools are registered:
 | `onclave_instances` | Lists live registered independent Pi instances and evidence-backed status. |
 | `onclave_message` | Sends `ask`, `request`, or `inform` with deterministic conditional validation. |
 
-The adapter does not register Pi-local subagents as instances. MCP integration
+Onclave connects orchestrators: the primary models users interact with in Pi
+instances. Subagents must not use Onclave for communication with subagents or
+other Pi instances. The adapter does not register Pi-local subagents as instances. MCP integration
 is not delivered. The A2A-derived semantics apply only to communication between
 independent Onclave instances.
 
@@ -62,8 +68,8 @@ acceptance for task tracking. A transport result does not mean that a peer has
 accepted or completed work.
 
 Instance authentication binds identity and signing key, not operator authority.
-Peer message bodies remain untrusted input. Cross-host turn-triggering messages
-require operator confirmation unless an explicit host policy accepts them.
+Peer message bodies remain untrusted input. On the protected VLAN/tailnet,
+requests are accepted without routine host confirmation or allowlist setup.
 `inform` remains inert even when its body is imperative.
 
 ## Protocol break and future seam
@@ -81,19 +87,11 @@ Hermes adapter delivered in this worktree.
 
 ## Validation state
 
-The executable implementation and tests are outside this documentation-only
-change. Required repository gates remain:
-
-```bash
-just check
-just test-integration
-git diff --check
-```
-
-Direct documentation inspection must confirm the two-tool surface, the three
-message types, all task states and transition rules, transport versus
-application acceptance, the authority boundary, operator-directed outbound use,
-the prohibition on Pi-local delegation substitution, the protocol break, and
-the undelivered webhook and Hermes seam. Any failure in those gates or any
-mismatch with executable behavior is a remaining release gap, not a
-documentation claim.
+The default-profile port uses `pnpm run check` for broker-free typecheck and
+unit tests, plus a dotfiles-owned offline installed-Pi loader smoke test.
+Behavioral tests cover the real adapter delivery/correlation paths with Pi and
+HTTP substituted at their boundaries. The old broker integration harness is
+updated for no-confirmation acceptance, but broker-backed suites and live
+service validation are not part of this port. The operator performs live
+validation after implementation. Offline results do not establish a deployed
+service cutover.

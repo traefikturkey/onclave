@@ -7,17 +7,13 @@ export type DeliveryDecision = "ack" | "reject";
 export type Delivered = { kind: "message"; message: Message } | { kind: "task-status"; status: TaskStatusEvent };
 
 export type DeliveryDeps = {
-  localHost: string;
   seen: SeenIds;
   correlation: CorrelationStore;
-  isAutoAcceptedHost: (host: string) => Promise<boolean>;
-  confirmRemote: (message: Message) => Promise<boolean>;
   createTask?: (message: Message) => Promise<Message>;
   markWorking?: (message: Message) => Promise<void>;
   deliverTurn: (message: Message) => void;
   deliverInert: (message: Message) => void;
-  deliverStatus: (event: TaskStatusEvent) => void;
-  publishFailure: (message: Message, reason: string) => void | Promise<void>;
+  deliverStatus: (event: TaskStatusEvent, correlated: boolean) => void;
   registerInbound: (message: Message) => void;
   audit: (event: AdapterAuditEventName, metadata?: AdapterAuditMetadata) => Promise<void>;
 };
@@ -29,7 +25,7 @@ export async function handleInbound(
   if (delivered.kind === "task-status") {
     if (!deps.seen.add(delivered.status.event_id)) return "ack";
     const correlated = deps.correlation.acceptStatus(delivered.status);
-    deps.deliverStatus(delivered.status);
+    deps.deliverStatus(delivered.status, correlated);
     await deps.audit("task_status_delivered", { event_id: delivered.status.event_id, correlated, state: delivered.status.state });
     return "ack";
   }
@@ -45,14 +41,6 @@ export async function handleInbound(
     deps.deliverInert(message);
     await deps.audit("message_delivered_inert", { message_id: message.message_id, from_instance_id: message.origin.instance_id });
     return "ack";
-  }
-  if (message.origin.host !== deps.localHost && !(await deps.isAutoAcceptedHost(message.origin.host))) {
-    await deps.audit("remote_confirm_prompted", { message_id: message.message_id, from_host: message.origin.host });
-    if (!(await deps.confirmRemote(message))) {
-      await deps.publishFailure(message, "declined_by_operator");
-      await deps.audit("remote_confirm_declined", { message_id: message.message_id, from_host: message.origin.host });
-      return "ack";
-    }
   }
   const tracked = deps.createTask === undefined ? message : await deps.createTask(message);
   deps.registerInbound(tracked);

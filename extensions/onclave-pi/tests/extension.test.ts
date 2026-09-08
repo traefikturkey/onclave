@@ -1,6 +1,9 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import onclavePi, { isPiSubagent, setAdapterToolsActive, validateMessageParams } from "../src/onclave-pi";
 
+vi.mock("@earendil-works/pi-coding-agent", () => ({ getAgentDir: () => ".test-profile" }));
+vi.mock("../src/lib/audit", () => ({ appendAdapterAuditEvent: vi.fn(async () => undefined) }));
+
 type Tool = { name: string; parameters?: unknown; promptGuidelines?: string[] };
 function fakePi() {
   const tools: Tool[] = [];
@@ -42,6 +45,7 @@ describe("Onclave Pi T2 adapter", () => {
     let now = 10;
     const recordStartup = vi.fn();
     const runtime = {
+      lifetime: new AbortController(),
       card: { agent_id: "pi-test", name: "pi-test", host: "test", transport: "https" },
       link: { stop: vi.fn(async () => undefined) },
       client: {},

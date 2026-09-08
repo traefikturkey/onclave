@@ -1,22 +1,18 @@
-import type { Message, TaskStatusEvent } from "@onclave/envelope";
+import { isTerminalTaskState, type Message, type TaskStatusEvent } from "@onclave/envelope";
 
 export const INBOUND_CUSTOM_TYPE = "onclave-inbound";
 export const STATUS_CUSTOM_TYPE = "onclave-task-status";
+type Outcome = Message | TaskStatusEvent;
+type Pending = { resolve: (value: Outcome | undefined) => void; timer: NodeJS.Timeout; dispose: () => void };
 
-type Pending = {
-  message: Message;
-  resolve: (value: Message | TaskStatusEvent | undefined) => void;
-  timer: NodeJS.Timeout;
-};
-
-// Correlation is adapter-owned state. A run can only answer an inbound message
-// whose message id was explicitly framed into that run; unmatched runs are inert.
+// Session-local correlation. Context groups conversations; message IDs identify exchanges.
 export class CorrelationStore {
   private readonly inbound = new Map<string, Message>();
   private readonly outbound = new Map<string, Message>();
-  private readonly replies = new Map<string, Message>();
-  private readonly events = new Map<string, TaskStatusEvent>();
+  private readonly tasks = new Map<string, string>();
+  private readonly outcomes = new Map<string, Outcome>();
   private readonly waiters = new Map<string, Pending>();
+  private readonly events = new Map<string, TaskStatusEvent>();
 
   registerInbound(message: Message): void { this.inbound.set(message.message_id, message); }
   completeInbound(messageId: string): void { this.inbound.delete(messageId); }
@@ -24,61 +20,80 @@ export class CorrelationStore {
 
   matchAgentRun(messages: unknown[]): Message | undefined {
     for (const item of [...messages].reverse()) {
-      if (item === null || typeof item !== "object") continue;
-      const record = item as { customType?: unknown; details?: { messageId?: unknown } };
-      if (record.customType !== INBOUND_CUSTOM_TYPE || typeof record.details?.messageId !== "string") continue;
+      const record = item as { customType?: unknown; details?: { messageId?: unknown } } | null;
+      if (record?.customType !== INBOUND_CUSTOM_TYPE || typeof record.details?.messageId !== "string") continue;
       const message = this.inbound.get(record.details.messageId);
       if (message !== undefined) return message;
     }
     return undefined;
   }
 
-  registerOutbound(message: Message): void { this.outbound.set(message.message_id, message); }
+  registerOutbound(message: Message): void {
+    if (message.type !== "inform") this.outbound.set(message.message_id, message);
+  }
+  forgetOutbound(messageId: string): void { this.outbound.delete(messageId); }
 
   acceptReply(message: Message): boolean {
-    const replyTo = message.task_id ?? message.context_id;
-    const original = message.task_id === undefined ? [...this.outbound.values()].find((item) => item.context_id === message.context_id) : this.outbound.get(message.task_id);
-    if (original === undefined || (message.task_id !== undefined && original.task_id !== message.task_id)) return false;
-    this.replies.set(original.message_id, message);
-    this.resolve(original.message_id, message);
+    // New adapters carry the exchange trace. Older direct replies are accepted
+    // only when there is one unambiguous outstanding exchange with this peer.
+    const candidates = [...this.outbound.values()].filter((original) =>
+      original.destination === message.origin.instance_id && original.origin.instance_id === message.destination &&
+      original.context_id === message.context_id && !this.outcomes.has(original.message_id) &&
+      (message.trace_id === undefined || original.trace_id === message.trace_id));
+    if (candidates.length !== 1) return false;
+    this.finish(candidates[0].message_id, message);
     return true;
   }
 
   acceptStatus(event: TaskStatusEvent): boolean {
-    const original = [...this.outbound.values()].find((message) => message.task_id === event.task_id || message.context_id === event.context_id);
-    if (original === undefined) return false;
-    if (this.events.has(event.event_id)) return true;
+    const candidates = [...this.outbound.values()].filter((message) =>
+      message.context_id === event.context_id && message.origin.instance_id === event.origin_instance_id &&
+      message.origin.instance_id === event.destination && !this.outcomes.has(message.message_id) &&
+      (event.message_id !== undefined ? message.message_id === event.message_id :
+        (this.tasks.get(message.message_id) ?? message.task_id) === event.task_id));
+    if (candidates.length !== 1) return false;
+    const original = candidates[0];
+    this.tasks.set(original.message_id, event.task_id);
     this.events.set(event.event_id, event);
-    this.resolve(original.message_id, event);
+    if (event.state === "input-required" || isTerminalTaskState(event.state)) this.finish(original.message_id, event);
     return true;
   }
 
-  waitFor(message: Message, timeoutMs: number): Promise<Message | TaskStatusEvent | undefined> {
-    const reply = this.replies.get(message.message_id);
-    if (reply !== undefined) return Promise.resolve(reply);
-    const event = this.latestTerminalOrInputEvent(message);
-    if (event !== undefined) return Promise.resolve(event);
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => { this.waiters.delete(message.message_id); resolve(undefined); }, timeoutMs);
+  waitFor(message: Message, timeoutMs: number, signal?: AbortSignal): Promise<Outcome | undefined> {
+    signal?.throwIfAborted();
+    const outcome = this.outcomes.get(message.message_id);
+    if (outcome !== undefined) return Promise.resolve(outcome);
+    return new Promise((resolve, reject) => {
+      const abort = () => { this.removeWaiter(message.message_id); reject(signal?.reason ?? new Error("Onclave wait canceled")); };
+      const timer = setTimeout(() => { this.removeWaiter(message.message_id); resolve(undefined); }, timeoutMs);
       timer.unref?.();
-      this.waiters.set(message.message_id, { message, resolve, timer });
+      this.waiters.set(message.message_id, { resolve, timer, dispose: () => signal?.removeEventListener("abort", abort) });
+      signal?.addEventListener("abort", abort, { once: true });
     });
   }
 
-  getReply(messageId: string): Message | undefined { return this.replies.get(messageId); }
+  getReply(messageId: string): Message | undefined {
+    const result = this.outcomes.get(messageId);
+    return result && "type" in result ? result : undefined;
+  }
   getEvent(eventId: string): TaskStatusEvent | undefined { return this.events.get(eventId); }
   clear(): void {
-    for (const waiter of this.waiters.values()) clearTimeout(waiter.timer);
-    this.inbound.clear(); this.outbound.clear(); this.replies.clear(); this.events.clear(); this.waiters.clear();
+    for (const id of [...this.waiters.keys()]) {
+      const waiter = this.waiters.get(id)!;
+      this.removeWaiter(id);
+      waiter.resolve(undefined);
+    }
+    this.inbound.clear(); this.outbound.clear(); this.tasks.clear(); this.outcomes.clear(); this.events.clear();
   }
-
-  private latestTerminalOrInputEvent(message: Message): TaskStatusEvent | undefined {
-    return [...this.events.values()].reverse().find((event) => event.context_id === message.context_id && ["input-required", "completed", "failed", "canceled", "rejected"].includes(event.state));
+  private removeWaiter(id: string): void {
+    const waiter = this.waiters.get(id);
+    if (!waiter) return;
+    clearTimeout(waiter.timer); waiter.dispose(); this.waiters.delete(id);
   }
-
-  private resolve(messageId: string, value: Message | TaskStatusEvent): void {
-    const waiter = this.waiters.get(messageId);
-    if (waiter === undefined) return;
-    clearTimeout(waiter.timer); this.waiters.delete(messageId); waiter.resolve(value);
+  private finish(id: string, value: Outcome): void {
+    this.outcomes.set(id, value);
+    const waiter = this.waiters.get(id);
+    this.removeWaiter(id);
+    waiter?.resolve(value);
   }
 }

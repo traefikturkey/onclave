@@ -76,7 +76,10 @@ For `ask` and `request`, the receiving adapter creates or resumes the tracked
 task and the core persists a `submitted` event to the origin. The adapter then
 records `working` before handing the framed message to Pi. A Pi response is an
 `inform` message carrying the context and usage; when a task exists, the core
-also records `completed` and routes that status event to the origin.
+also records `completed`, `failed`, or `canceled` according to the settled Pi
+outcome and routes that status event to the origin. Automatic retries finish
+before the adapter publishes an outcome. The adapter does not infer
+`input-required` from prose.
 
 The transition table is:
 
@@ -91,7 +94,9 @@ An `input-required` task can be resumed with the same task and context. A
 terminal task cannot be reopened. A later refinement creates a new task in the
 same context and can reference the prior task. Status events go to the
 originating instance and do not require model-managed subscriptions or wait
-loops. Only `input-required` and terminal events trigger an origin turn.
+loops. Only correlated `input-required` and terminal events trigger an origin
+turn. Intermediate status does not finish a pending ask. Correlation is
+session-local, without restart/reload recovery.
 
 `ask` timeout affects the sender's wait only. It does not cancel a created task.
 `request` returns after durable publication and does not claim that the receiver
@@ -113,8 +118,8 @@ transport messages, register callbacks, or manage delivery wait state.
 
 A registered identity proves which instance signed a message. It does not prove
 that the body is safe and does not transfer operator authority. Peer content is
-untrusted input. Cross-host turn-triggering messages require explicit operator
-confirmation unless the configured host policy allows them. `inform` is inert
+untrusted input. Requests from peers on the protected VLAN/tailnet are accepted
+without routine confirmation or host allowlist setup. `inform` is inert
 regardless of body wording. Provenance framing, deduplication, hop and exchange
 limits, usage budgets, audit redaction, offline queues, and restart-safe state
 remain enforced in code.

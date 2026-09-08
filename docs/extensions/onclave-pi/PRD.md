@@ -76,7 +76,12 @@ terminal task is rejected. A refinement after a terminal task creates a new
 task in the same context and may carry `prior_task_id`. Task status events are
 returned to the origin through durable delivery. `input-required` and terminal
 status events can trigger a caller turn; intermediate status is display-only.
-No model-managed callback registration or wait loop is required.
+No model-managed callback registration or wait loop is required. The Pi adapter
+emits completion, failure, or cancellation after the run settles, rather than
+classifying every low-level run end as success. It does not infer input-required
+from prose. Only outcomes correlated to the running session trigger follow-up
+turns; intermediate and unmatched statuses remain inert. Adapter correlation is
+session-local and is not recovered across restart or reload.
 
 ## Delivery, acceptance, and authority
 
@@ -88,9 +93,9 @@ signal for tracking a task.
 
 Authentication binds an instance to its registered identity and signing key; it
 does not make peer content trustworthy or give peer content operator
-authority. Every inbound body is framed as data to evaluate. Cross-host
-turn-triggering messages require operator confirmation unless the operator has
-explicitly configured acceptance for that host. `inform` remains inert even
+authority. Every inbound body is framed as data to evaluate. On the protected
+VLAN/tailnet, requests are accepted without routine host confirmation or
+allowlist configuration. `inform` remains inert even
 when its body contains imperative text. Existing provenance framing,
 deduplication, hop and exchange limits, advisory usage budgets, audit
 redaction, offline delivery, and restart-safe status routing remain core
@@ -114,6 +119,10 @@ The adapter registers exactly two model-facing tools:
 direct destination and returns after publication. `inform` may target one
 instance or broadcast, cannot carry task or timeout fields, and never triggers
 a turn. Invalid combinations fail before publication.
+
+The orchestrator is the primary model a user interacts with in a Pi instance.
+Onclave tools are for orchestrator-to-orchestrator communication. Subagents must
+not use Onclave to communicate with subagents or other Pi instances.
 
 The adapter excludes Pi-local subagent runs from registration. Onclave connects
 independent instances; it does not expose local Pi subagents as remote

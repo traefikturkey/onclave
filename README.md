@@ -44,9 +44,9 @@ need not manage callbacks or wait loops.
 RabbitMQ acknowledgements and the adapter HTTP `202` response describe
 transport handling only. `submitted` is the application-level acceptance event
 for task tracking. Neither transport acknowledgement nor peer identity gives a
-message operator authority; peer content remains untrusted input and
-cross-host turn-triggering messages require operator confirmation unless an
-explicit local policy accepts that host.
+message operator authority. On the protected VLAN/tailnet, incoming requests
+are accepted without host confirmation or allowlist setup. Peer framing,
+signed transport, and message validation remain unchanged.
 
 The version break is intentional. Incompatible protocol versions fail
 explicitly; this surface does not promise wire compatibility with the retired
@@ -99,6 +99,10 @@ Equivalent command:
 pi -e ./extensions/onclave-pi
 ```
 
+The adapter requires Pi 0.85.x and connects orchestrators: the primary models
+users interact with in independent Pi instances. Subagents must not use Onclave
+for communication with subagents or other instances.
+
 Normal Pi processes load the adapter. Pi subagents do not load it when
 `PI_SUBAGENT_RUN_ID` or `PI_SUBAGENT_TREE_RUN_ID` is present.
 
@@ -115,8 +119,23 @@ an already operator-directed Onclave workflow, but they do not replace Pi-local
 subagents, reviewers, failed delegation, provider fallback, or local execution.
 
 The dotfiles integration loads the same adapter through
-`pi/extensions/onclave-pi.ts`. The adapter obtains `ONCLAVE_API_BASE` from the
-configured secret source and signs API requests with the local SSH identity.
+`pi/profiles/default/extensions/onclave-pi.ts` and the existing legacy loader.
+Both use this implementation, including its trusted-network acceptance behavior.
+The adapter obtains `ONCLAVE_API_BASE` from the configured secret source and
+signs API requests with the local SSH identity.
+
+Incoming requests start a turn when idle and use Pi's follow-up queue while
+busy. Informs and unmatched status events never start turns. Replies wait for
+Pi to settle after automatic retries; successful responses complete tasks,
+provider errors fail them, and aborted responses cancel them. The adapter does
+not infer `input-required` from prose. Intermediate status does not finish an
+`ask`; timeout ends only the local wait. Session shutdown settles pending waits
+and stops polling. Transient reconnect is supported, but adapter correlation
+and pending conversations are not restored after restart or reload.
+
+`/onclave` reports registration, connection, instance identity, and live peers.
+The footer publishes `onclave-v2`. Audit records remain under the active Pi
+profile's `onclave/` directory; old `v2-policy.json` files are no longer read.
 
 Package metadata also supports local or Git installation:
 

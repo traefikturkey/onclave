@@ -7,6 +7,8 @@ type AssistantLike = {
   role?: unknown;
   content?: unknown;
   usage?: { input?: unknown; output?: unknown };
+  stopReason?: unknown;
+  errorMessage?: unknown;
 };
 
 type TextBlockLike = {
@@ -36,6 +38,14 @@ export function lastAssistantText(messages: unknown[]): string {
     if (extracted !== "") text = extracted;
   }
   return text;
+}
+
+export function runOutcome(messages: unknown[]): { state: "completed" | "failed" | "canceled"; body: string } {
+  const last = [...messages].reverse().find((message) => (message as AssistantLike)?.role === "assistant") as AssistantLike | undefined;
+  if (last?.stopReason === "aborted") return { state: "canceled", body: "Pi response canceled." };
+  if (last?.stopReason === "error") return { state: "failed", body: typeof last.errorMessage === "string" ? last.errorMessage : "Pi response failed." };
+  if (!last || last.stopReason === "toolUse") return { state: "failed", body: "Pi ended without a final response." };
+  return { state: "completed", body: lastAssistantText(messages) };
 }
 
 function usageNumber(value: unknown): number {

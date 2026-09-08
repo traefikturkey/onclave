@@ -142,16 +142,13 @@ class PiHarness {
     channel.publish(EXCHANGE_AGENTS, spec.routingKey, spec.content, spec.options);
   }
 
-  async receive(confirm = true): Promise<Delivered> {
+  async receive(_legacyConfirm = true): Promise<Delivered> {
     const delivery = await this.delivery.next(this.card.agent_id, "test-key", 5000);
     if (delivery === undefined) throw new Error(`no delivery for ${this.card.agent_id}`);
     const item: Delivered = delivery.kind === "message" ? { kind: "message", message: delivery.message as Message } : { kind: "task-status", status: delivery.status as TaskStatusEvent };
     const decision = await handleInbound({
-      localHost: this.card.host,
       seen: this.seen,
       correlation: this.correlation,
-      isAutoAcceptedHost: async () => false,
-      confirmRemote: async () => confirm,
       createTask: async (message) => {
         if (message.type === "inform") return message;
         const created = await this.rpc({ op: "create_task", context_id: message.context_id, origin_instance_id: message.origin.instance_id, assignee_instance_id: this.card.agent_id, ...(message.task_id === undefined ? {} : { task_id: message.task_id }) });
@@ -172,7 +169,6 @@ class PiHarness {
       deliverTurn: (message) => this.turns.push({ message, trigger: true }),
       deliverInert: (message) => this.inert.push(message),
       deliverStatus: (status) => this.statuses.push(status),
-      publishFailure: (message) => this.publish(createMessage({ type: "inform", context_id: message.context_id, origin: { instance_id: this.card.agent_id, name: this.card.name, host: this.card.host }, destination: message.origin.instance_id, body: "request declined" })),
       registerInbound: (message) => this.correlation.registerInbound(message),
       audit: async () => undefined,
     }, item);
@@ -205,7 +201,7 @@ describeIntegration("T3 integrated A2A protocol proof", () => {
   afterEach(async () => { await core.services.registry.unregister("pi-a").catch(() => undefined); await core.services.registry.unregister("pi-b").catch(() => undefined); });
   afterAll(async () => { await core.connection.close(); await rm(core.dir, { recursive: true, force: true }); });
 
-  it("proves ask, request, inert inform, confirmation, and duplicate-safe origin events", async () => {
+  it("proves ask, request, inert inform, trusted delivery, and duplicate-safe origin events", async () => {
     const a = new PiHarness({ id: "pi-a", host: "host-a" });
     const b = new PiHarness({ id: "pi-b", host: "host-b" });
     harnesses = [a, b];
@@ -226,7 +222,7 @@ describeIntegration("T3 integrated A2A protocol proof", () => {
     await a.receive(true);
     await a.receive(true);
     await a.receive(true);
-    expect(a.correlation.getReply(ask.message_id)?.body).toBe("answer");
+    expect((await a.correlation.waitFor(ask, 100))?.body).toBe("answer");
     expect(a.inert).toHaveLength(1);
 
     const request = await message("request", a, b.card.agent_id);
@@ -243,11 +239,6 @@ describeIntegration("T3 integrated A2A protocol proof", () => {
     await b.receive(true);
     expect(b.turns).toHaveLength(2);
     expect(b.inert.at(-1)?.body).toBe("inform body");
-
-    const remoteAsk = await message("ask", a, b.card.agent_id);
-    await a.publish(remoteAsk);
-    await b.receive(false);
-    expect(b.turns).toHaveLength(2);
 
     const duplicate = await b.rpc({ op: "update_task", task_id: requestTask, state: "completed", destination: a.card.agent_id, message_id: request.message_id, body: "done" });
     const duplicateRetry = await b.rpc({ op: "update_task", task_id: requestTask, state: "completed", destination: a.card.agent_id, message_id: request.message_id, body: "done" });
