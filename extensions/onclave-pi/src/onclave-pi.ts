@@ -153,8 +153,15 @@ async function receive(runtime: Runtime, options: StartOptions, signal: AbortSig
 export async function consume(runtime: Runtime, delivery: Delivery, options: StartOptions): Promise<void> {
   const delivered: Delivered = delivery.kind === "message" && delivery.message !== undefined ? { kind: "message", message: delivery.message } : delivery.kind === "task-status" && delivery.status !== undefined ? { kind: "task-status", status: delivery.status } : (() => { throw new Error("invalid delivery"); })();
   const deps = buildDeliveryDeps(runtime, options);
-  let decision: "ack" | "reject" = "reject";
-  try { decision = await handleInbound(deps, delivered); } finally { await runtime.client.dispose(delivery.deliveryId, decision); }
+  let decision: "ack" | undefined;
+  try {
+    decision = await handleInbound(deps, delivered);
+  } finally {
+    // A transient handling failure deliberately leaves the claimed broker
+    // delivery leased. The core will requeue it at lease expiry; terminal
+    // rejection is reserved for invalid protocol data at the core boundary.
+    if (decision !== undefined) await runtime.client.dispose(delivery.deliveryId, decision);
+  }
 }
 function buildDeliveryDeps(runtime: Runtime, options: StartOptions) {
   return {
@@ -223,6 +230,7 @@ async function shutdownAdapter(runtime: Runtime, audit: Audit): Promise<void> {
   // Stop receiving immediately; bound unregister so an unavailable API cannot hold Pi open.
   const stopped = runtime.link.stop();
   runtime.correlation.clear();
+  runtime.seen.clear?.();
   try {
     if (registered) {
       await runtime.client.call({ op: "unregister", agent_id: runtime.card.agent_id }, AbortSignal.timeout(2000));

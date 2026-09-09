@@ -13,6 +13,16 @@ describe("SeenIds", () => {
     expect(seen.has("a")).toBe(false);
     expect(seen.has("d")).toBe(true);
   });
+
+  it("does not evict active delivery records under capacity pressure", () => {
+    const seen = new SeenIds(2);
+    const first = seen.begin("message", "first");
+    seen.begin("task-status", "second");
+    expect(() => seen.begin("message", "third")).toThrow("capacity");
+    seen.markCompleted(first);
+    expect(seen.begin("message", "third").id).toBe("third");
+    expect(seen.has("second")).toBe(true);
+  });
 });
 
 describe("run summary helpers", () => {

@@ -80,6 +80,75 @@ describe("running-session communication", () => {
     expect(client.publish.mock.calls.map(([message]) => [message.trace_id, message.body])).toEqual([[first.trace_id, "first answer"], [second.trace_id, "second answer"]]);
   });
 
+  it("leaves a pre-effect failure leased and retries it without terminal rejection", async () => {
+    const { rt, client, send } = runtime(); const message = outgoing("request"); let creates = 0;
+    client.call.mockImplementation(async (request: Record<string, unknown>) => {
+      if (request.op === "create_task" && creates++ === 0) throw new Error("temporary task API failure");
+      return request.op === "create_task" ? { ok: true, task: { task_id: ulid(), state: "submitted" } } : { ok: true };
+    });
+    const delivery = { deliveryId: "retry", kind: "message" as const, message };
+    await expect(consume(rt, delivery, { audit })).rejects.toThrow("temporary task API failure");
+    expect(client.dispose).not.toHaveBeenCalled();
+    await consume(rt, delivery, { audit });
+    expect(send).toHaveBeenCalledOnce();
+    expect(client.dispose).toHaveBeenCalledWith("retry", "ack");
+  });
+
+  it("reuses prepared task identity after a later effect fails", async () => {
+    const { rt, client, send } = runtime(); const message = outgoing("request"); let workingAttempts = 0;
+    const taskId = ulid();
+    client.call.mockImplementation(async (request: Record<string, unknown>) => {
+      if (request.op === "create_task") return { ok: true, task: { task_id: taskId, state: "submitted" } };
+      if (request.op === "update_task" && workingAttempts++ === 0) throw new Error("temporary transition failure");
+      return { ok: true };
+    });
+    const delivery = { deliveryId: "prepared", kind: "message" as const, message };
+    await expect(consume(rt, delivery, { audit })).rejects.toThrow("temporary transition failure");
+    await consume(rt, delivery, { audit });
+    expect(client.call.mock.calls.filter(([request]) => request.op === "create_task")).toHaveLength(1);
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ details: expect.objectContaining({ taskId }) }), expect.anything());
+  });
+
+  it("does not repeat correlation after Pi status delivery fails", async () => {
+    const { rt, send, client } = runtime(); const request = outgoing("request"); rt.correlation.registerOutbound(request);
+    const event = status(request, "completed"); const acceptStatus = vi.spyOn(rt.correlation, "acceptStatus");
+    send.mockImplementationOnce(() => { throw new Error("Pi injection failed"); });
+    const delivery = { deliveryId: "status-retry", kind: "task-status" as const, status: event };
+    await expect(consume(rt, delivery, { audit })).rejects.toThrow("Pi injection failed");
+    expect(client.dispose).not.toHaveBeenCalled();
+    await consume(rt, delivery, { audit });
+    expect(acceptStatus).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it("acknowledges delivered state after audit failure without replay", async () => {
+    const { rt, send, client } = runtime(); const message = outgoing("request");
+    const failedAudit = vi.fn().mockRejectedValueOnce(new Error("audit unavailable"));
+    const delivery = { deliveryId: "audit", kind: "message" as const, message };
+    await consume(rt, delivery, { audit: failedAudit });
+    await consume(rt, delivery, { audit: failedAudit });
+    expect(send).toHaveBeenCalledOnce();
+    expect(client.dispose).toHaveBeenNthCalledWith(1, "audit", "ack");
+    expect(client.dispose).toHaveBeenNthCalledWith(2, "audit", "ack");
+  });
+
+  it("keeps a concurrent duplicate pending until the first lease can finish", async () => {
+    const { rt, client } = runtime(); const message = outgoing("request"); let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    client.call.mockImplementation(async (request: Record<string, unknown>) => {
+      if (request.op === "create_task") { await blocked; return { ok: true, task: { task_id: ulid(), state: "submitted" } }; }
+      return { ok: true };
+    });
+    const delivery = { deliveryId: "concurrent", kind: "message" as const, message };
+    const first = consume(rt, delivery, { audit });
+    await vi.waitFor(() => expect(client.call).toHaveBeenCalledWith(expect.objectContaining({ op: "create_task" })));
+    await expect(consume(rt, delivery, { audit })).rejects.toThrow("already processing");
+    expect(client.dispose).not.toHaveBeenCalled();
+    release();
+    await first;
+    expect(client.dispose).toHaveBeenCalledOnce();
+  });
+
   it("settles a tool wait and closes the runtime on session shutdown", async () => {
     const { rt, client } = runtime();
     const hooks = new Map<string, (...args: any[]) => any>(); const tools: any[] = [];
@@ -90,7 +159,11 @@ describe("running-session communication", () => {
     await Promise.resolve();
     const result = tools.find((tool) => tool.name === "onclave_message").execute("call", { type: "ask", to: "a", body: "hello" });
     await vi.waitFor(() => expect(client.publish).toHaveBeenCalledOnce());
+    const inbound = outgoing("request");
+    await consume(rt, { deliveryId: "shutdown", kind: "message", message: inbound }, { audit });
+    expect(rt.seen.has(inbound.message_id)).toBe(true);
     await hooks.get("session_shutdown")!();
+    expect(rt.seen.has(inbound.message_id)).toBe(false);
     expect((await result).details.messages[0].result).toBe("session_closed");
     expect(rt.lifetime.signal.aborted).toBe(true);
     await expect(tools[0].execute()).rejects.toThrow("not connected");

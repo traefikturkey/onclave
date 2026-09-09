@@ -1,5 +1,4 @@
-import { A2A_PROTOCOL_VERSION, isTaskState, parseMessage, type Message, type TaskStatusEvent } from "./a2a";
-import { isUlid } from "./ulid";
+import { A2A_PROTOCOL_VERSION, parseMessage, parseTaskStatusEvent, type Message, type TaskStatusEvent } from "./a2a";
 
 type JsonRecord = Record<string, unknown>;
 export const AGENT_QUEUE_PREFIX = "agent.";
@@ -59,9 +58,18 @@ export function fromA2AMessage(message: A2AConsumedMessage): A2AParseResult {
 export function fromA2ATaskStatus(message: A2AConsumedMessage): A2AStatusParseResult {
   const headers = message.properties.headers ?? {};
   if (headers["x-onclave-a2a-v"] !== A2A_PROTOCOL_VERSION || headers["x-onclave-a2a-kind"] !== "task-status") return { ok: false, error: "protocol_version_mismatch" };
-  if (!isUlid(message.properties.messageId) || !isUlid(headers.task_id) || !isUlid(headers.context_id) || !isTaskState(headers.state) || typeof headers.origin_instance_id !== "string" || typeof headers.destination !== "string" || typeof headers.occurred_at !== "string" || Number.isNaN(Date.parse(headers.occurred_at))) return { ok: false, error: "task status headers are invalid" };
   let content: unknown;
   try { content = JSON.parse(Buffer.from(message.content).toString("utf8")); } catch { return { ok: false, error: "task status content is not valid JSON" }; }
   if (!jsonRecord(content)) return { ok: false, error: "task status content is not an object" };
-  return { ok: true, event: { protocol_version: A2A_PROTOCOL_VERSION, event_id: message.properties.messageId, task_id: headers.task_id, context_id: headers.context_id, origin_instance_id: headers.origin_instance_id, destination: headers.destination, state: headers.state, occurred_at: headers.occurred_at, ...(headers.message_id === undefined ? {} : { message_id: String(headers.message_id) }), ...(content.body === undefined ? {} : { body: String(content.body) }), ...(content.usage === undefined ? {} : { usage: content.usage as TaskStatusEvent["usage"] }), ...(headers.trace_id === undefined ? {} : { trace_id: String(headers.trace_id) }) } };
+  const parsed = parseTaskStatusEvent({
+    protocol_version: headers["x-onclave-a2a-v"], event_id: message.properties.messageId,
+    task_id: headers.task_id, context_id: headers.context_id,
+    origin_instance_id: headers.origin_instance_id, destination: headers.destination,
+    state: headers.state, occurred_at: headers.occurred_at,
+    ...(headers.message_id === undefined ? {} : { message_id: headers.message_id }),
+    ...(content.body === undefined ? {} : { body: content.body }),
+    ...(content.usage === undefined ? {} : { usage: content.usage }),
+    ...(headers.trace_id === undefined ? {} : { trace_id: headers.trace_id }),
+  });
+  return parsed.ok ? { ok: true, event: parsed.value } : parsed;
 }

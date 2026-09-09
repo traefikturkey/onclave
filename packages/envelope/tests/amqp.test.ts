@@ -30,4 +30,15 @@ describe("A2A AMQP mapping", () => {
     expect(spec.routingKey).toBe("a");
     expect(fromA2ATaskStatus({ content: spec.content, properties: { ...spec.options } })).toMatchObject({ ok: true, event: { task_id: task.task_id, state: "working" } });
   });
+
+  it.each([
+    ["body", { body: 42 }],
+    ["usage", { usage: { input_tokens: "1", output_tokens: 0 } }],
+    ["message_id", { message_id: "not-a-ulid" }],
+  ])("rejects malformed task status %s instead of coercing it", (_field, override) => {
+    const task = createTask({ contextId: ulid(), originInstanceId: "a", assigneeInstanceId: "b" });
+    const event = createTaskStatusEvent(task, "working");
+    const spec = toA2ATaskStatusPublish({ ...event, ...override } as typeof event);
+    expect(fromA2ATaskStatus({ content: spec.content, properties: { ...spec.options } })).toMatchObject({ ok: false });
+  });
 });
