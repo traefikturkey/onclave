@@ -120,6 +120,16 @@ export function parseMessage(value: unknown): ParseResult<Message> {
   return { ok: true, value: value as Message };
 }
 
+export function parseTaskStatusEvent(value: unknown): ParseResult<TaskStatusEvent> {
+  if (!record(value)) return { ok: false, error: "task status must be an object" };
+  if (value.protocol_version !== A2A_PROTOCOL_VERSION) return { ok: false, error: "protocol_version_mismatch" };
+  if (!isUlid(value.event_id) || !isUlid(value.task_id) || !isUlid(value.context_id) || (value.message_id !== undefined && !isUlid(value.message_id))) return { ok: false, error: "task status ids must be ULIDs" };
+  if (!nonEmpty(value.origin_instance_id) || !nonEmpty(value.destination) || !isTaskState(value.state)) return { ok: false, error: "task status routing or state is invalid" };
+  if (!timestamp(value.occurred_at)) return { ok: false, error: "task status timestamp is invalid" };
+  if (!optional(value.body, (candidate) => typeof candidate === "string") || !optional(value.usage, usage) || !optional(value.trace_id, nonEmpty)) return { ok: false, error: "task status optional fields are invalid" };
+  return { ok: true, value: value as TaskStatusEvent };
+}
+
 export function createMessage(input: Omit<Message, "protocol_version" | "message_id" | "sent_at" | "hops"> & { now?: () => Date; messageId?: string }): Message {
   const now = (input.now ?? (() => new Date()))().toISOString();
   const message: Message = { protocol_version: A2A_PROTOCOL_VERSION, message_id: input.messageId ?? ulid(), context_id: input.context_id, ...(input.task_id === undefined ? {} : { task_id: input.task_id }), type: input.type, origin: input.origin, destination: input.destination, body: input.body, sent_at: now, hops: 0, ...(input.ttl_ms === undefined ? {} : { ttl_ms: input.ttl_ms }), ...(input.usage === undefined ? {} : { usage: input.usage }), ...(input.schema === undefined ? {} : { schema: input.schema }), ...(input.trace_id === undefined ? {} : { trace_id: input.trace_id }) };

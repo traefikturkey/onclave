@@ -9,6 +9,7 @@ export {
   isTaskState,
   isTerminalTaskState,
   parseMessage,
+  parseTaskStatusEvent,
   transitionTask,
   type A2AOrigin,
   type A2AUsage,

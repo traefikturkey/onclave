@@ -38,6 +38,20 @@ claim a live deployment or a broker cutover.
 - Pi 0.85.x settled-run events distinguish successful completion, provider failure,
   and cancellation after automatic retries. The adapter does not infer
   input-required from natural-language responses.
+- Receiver delivery state is bounded to 1,000 message/status identifiers. Each
+  record checkpoints task preparation, correlation, Pi injection, and audit;
+  retries resume missing effects, while completed duplicates are acknowledged
+  without replaying a turn. Active records are never evicted, so capacity
+  pressure leaves a delivery to the core lease rather than creating an
+  unbounded local queue.
+- Transient adapter failures leave the HTTPS delivery undisposed for the core's
+  30-second lease/redelivery path. Audit failure after successful injection is
+  reported without replay. Session shutdown clears session-owned delivery and
+  correlation state; this is not durable exactly-once processing.
+- `parseTaskStatusEvent` is the single normalized task-status validator used by
+  both AMQP reconstruction and the adapter HTTP boundary. It rejects malformed
+  versions, identities, routes, states, timestamps, and optional body/usage/trace
+  fields before correlation or Pi UI delivery.
 
 ## Adapter surface
 
@@ -90,8 +104,9 @@ Hermes adapter delivered in this worktree.
 The default-profile port uses `pnpm run check` for broker-free typecheck and
 unit tests, plus a dotfiles-owned offline installed-Pi loader smoke test.
 Behavioral tests cover the real adapter delivery/correlation paths with Pi and
-HTTP substituted at their boundaries. The old broker integration harness is
-updated for no-confirmation acceptance, but broker-backed suites and live
-service validation are not part of this port. The operator performs live
-validation after implementation. Offline results do not establish a deployed
-service cutover.
+HTTP substituted at their boundaries, including lease-preserving failures,
+concurrent duplicates, bounded capacity, and task-status validation. The old
+broker integration harness is updated for no-confirmation acceptance, but
+broker-backed suites and live service validation are not part of this port. The
+operator performs live validation after implementation. Offline results do not
+establish a deployed service cutover.

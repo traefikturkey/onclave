@@ -1,4 +1,4 @@
-import { parseMessage, type Message, type TaskStatusEvent } from "@onclave/envelope";
+import { parseMessage, parseTaskStatusEvent, type Message, type TaskStatusEvent } from "@onclave/envelope";
 import type { RequestSigner } from "./http-signer";
 
 const API_ROOT_PATH = "/api/v1/";
@@ -40,8 +40,9 @@ export class OnclaveHttpClient {
     const payload: unknown = await response.json();
     if (!record(payload) || typeof payload.delivery_id !== "string" || (payload.kind !== "message" && payload.kind !== "task-status")) throw new Error("Onclave API returned an invalid delivery");
     if (payload.kind === "message") { const parsed = parseMessage(payload.message); if (!parsed.ok) throw new Error(`invalid message: ${parsed.error}`); return { deliveryId: payload.delivery_id, kind: "message", message: parsed.value }; }
-    if (!record(payload.status)) throw new Error("Onclave API returned an invalid task status");
-    return { deliveryId: payload.delivery_id, kind: "task-status", status: payload.status as TaskStatusEvent };
+    const parsed = parseTaskStatusEvent(payload.status);
+    if (!parsed.ok) throw new Error(`invalid task status: ${parsed.error}`);
+    return { deliveryId: payload.delivery_id, kind: "task-status", status: parsed.value };
   }
   async dispose(deliveryId: string, disposition: "ack" | "reject", signal?: AbortSignal): Promise<void> {
     const response = await this.json("POST", `${AGENTS_PATH}/messages/${encodeURIComponent(deliveryId)}`, { disposition }, signal);

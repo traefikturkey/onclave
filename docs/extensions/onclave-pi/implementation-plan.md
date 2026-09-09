@@ -32,7 +32,8 @@ The Pi adapter provides:
 - registration and liveness heartbeats for one independent Pi instance;
 - `onclave_instances` for live instance discovery;
 - `onclave_message` for `ask`, `request`, and `inform`;
-- validation before publication and deduplication on receipt;
+- validation before publication and effect-aware, bounded deduplication on
+  receipt;
 - turn-triggering delivery for `ask` and `request`, inert display delivery for
   `inform`, and status delivery for task events; and
 - strict correlation between an inbound message and its Pi run.
@@ -96,7 +97,14 @@ same context and can reference the prior task. Status events go to the
 originating instance and do not require model-managed subscriptions or wait
 loops. Only correlated `input-required` and terminal events trigger an origin
 turn. Intermediate status does not finish a pending ask. Correlation is
-session-local, without restart/reload recovery.
+session-local, without restart/reload recovery. Receiver records retain at
+most 1,000 message/status identifiers and checkpoint task preparation,
+correlation, Pi injection, and audit separately. A failed effect is resumed
+after lease redelivery; an already injected turn is not replayed because a
+later audit or acknowledgement failed. Active records are not removed to
+admit new work, so capacity pressure relies on lease expiry rather than an
+in-memory backlog. This remains bounded at-least-once handling, not a durable
+exactly-once ledger.
 
 `ask` timeout affects the sender's wait only. It does not cancel a created task.
 `request` returns after durable publication and does not claim that the receiver
@@ -170,8 +178,18 @@ pnpm test
 pnpm exec vitest run --config vitest.integration.config.ts
 ```
 
-The T3 documentation boundary is validated by direct inspection of the
-registered tool names and schemas, the message and task descriptions, the
-protocol break, and the future-ingress statements. Full executable validation
-requires the existing unit and broker integration suites; this documentation
-change does not modify code or tests.
+Task-status reconstruction is normalized through the shared
+`parseTaskStatusEvent` contract for both AMQP and HTTP. Invalid protocol
+versions, identities, routes, states, timestamps, and optional body/usage/trace
+values are rejected before correlation or UI delivery. The focused offline
+validation is:
+
+```bash
+pnpm exec vitest run packages/envelope/tests/amqp.test.ts extensions/onclave-pi/tests/dedup-summary.test.ts extensions/onclave-pi/tests/communication.test.ts extensions/onclave-pi/tests/extension.test.ts extensions/onclave-pi/tests/http-client.test.ts services/core/tests/agent-delivery.test.ts
+pnpm run typecheck
+```
+
+The tests use real delivery state, correlation, envelope parsing, and lease
+implementations with only Pi injection, HTTP, and broker channels substituted.
+They do not establish a deployed service cutover or durable exactly-once
+processing guarantee.
