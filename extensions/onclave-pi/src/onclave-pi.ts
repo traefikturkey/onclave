@@ -16,6 +16,7 @@ import { loadDefaultRequestSigner } from "./lib/http-signer";
 import { resolveProjectLabel } from "./lib/project-label";
 import { runOutcome, runUsage } from "./lib/run-summary";
 import { isPiSubagent } from "./lib/subagent-eligibility";
+import { registerVaultTools } from "./lib/vault-tools";
 
 export { isPiSubagent, resolveApiBase };
 const MAX_MESSAGE_LENGTH = 100_000;
@@ -117,6 +118,10 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
     if (runtime !== null) await submitRunReply(runtime, messages, audit);
   });
   registerAdapterTools(pi, () => runtime, audit);
+  // Vault tools are schema-only at discovery time. Their client, signer, and
+  // endpoint are resolved inside execute, so this does not authenticate or
+  // register another communication agent.
+  registerVaultTools(pi);
   pi.registerCommand("onclave", { description: "Show Onclave instance status", handler: async (_args, ctx) => ctx.ui.notify(statusText(runtime), "info") });
 }
 

@@ -43,7 +43,7 @@ describe("Onclave Pi T2 adapter", () => {
     expect(registered.pi.registerFlag).toHaveBeenCalled();
     expect(registered.pi.on).toHaveBeenCalledWith("session_start", expect.any(Function));
     expect(registered.pi.on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
-    expect(registered.tools.map((tool) => tool.name).sort()).toEqual(["onclave_instances", "onclave_message"]);
+    expect(registered.tools.map((tool) => tool.name).sort()).toEqual(["onclave_instances", "onclave_message", "onclave_vault_content", "onclave_vault_ingest", "onclave_vault_jobs", "onclave_vault_search"]);
     expect(registered.pi.getActiveTools).not.toHaveBeenCalled();
     expect(registered.pi.setActiveTools).not.toHaveBeenCalled();
   });
@@ -112,7 +112,7 @@ describe("Onclave Pi T2 adapter", () => {
   it("registers only parameterless instance discovery and the unified message tool", () => {
     const registered = fakePi();
     onclavePi(registered.pi as never);
-    expect(registered.tools.map((tool) => tool.name).sort()).toEqual(["onclave_instances", "onclave_message"]);
+    expect(registered.tools.map((tool) => tool.name).sort()).toEqual(["onclave_instances", "onclave_message", "onclave_vault_content", "onclave_vault_ingest", "onclave_vault_jobs", "onclave_vault_search"]);
     const instances = registered.tools.find((tool) => tool.name === "onclave_instances");
     const message = registered.tools.find((tool) => tool.name === "onclave_message");
     expect(instances?.parameters).toMatchObject({ type: "object", properties: {} });
