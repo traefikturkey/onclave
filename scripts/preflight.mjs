@@ -38,6 +38,7 @@ checks.push(createToolCheck("just", {
 }));
 checks.push(createToolCheck("git", {
   required: true,
+  readVersion: false,
   missingHint: "Install git so project-label and normal repository workflows work.",
 }));
 checks.push(createToolCheck("pi", {
@@ -95,7 +96,7 @@ function createToolCheck(command, options) {
     };
   }
 
-  const version = readCommandVersion(command);
+  const version = options.readVersion === false ? null : readCommandVersion(command);
   const evaluation = options.versionEvaluator ? options.versionEvaluator(version) : { status: "pass", suffix: version ? ` (${version})` : "" };
 
   return {
