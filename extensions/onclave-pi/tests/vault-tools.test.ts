@@ -9,6 +9,14 @@ describe("Onclave vault tools", () => {
     expect(client).not.toHaveBeenCalled();
   });
 
+  it("resolves a dynamic endpoint only when a tool executes", async () => {
+    const endpoint = vi.fn(() => { throw new Error("endpoint sentinel"); });
+    const tool = createVaultToolDefinitions({ endpoint }).find((item) => item.name === "onclave_vault_search")!;
+    expect(endpoint).not.toHaveBeenCalled();
+    await expect((tool.execute as Function)("call", { query: "test" })).rejects.toThrow("endpoint sentinel");
+    expect(endpoint).toHaveBeenCalledOnce();
+  });
+
   it("passes cancellation and bounds search output", async () => {
     const signal = AbortSignal.timeout(1000);
     const search = vi.fn(async (_args: unknown, received: AbortSignal) => { expect(received).toBe(signal); return { results: [{ title: "ok" }], total: 1 }; });

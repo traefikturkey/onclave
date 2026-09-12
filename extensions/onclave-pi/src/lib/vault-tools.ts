@@ -9,10 +9,11 @@ const MAX_LIMIT = 100;
 const MAX_OFFSET = 1_000_000;
 
 type ClientProvider = () => OnclaveClient | Promise<OnclaveClient>;
+type EndpointProvider = () => string | Promise<string>;
 
 export type VaultToolOptions = {
   client?: ClientProvider;
-  endpoint?: string;
+  endpoint?: string | EndpointProvider;
   environment?: NodeJS.ProcessEnv;
 };
 
@@ -34,7 +35,10 @@ function clientFor(options: VaultToolOptions): ClientProvider {
   if (options.client) return options.client;
   // This is deliberately inside execute: discovery only registers schemas and
   // never resolves configuration, credentials, or a network connection.
-  return async () => createOnclaveClient({ endpoint: resolveEndpoint(options.endpoint, options.environment) });
+  return async () => {
+    const endpoint = typeof options.endpoint === "function" ? await options.endpoint() : options.endpoint;
+    return createOnclaveClient({ endpoint: resolveEndpoint(endpoint, options.environment) });
+  };
 }
 
 export function createVaultToolDefinitions(options: VaultToolOptions = {}): Array<Record<string, unknown>> {
