@@ -1,3 +1,4 @@
+import { createHash, createHmac } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { DEFAULT_SIGNING_KEY_PATH, loadRequestSigner, type RequestSigner } from "./http-signer";
 
@@ -53,6 +54,69 @@ export type JobResponse = JsonObject & { job_id: string; content_id: string; sta
 export type JobListResponse = { jobs: JobResponse[]; total: number };
 export type SearchResponse = { results: JsonObject[]; total: number };
 export type ChannelResponse = { source: string; videos: JsonObject[] };
+
+export type AuthenticatedS3ClientOptions = {
+  endpoint: string;
+  bucket: string;
+  region: string;
+  accessKey: string;
+  secretKey: string;
+  fetchFn?: FetchFn;
+};
+
+function encodeObjectPath(value: string): string {
+  return value.split("/").map((part) => encodeURIComponent(part).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)).join("/");
+}
+
+function s3Endpoint(value: string): URL {
+  let parsed: URL;
+  try { parsed = new URL(value); } catch { throw new Error("S3 endpoint must be a valid http or https URL"); }
+  if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error("S3 endpoint must be an origin without credentials, query, or fragment");
+  parsed.pathname = parsed.pathname.replace(/\/$/, "");
+  return parsed;
+}
+
+function hmac(key: string | Buffer, value: string): Buffer { return createHmac("sha256", key).update(value, "utf8").digest(); }
+function hash(value: string): string { return createHash("sha256").update(value, "utf8").digest("hex"); }
+
+/** Minimal path-style SigV4 GET client for the workstation S3 API. */
+export class AuthenticatedS3Client {
+  readonly bucket: string;
+  private readonly endpoint: URL;
+  private readonly options: AuthenticatedS3ClientOptions;
+  private readonly fetchFn: FetchFn;
+
+  constructor(options: AuthenticatedS3ClientOptions) {
+    this.endpoint = s3Endpoint(options.endpoint);
+    if (options.bucket.trim() === "" || options.region.trim() === "" || options.accessKey === "" || options.secretKey === "") throw new Error("S3 credentials and bucket are required");
+    this.bucket = options.bucket;
+    this.options = options;
+    this.fetchFn = options.fetchFn ?? fetch;
+  }
+
+  objectUrl(objectKey: string): string {
+    if (objectKey === "" || objectKey.startsWith("/") || objectKey.includes("\\")) throw new Error("S3 object key is invalid");
+    return new URL(`${this.endpoint.toString().replace(/\/$/, "")}/${encodeURIComponent(this.bucket)}/${encodeObjectPath(objectKey)}`).toString();
+  }
+
+  async getObject(objectKey: string, signal?: AbortSignal): Promise<Response> {
+    const target = new URL(this.objectUrl(objectKey));
+    const amzDate = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+    const date = amzDate.slice(0, 8);
+    const payloadHash = hash("");
+    const canonicalHeaders = `host:${target.host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
+    const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
+    const canonicalRequest = ["GET", target.pathname, target.search.slice(1), canonicalHeaders, signedHeaders, payloadHash].join("\n");
+    const scope = `${date}/${this.options.region}/s3/aws4_request`;
+    const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, hash(canonicalRequest)].join("\n");
+    const signingKey = hmac(hmac(hmac(hmac(`AWS4${this.options.secretKey}`, date), this.options.region), "s3"), "aws4_request");
+    const signature = createHmac("sha256", signingKey).update(stringToSign, "utf8").digest("hex");
+    const authorization = `AWS4-HMAC-SHA256 Credential=${this.options.accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+    return this.fetchFn(target.toString(), { method: "GET", headers: { host: target.host, "x-amz-content-sha256": payloadHash, "x-amz-date": amzDate, authorization }, ...(signal === undefined ? {} : { signal }) });
+  }
+}
+
+export function createAuthenticatedS3Client(options: AuthenticatedS3ClientOptions): AuthenticatedS3Client { return new AuthenticatedS3Client(options); }
 export type ReindexResponse = { content_id: string; status: "completed"; chunk_count: number; model: string };
 export type AnnotationResponse = JsonObject & { id: string; parent_content_id: string; text: string };
 
@@ -93,7 +157,7 @@ export class OnclaveClient {
   async findAll(options: Parameters<OnclaveClient["listContent"]>[0] = {}, signal?: AbortSignal): Promise<ContentListItem[]> { const result: ContentListItem[] = []; let offset = 0; do { const page = await this.listContent({ ...options, offset, limit: options.limit ?? 100 }, signal); result.push(...page.items); offset += page.items.length; if (page.items.length === 0 || offset >= page.total) break; } while (true); return result; }
   getContent(contentId: string, signal?: AbortSignal): Promise<ContentResponse> { return this.json("GET", `/content/${encodeURIComponent(contentId)}`, undefined, signal); }
   /** Returns the authenticated download response without buffering its body. */
-  downloadContent(contentId: string, signal?: AbortSignal): Promise<Response> { return this.request("GET", `/content/${encodeURIComponent(contentId)}/download`, undefined, signal, true); }
+  downloadContent(contentId: string, signal?: AbortSignal): Promise<Response> { return this.request("GET", `/content/${encodeURIComponent(contentId)}/download`, undefined, signal); }
   async getTranscript(contentId: string, signal?: AbortSignal): Promise<string> { return this.text("GET", `/content/${encodeURIComponent(contentId)}/download`, undefined, signal); }
   search(search: { query: string; limit?: number }, signal?: AbortSignal): Promise<SearchResponse> { return this.json("POST", "/search", search, signal); }
   channel(channel: string, limit?: number, signal?: AbortSignal): Promise<ChannelResponse> { return this.json("GET", `/youtube/channel${query({ channel, limit })}`, undefined, signal); }
@@ -101,31 +165,26 @@ export class OnclaveClient {
   job(jobId: string, verbose = false, signal?: AbortSignal): Promise<JobResponse> { return this.json("GET", `/jobs/${encodeURIComponent(jobId)}${query({ verbose: verbose ? "true" : undefined })}`, undefined, signal); }
   jobStats(signal?: AbortSignal): Promise<JsonObject> { return this.json("GET", "/jobs/stats", undefined, signal); }
   cancelJob(jobId: string, signal?: AbortSignal): Promise<JobResponse> { return this.json("POST", `/jobs/${encodeURIComponent(jobId)}/cancel`, undefined, signal); }
-  reprocess(contentId: string, force = false, signal?: AbortSignal): Promise<JsonObject> { return this.json("POST", `/content/${encodeURIComponent(contentId)}/reprocess${query({ force: force ? "true" : undefined })}`, undefined, signal); }
+  reprocess(contentId: string, force = false, signalOrOptions?: AbortSignal | { signal?: AbortSignal; notify_agent_id?: string; notifyAgentId?: string }, notifyAgentId?: string): Promise<JsonObject> {
+    const options = signalOrOptions instanceof AbortSignal ? { signal: signalOrOptions } : signalOrOptions;
+    const signal = options?.signal;
+    const notificationAgent = notifyAgentId ?? options?.notify_agent_id ?? options?.notifyAgentId;
+    return this.json("POST", `/content/${encodeURIComponent(contentId)}/reprocess${query({ force: force ? "true" : undefined, notify_agent_id: notificationAgent })}`, undefined, signal);
+  }
   reindexEmbeddings(contentId: string, signal?: AbortSignal): Promise<ReindexResponse> { return this.json("POST", `/content/${encodeURIComponent(contentId)}/reindex-embeddings`, undefined, signal); }
   createAnnotation(contentId: string, annotation: { text: string; title?: string; source_type?: string; tags?: string[] }, signal?: AbortSignal): Promise<AnnotationResponse> { return this.json("POST", `/content/${encodeURIComponent(contentId)}/annotations`, annotation, signal); }
   listAnnotations(contentId: string, signal?: AbortSignal): Promise<AnnotationResponse[]> { return this.json("GET", `/content/${encodeURIComponent(contentId)}/annotations`, undefined, signal); }
   private async json<T extends JsonObject | JsonObject[] = JsonObject>(method: string, path: string, body: object | undefined, signal?: AbortSignal): Promise<T> { const response = await this.request(method, path, body, signal); const parsed: unknown = await response.json(); if (!object(parsed) && !Array.isArray(parsed)) throw new Error("Onclave API returned invalid JSON"); return parsed as T; }
   private async text(method: string, path: string, body: object | undefined, signal?: AbortSignal): Promise<string> { return (await this.request(method, path, body, signal)).text(); }
-  private async request(method: string, path: string, body: object | undefined, signal?: AbortSignal, keepBodyDeadline = false): Promise<Response> {
+  private async request(method: string, path: string, body: object | undefined, signal?: AbortSignal): Promise<Response> {
     const combined = signal && this.signal ? AbortSignal.any([signal, this.signal]) : signal ?? this.signal;
-    const controller = new AbortController(); let bodyReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-    const deadline = new Error("Onclave request deadline exceeded");
-    const timer = setTimeout(() => { controller.abort(deadline); void bodyReader?.cancel(deadline); }, this.timeoutMs);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error("Onclave request deadline exceeded")), this.timeoutMs);
     const finalSignal = combined ? AbortSignal.any([combined, controller.signal]) : controller.signal;
-    let bodyDeadlineKept = false;
     finalSignal.throwIfAborted(); const url = new URL(path.replace(/^\//, ""), this.base); const bytes = body === undefined ? undefined : Buffer.from(JSON.stringify(body)); const signer = await this.signerPromise;
     try { const response = await this.fetchFn(url.toString(), { method, headers: { ...(bytes ? { "content-type": "application/json" } : {}), ...signer.signRequest(method, `${url.pathname}${url.search}`, url.host, bytes) }, ...(bytes ? { body: bytes } : {}), signal: finalSignal }); if (!response.ok) { const bodyText = await response.text(); let detail: string | undefined; try { const parsed: unknown = JSON.parse(bodyText); if (object(parsed) && typeof parsed.detail === "string") detail = parsed.detail; } catch { /* retain raw body */ } throw new OnclaveApiError(response.status, detail, bodyText); }
-      if (keepBodyDeadline && response.body !== null) {
-        bodyReader = response.body.getReader(); bodyDeadlineKept = true;
-        const stream = new ReadableStream<Uint8Array>({
-          async pull(streamController) { try { const chunk = await bodyReader!.read(); finalSignal.throwIfAborted(); if (chunk.done) { clearTimeout(timer); streamController.close(); } else if (chunk.value !== undefined) streamController.enqueue(chunk.value); } catch (error) { clearTimeout(timer); streamController.error(error); } },
-          async cancel(reason) { clearTimeout(timer); await bodyReader!.cancel(reason); },
-        });
-        return new Response(stream, { status: response.status, statusText: response.statusText, headers: response.headers });
-      }
       return response;
-    } finally { if (!bodyDeadlineKept) clearTimeout(timer); }
+    } finally { clearTimeout(timer); }
   }
 }
 export { DEFAULT_SIGNING_KEY_PATH };

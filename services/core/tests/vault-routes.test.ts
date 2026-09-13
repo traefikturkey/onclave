@@ -215,7 +215,7 @@ describe("vault routes", () => {
       readiness: { async postgres(): Promise<void> {}, async s3(): Promise<void> {}, async ollama(): Promise<void> {} },
     };
     const vault = await createVaultService(vaultConfig(keysPath), overrides);
-    server = createVaultHttpServer({ keyStore: vault.keyStore, handlers: createVaultRouteHandlers({ ...vault, health: () => ({ status: "ok", git_sha: "test", broker: { connected: false, topologyDeclared: false } }) }) });
+    server = createVaultHttpServer({ keyStore: vault.keyStore, handlers: createVaultRouteHandlers({ ...vault, authorizeNotificationAgent: () => undefined, health: () => ({ status: "ok", git_sha: "test", broker: { connected: false, topologyDeclared: false } }) }) });
     baseUrl = `http://127.0.0.1:${await listen(server)}`;
   });
 
@@ -252,6 +252,15 @@ describe("vault routes", () => {
     expect((await request(`/api/v1/jobs/${duplicate.job_id}`)).status).toBe(200);
     await jobs.waitForIdle();
     await expect((await request(`/api/v1/jobs/${duplicate.job_id}`)).json()).resolves.toMatchObject({ job_id: duplicate.job_id, status: JobStatus.COMPLETED });
+  });
+
+  it("persists an authorized notification identity for explicit reprocessing", async () => {
+    const response = await request("/api/v1/content/video-1/reprocess?force=true&notify_agent_id=pi-test", "POST");
+    const submitted = await response.json() as Record<string, unknown>;
+    expect(submitted).toMatchObject({ content_id: "video-1", status: "submitted", job_id: expect.any(String) });
+    await jobs.waitForIdle();
+    const detail = await (await request(`/api/v1/jobs/${String(submitted.job_id)}?verbose=true`)).json() as Record<string, unknown>;
+    expect(detail.metadata).toMatchObject({ notify_agent_ids: ["pi-test"] });
   });
 
   it("serves signed Menos routes and leaves dropped routes unregistered", async () => {

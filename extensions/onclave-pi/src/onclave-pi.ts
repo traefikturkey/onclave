@@ -5,7 +5,7 @@ import { Type } from "typebox";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { A2A_PROTOCOL_VERSION, createMessage, ulid, type AgentCard, type A2AOrigin, type Message, type TaskStatusEvent } from "@onclave/envelope";
 import { appendAdapterAuditEvent, type AdapterAuditEventName, type AdapterAuditMetadata } from "./lib/audit";
-import { loadApiBaseFromBws } from "./lib/bws";
+import { loadApiBaseFromBws, loadWorkstationS3ConfigFromBws } from "./lib/bws";
 import { HttpLink, type ConnectionState } from "./lib/connection";
 import { CorrelationStore, INBOUND_CUSTOM_TYPE, STATUS_CUSTOM_TYPE } from "./lib/correlation";
 import { SeenIds } from "./lib/dedup";
@@ -16,6 +16,7 @@ import { loadDefaultRequestSigner } from "./lib/http-signer";
 import { resolveProjectLabel } from "./lib/project-label";
 import { runOutcome, runUsage } from "./lib/run-summary";
 import { isPiSubagent } from "./lib/subagent-eligibility";
+import { createAuthenticatedS3Client } from "@onclave/client";
 import { registerVaultTools, type NotificationAgentProvider } from "./lib/vault-tools";
 
 export { isPiSubagent, resolveApiBase };
@@ -135,10 +136,17 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
     if (runtime === null || runtimeGeneration !== generation || !runtime.registered || runtime.state !== "connected") return undefined;
     return runtime.card.agent_id;
   };
-  registerVaultTools(pi, { endpoint: () => {
-    if (runtime === null) throw new Error("Onclave adapter is not connected");
-    return runtime.apiBase;
-  }, notifyAgentId });
+  registerVaultTools(pi, {
+    endpoint: () => {
+      if (runtime === null) throw new Error("Onclave adapter is not connected");
+      return runtime.apiBase;
+    },
+    notifyAgentId,
+    s3: async () => {
+      const config = await loadWorkstationS3ConfigFromBws();
+      return config === undefined ? undefined : createAuthenticatedS3Client(config);
+    },
+  });
   pi.registerCommand("onclave", { description: "Show Onclave instance status", handler: async (_args, ctx) => ctx.ui.notify(statusText(runtime), "info") });
 }
 

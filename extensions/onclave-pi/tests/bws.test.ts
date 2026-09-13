@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { posix, win32 } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { bwsExecutablePath, loadApiBaseFromBws } from "../src/lib/bws";
+import { bwsExecutablePath, loadApiBaseFromBws, loadWorkstationS3ConfigFromBws } from "../src/lib/bws";
 
 const PROJECT_ID = "3b241101-e2bb-4255-8caf-4136c566a962";
 const baseEnvironment = {
@@ -155,6 +155,18 @@ describe("Bitwarden API configuration", () => {
         env: expect.objectContaining({ BWS_SERVER_URL: "https://vault.example.internal" }),
       })
     );
+  });
+
+  it("loads the exact workstation S3 contract without exposing values in errors", async () => {
+    const runner = vi.fn().mockResolvedValue({ stdout: JSON.stringify([
+      { key: "ONCLAVE_API_BASE", value: "https://api.example.internal/api/v1" },
+      { key: "ONCLAVE_VAULT_S3_WORKSTATION_ENDPOINT", value: "https://s3.example.internal" },
+      { key: "ONCLAVE_VAULT_S3_BUCKET", value: "menos" },
+      { key: "ONCLAVE_VAULT_S3_REGION", value: "us-east-1" },
+      { key: "ONCLAVE_VAULT_S3_ACCESS_KEY", value: "access-secret" },
+      { key: "ONCLAVE_VAULT_S3_SECRET_KEY", value: "secret-secret" },
+    ]) });
+    await expect(loadWorkstationS3ConfigFromBws(baseEnvironment, runner)).resolves.toEqual({ endpoint: "https://s3.example.internal", bucket: "menos", region: "us-east-1", accessKey: "access-secret", secretKey: "secret-secret" });
   });
 
   it("rejects a BWS response without the API base key", async () => {

@@ -554,6 +554,19 @@ describe("vault unified pipeline and jobs", () => {
     expect(storage.jobs.get(job?.id ?? "")?.status).toBe(JobStatus.COMPLETED);
   });
 
+  it("carries reprocess notification identity through terminal completion", async () => {
+    const storage = new FakeStorage();
+    const notifications: { agentId: string; schema?: string }[] = [];
+    const jobs = orchestrator(storage, staticProvider(), { notify: async (agentId, _body, _requestTurn, schema) => { notifications.push({ agentId, schema }); } });
+    storage.contents.set("content-reprocess-notify", { id: "content-reprocess-notify", content_type: "youtube", title: "Existing", mime_type: "text/plain", file_size: 1, file_path: "content.txt", metadata: { video_id: "notify-video" } });
+
+    const job = await jobs.reprocess({ contentId: "content-reprocess-notify", contentText: "existing transcript", notifyAgentId: "pi-test" });
+    await jobs.waitForIdle();
+
+    expect(job).toMatchObject({ content_id: "content-reprocess-notify", metadata: { notify_agent_ids: ["pi-test"] } });
+    expect(notifications).toEqual([{ agentId: "pi-test", schema: "onclave.recommendation.request.v1" }]);
+  });
+
   it("delivers the completed callback with the signed Menos payload", async () => {
     const storage = new FakeStorage();
     const calls: { url: string; init: RequestInit | undefined }[] = [];

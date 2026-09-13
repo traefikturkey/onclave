@@ -113,6 +113,11 @@ function optionalText(body: RequestObject, field: string): string | undefined {
   return value;
 }
 
+function optionalQueryText(query: Record<string, string>, field: string): string | undefined {
+  const value = query[field];
+  return value === undefined || value === "" ? undefined : value;
+}
+
 function stringList(value: unknown, location: string): string[] {
   if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
     throw bodyValidationError(location, "Input should be a valid list", "list_type");
@@ -457,6 +462,11 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
       const content = await deps.repository.get_content(id);
       if (content === undefined) throw new HttpError(404, "Content not found");
       const force = booleanQuery(request.query.force, "force");
+      const notifyAgentId = optionalQueryText(request.query, "notify_agent_id");
+      if (notifyAgentId !== undefined) {
+        if (deps.authorizeNotificationAgent === undefined) throw new HttpError(503, "Job notifications are unavailable");
+        deps.authorizeNotificationAgent(notifyAgentId, request.keyId);
+      }
       if (!force && await deps.repository.get_content_processing_status(id) === "completed") {
         return jsonResponse({ content_id: id, status: "already_completed", job_id: null });
       }
@@ -466,7 +476,7 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
       } catch (error) {
         throw new HttpError(500, `Failed to download content: ${error instanceof Error ? error.message : String(error)}`);
       }
-      const job = await deps.jobs.reprocess({ contentId: id, contentText });
+      const job = await deps.jobs.reprocess({ contentId: id, contentText, notifyAgentId });
       return jsonResponse({ content_id: id, status: "submitted", job_id: job?.id ?? null });
     },
     contentEmbeddingsReindex: async (request) => {

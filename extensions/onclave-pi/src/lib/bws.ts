@@ -7,6 +7,13 @@ const execFile = promisify(execFileCallback);
 const BWS_TIMEOUT_MS = 60_000;
 const BWS_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 const API_BASE_SECRET_KEY = "ONCLAVE_API_BASE";
+const WORKSTATION_S3_KEYS = {
+  endpoint: "ONCLAVE_VAULT_S3_WORKSTATION_ENDPOINT",
+  bucket: "ONCLAVE_VAULT_S3_BUCKET",
+  region: "ONCLAVE_VAULT_S3_REGION",
+  accessKey: "ONCLAVE_VAULT_S3_ACCESS_KEY",
+  secretKey: "ONCLAVE_VAULT_S3_SECRET_KEY",
+} as const;
 const BWS_PROJECT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const BWS_OVERRIDES = new Set(["BWS_SERVER_URL", "BWS_CONFIG_FILE", "BWS_PROFILE"]);
 
@@ -85,7 +92,7 @@ function childEnvironment(environment: BwsEnvironment, accessKey: string): NodeJ
   return child;
 }
 
-function parseApiBase(stdout: string): string {
+function parseSecrets(stdout: string): Map<string, string> {
   let payload: unknown;
   try {
     payload = JSON.parse(stdout || "[]");
@@ -94,11 +101,18 @@ function parseApiBase(stdout: string): string {
   }
   if (!Array.isArray(payload)) throw new Error("Onclave BWS returned an unsupported response");
 
-  const secret = payload.find(
-    (item): item is BwsSecret => isBwsSecret(item) && item.key === API_BASE_SECRET_KEY
-  );
-  const value = typeof secret?.value === "string" ? secret.value.trim() : "";
-  if (value === "") throw new Error(`Onclave BWS secret ${API_BASE_SECRET_KEY} is missing`);
+  const secrets = new Map<string, string>();
+  for (const item of payload) {
+    if (!isBwsSecret(item) || typeof item.key !== "string" || typeof item.value !== "string") continue;
+    const value = item.value.trim();
+    if (value !== "") secrets.set(item.key, value);
+  }
+  return secrets;
+}
+
+function secretValue(secrets: Map<string, string>, key: string): string {
+  const value = secrets.get(key);
+  if (value === undefined) throw new Error(`Onclave BWS secret ${key} is missing`);
   return value;
 }
 
@@ -111,10 +125,10 @@ async function defaultRunner(
   return { stdout: result.stdout };
 }
 
-export async function loadApiBaseFromBws(
-  environment: BwsEnvironment = process.env,
-  runner: BwsRunner = defaultRunner
-): Promise<string | undefined> {
+async function loadBwsSecrets(
+  environment: BwsEnvironment,
+  runner: BwsRunner,
+): Promise<Map<string, string> | undefined> {
   const accessKey = environment.BITWARDEN_ACCESS_KEY?.trim();
   if (!accessKey) return undefined;
 
@@ -136,5 +150,40 @@ export async function loadApiBaseFromBws(
     throw new Error("Onclave could not read its Bitwarden Secrets Manager project");
   }
 
-  return parseApiBase(stdout);
+  return parseSecrets(stdout);
+}
+
+export async function loadApiBaseFromBws(
+  environment: BwsEnvironment = process.env,
+  runner: BwsRunner = defaultRunner
+): Promise<string | undefined> {
+  const secrets = await loadBwsSecrets(environment, runner);
+  if (secrets === undefined) return undefined;
+  return secretValue(secrets, API_BASE_SECRET_KEY);
+}
+
+export type WorkstationS3Config = {
+  endpoint: string;
+  bucket: string;
+  region: string;
+  accessKey: string;
+  secretKey: string;
+};
+
+/** Loads the workstation-only S3 contract lazily; secret values remain in memory. */
+export async function loadWorkstationS3ConfigFromBws(
+  environment: BwsEnvironment = process.env,
+  runner: BwsRunner = defaultRunner,
+): Promise<WorkstationS3Config | undefined> {
+  const secrets = await loadBwsSecrets(environment, runner);
+  if (secrets === undefined) return undefined;
+  const configured = Object.values(WORKSTATION_S3_KEYS).some((key) => secrets.has(key));
+  if (!configured) return undefined;
+  return {
+    endpoint: secretValue(secrets, WORKSTATION_S3_KEYS.endpoint),
+    bucket: secretValue(secrets, WORKSTATION_S3_KEYS.bucket),
+    region: secretValue(secrets, WORKSTATION_S3_KEYS.region),
+    accessKey: secretValue(secrets, WORKSTATION_S3_KEYS.accessKey),
+    secretKey: secretValue(secrets, WORKSTATION_S3_KEYS.secretKey),
+  };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { OnclaveApiError, OnclaveClient, type RequestSigner } from "./index";
+import { AuthenticatedS3Client, OnclaveApiError, OnclaveClient, type RequestSigner } from "./index";
 
 const signer: RequestSigner = { keyId: "test", signRequest: vi.fn(() => ({ signature: "sig", "signature-input": "input" })) };
 function response(body: unknown, status = 200): Response { return new Response(typeof body === "string" ? body : JSON.stringify(body), { status, headers: { "content-type": "application/json" } }); }
@@ -16,10 +16,21 @@ describe("Onclave vault client", () => {
   it("maps finite vault operations to their server routes", async () => {
     const fetchFn = vi.fn(async (url: string) => response(url.includes("download") ? "transcript" : url.includes("reindex") ? { content_id: "c", status: "completed", chunk_count: 1, model: "m" } : []));
     const client = new OnclaveClient({ endpoint: "http://localhost/api/v1", signer, fetchFn });
-    await client.getTranscript("c"); await client.downloadContent("unsafe/id"); await client.reindexEmbeddings("c"); await client.cancelJob("j"); await client.channel("UC 1", 5);
+    await client.getTranscript("c"); await client.downloadContent("unsafe/id"); await client.reindexEmbeddings("c"); await client.cancelJob("j"); await client.channel("UC 1", 5); await client.reprocess("c", true, undefined, "pi-test");
     expect(fetchFn.mock.calls.map(([url]) => url)).toEqual([
-      "http://localhost/api/v1/content/c/download", "http://localhost/api/v1/content/unsafe%2Fid/download", "http://localhost/api/v1/content/c/reindex-embeddings", "http://localhost/api/v1/jobs/j/cancel", "http://localhost/api/v1/youtube/channel?channel=UC+1&limit=5",
+      "http://localhost/api/v1/content/c/download", "http://localhost/api/v1/content/unsafe%2Fid/download", "http://localhost/api/v1/content/c/reindex-embeddings", "http://localhost/api/v1/jobs/j/cancel", "http://localhost/api/v1/youtube/channel?channel=UC+1&limit=5", "http://localhost/api/v1/content/c/reprocess?force=true&notify_agent_id=pi-test",
     ]);
+  });
+
+  it("signs authenticated path-style S3 object retrieval without exposing credentials", async () => {
+    const fetchFn = vi.fn(async (_input: string, _init?: RequestInit) => new Response("transcript"));
+    const client = new AuthenticatedS3Client({ endpoint: "https://s3.example.internal", bucket: "menos", region: "us-east-1", accessKey: "access-key", secretKey: "secret-key", fetchFn });
+    expect(client.objectUrl("youtube/video/transcript.txt")).toBe("https://s3.example.internal/menos/youtube/video/transcript.txt");
+    await client.getObject("youtube/video/transcript.txt");
+    const [url, init] = fetchFn.mock.calls[0] ?? [];
+    expect(url).toBe("https://s3.example.internal/menos/youtube/video/transcript.txt");
+    expect(init?.headers).toMatchObject({ host: "s3.example.internal", "x-amz-content-sha256": expect.any(String), "x-amz-date": expect.any(String), authorization: expect.stringContaining("Credential=access-key/") });
+    expect(JSON.stringify(init?.headers)).not.toContain("secret-key");
   });
 
   it("returns typed HTTP errors and honors cancellation", async () => {

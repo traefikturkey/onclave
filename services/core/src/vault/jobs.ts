@@ -41,6 +41,7 @@ export type JobSubmission = Omit<PipelineRequest, "jobId" | "pipelineVersion"> &
 export type ReprocessSubmission = {
   contentId: string;
   contentText: string;
+  notifyAgentId?: string;
   preDetected?: PipelineRequest["preDetected"];
   existingTopics?: PipelineRequest["existingTopics"];
 };
@@ -207,6 +208,7 @@ export class PipelineOrchestrator {
       resourceKey: resourceKey(content, submission.contentId),
       preDetected: submission.preDetected,
       existingTopics: submission.existingTopics,
+      notifyAgentId: submission.notifyAgentId,
     });
   }
 
