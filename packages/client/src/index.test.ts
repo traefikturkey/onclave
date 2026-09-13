@@ -22,14 +22,25 @@ describe("Onclave vault client", () => {
     ]);
   });
 
-  it("signs authenticated path-style S3 object retrieval without exposing credentials", async () => {
+  it("requires HTTPS for the workstation S3 endpoint while allowing HTTP for core", () => {
+    expect(() => new AuthenticatedS3Client({ endpoint: "http://s3.example.internal", bucket: "menos", region: "us-east-1", accessKey: "access-key", secretKey: "secret-key" })).toThrow("https");
+    expect(() => new OnclaveClient({ endpoint: "http://core.example.internal", signer })).not.toThrow();
+  });
+
+  it("signs the exact encoded S3 path without normalizing dot key segments", async () => {
     const fetchFn = vi.fn(async (_input: string, _init?: RequestInit) => new Response("transcript"));
     const client = new AuthenticatedS3Client({ endpoint: "https://s3.example.internal", bucket: "menos", region: "us-east-1", accessKey: "access-key", secretKey: "secret-key", fetchFn });
-    expect(client.objectUrl("youtube/video/transcript.txt")).toBe("https://s3.example.internal/menos/youtube/video/transcript.txt");
-    await client.getObject("youtube/video/transcript.txt");
+    const expectedUrl = "https://s3.example.internal/menos/literal/%2E/%2E%2E/tail";
+    expect(client.objectUrl("literal/./../tail")).toBe(expectedUrl);
+    vi.setSystemTime(new Date("2025-01-02T03:04:05Z"));
+    try {
+      await client.getObject("literal/./../tail");
+    } finally {
+      vi.useRealTimers();
+    }
     const [url, init] = fetchFn.mock.calls[0] ?? [];
-    expect(url).toBe("https://s3.example.internal/menos/youtube/video/transcript.txt");
-    expect(init?.headers).toMatchObject({ host: "s3.example.internal", "x-amz-content-sha256": expect.any(String), "x-amz-date": expect.any(String), authorization: expect.stringContaining("Credential=access-key/") });
+    expect(url).toBe(expectedUrl);
+    expect(init?.headers).toMatchObject({ host: "s3.example.internal", authorization: "AWS4-HMAC-SHA256 Credential=access-key/20250102/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=8284202c7eeeb4360dce367b7bb02d5d5333249f44162cb8a1f9770cb53aa9df" });
     expect(JSON.stringify(init?.headers)).not.toContain("secret-key");
   });
 

@@ -64,14 +64,21 @@ export type AuthenticatedS3ClientOptions = {
   fetchFn?: FetchFn;
 };
 
+function encodePathSegment(value: string): string {
+  return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
 function encodeObjectPath(value: string): string {
-  return value.split("/").map((part) => encodeURIComponent(part).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)).join("/");
+  // WHATWG URL parsing treats these two segments as navigation, so encode the
+  // dots before constructing the request URL. This keeps the S3 key and the
+  // SigV4 canonical URI identical to the bytes sent on the wire.
+  return value.split("/").map((part) => part === "." || part === ".." ? part.replaceAll(".", "%2E") : encodePathSegment(part)).join("/");
 }
 
 function s3Endpoint(value: string): URL {
   let parsed: URL;
-  try { parsed = new URL(value); } catch { throw new Error("S3 endpoint must be a valid http or https URL"); }
-  if (!["http:", "https:"].includes(parsed.protocol) || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error("S3 endpoint must be an origin without credentials, query, or fragment");
+  try { parsed = new URL(value); } catch { throw new Error("S3 endpoint must be a valid https URL"); }
+  if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error("S3 endpoint must be an https origin without credentials, query, or fragment");
   parsed.pathname = parsed.pathname.replace(/\/$/, "");
   return parsed;
 }
@@ -94,25 +101,32 @@ export class AuthenticatedS3Client {
     this.fetchFn = options.fetchFn ?? fetch;
   }
 
-  objectUrl(objectKey: string): string {
+  private objectPath(objectKey: string): string {
     if (objectKey === "" || objectKey.startsWith("/") || objectKey.includes("\\")) throw new Error("S3 object key is invalid");
-    return new URL(`${this.endpoint.toString().replace(/\/$/, "")}/${encodeURIComponent(this.bucket)}/${encodeObjectPath(objectKey)}`).toString();
+    return `/${encodePathSegment(this.bucket)}/${encodeObjectPath(objectKey)}`;
+  }
+
+  objectUrl(objectKey: string): string {
+    // Do not pass this path through `new URL`: its dot-segment removal would
+    // change valid S3 keys such as `.` and `..`.
+    return `${this.endpoint.toString().replace(/\/$/, "")}${this.objectPath(objectKey)}`;
   }
 
   async getObject(objectKey: string, signal?: AbortSignal): Promise<Response> {
-    const target = new URL(this.objectUrl(objectKey));
+    const path = `${this.endpoint.pathname.replace(/\/$/, "")}${this.objectPath(objectKey)}`;
+    const url = `${this.endpoint.toString().replace(/\/$/, "")}${this.objectPath(objectKey)}`;
     const amzDate = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
     const date = amzDate.slice(0, 8);
     const payloadHash = hash("");
-    const canonicalHeaders = `host:${target.host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
+    const canonicalHeaders = `host:${this.endpoint.host}\nx-amz-content-sha256:${payloadHash}\nx-amz-date:${amzDate}\n`;
     const signedHeaders = "host;x-amz-content-sha256;x-amz-date";
-    const canonicalRequest = ["GET", target.pathname, target.search.slice(1), canonicalHeaders, signedHeaders, payloadHash].join("\n");
+    const canonicalRequest = ["GET", path, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
     const scope = `${date}/${this.options.region}/s3/aws4_request`;
     const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, hash(canonicalRequest)].join("\n");
     const signingKey = hmac(hmac(hmac(hmac(`AWS4${this.options.secretKey}`, date), this.options.region), "s3"), "aws4_request");
     const signature = createHmac("sha256", signingKey).update(stringToSign, "utf8").digest("hex");
     const authorization = `AWS4-HMAC-SHA256 Credential=${this.options.accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
-    return this.fetchFn(target.toString(), { method: "GET", headers: { host: target.host, "x-amz-content-sha256": payloadHash, "x-amz-date": amzDate, authorization }, ...(signal === undefined ? {} : { signal }) });
+    return this.fetchFn(url, { method: "GET", headers: { host: this.endpoint.host, "x-amz-content-sha256": payloadHash, "x-amz-date": amzDate, authorization }, ...(signal === undefined ? {} : { signal }) });
   }
 }
 
