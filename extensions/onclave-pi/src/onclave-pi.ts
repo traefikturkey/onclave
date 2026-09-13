@@ -16,7 +16,7 @@ import { loadDefaultRequestSigner } from "./lib/http-signer";
 import { resolveProjectLabel } from "./lib/project-label";
 import { runOutcome, runUsage } from "./lib/run-summary";
 import { isPiSubagent } from "./lib/subagent-eligibility";
-import { registerVaultTools } from "./lib/vault-tools";
+import { registerVaultTools, type NotificationAgentProvider } from "./lib/vault-tools";
 
 export { isPiSubagent, resolveApiBase };
 const MAX_MESSAGE_LENGTH = 100_000;
@@ -66,8 +66,16 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
   let heartbeat: NodeJS.Timeout | null = null;
   let runMessages: unknown[] = [];
   let generation = 0;
+  let runtimeGeneration: number | undefined;
   const inherited = process.env.ONCLAVE_AGENT_ID;
   let exposed: string | undefined;
+  const restoreExposedIdentity = (): void => {
+    if (process.env.ONCLAVE_AGENT_ID === exposed) {
+      if (inherited === undefined) delete process.env.ONCLAVE_AGENT_ID;
+      else process.env.ONCLAVE_AGENT_ID = inherited;
+    }
+    exposed = undefined;
+  };
   const nowMs = options.nowMs ?? (() => performance.now());
   const initializeAdapter = options.startAdapter ?? startAdapter;
   const registerSessionStart = options.registerSessionStart ?? ((handler) => pi.on("session_start", handler));
@@ -76,6 +84,12 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
     const startedAt = nowMs();
     const reason = event.reason ?? "startup";
     setAdapterToolsActive(pi, false);
+    const previousRuntime = runtime;
+    runtime = null;
+    runtimeGeneration = undefined;
+    if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; }
+    restoreExposedIdentity();
+    if (previousRuntime !== null) void shutdownAdapter(previousRuntime, audit).catch(() => undefined);
     void initializeAdapter(pi, ctx, {
       audit,
       isCurrent: () => generation === currentGeneration,
@@ -88,11 +102,7 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
       onDisconnected: () => {
         if (generation !== currentGeneration) return;
         setAdapterToolsActive(pi, false);
-        if (process.env.ONCLAVE_AGENT_ID === exposed) {
-          if (inherited === undefined) delete process.env.ONCLAVE_AGENT_ID;
-          else process.env.ONCLAVE_AGENT_ID = inherited;
-        }
-        exposed = undefined;
+        restoreExposedIdentity();
       },
     }).then((startedRuntime) => {
       if (generation !== currentGeneration) {
@@ -101,6 +111,7 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
         return;
       }
       runtime = startedRuntime;
+      runtimeGeneration = currentGeneration;
       heartbeat = setInterval(() => { void heartbeatTick(runtime).catch(() => undefined); }, HEARTBEAT_INTERVAL_MS);
       heartbeat.unref?.();
       options.recordStartup?.({ reason, durationMs: nowMs() - startedAt, status: "ok" });
@@ -110,7 +121,7 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
       if (!stale) ctx.ui.notify(`Onclave initialization failed: ${error instanceof Error ? error.message : String(error)}`, "error");
     });
   });
-  pi.on("session_shutdown", async () => { generation += 1; runMessages = []; setAdapterToolsActive(pi, false); if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; } if (runtime !== null) { await shutdownAdapter(runtime, audit); runtime = null; } if (process.env.ONCLAVE_AGENT_ID === exposed) { if (inherited === undefined) delete process.env.ONCLAVE_AGENT_ID; else process.env.ONCLAVE_AGENT_ID = inherited; } exposed = undefined; });
+  pi.on("session_shutdown", async () => { generation += 1; runMessages = []; setAdapterToolsActive(pi, false); if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; } const activeRuntime = runtime; runtime = null; runtimeGeneration = undefined; if (activeRuntime !== null) await shutdownAdapter(activeRuntime, audit); restoreExposedIdentity(); });
   // agent_end may be followed by automatic retries. Reply only after Pi settles.
   pi.on("agent_end", (event) => { runMessages.push(...event.messages); });
   pi.on("agent_settled", async () => {
@@ -120,10 +131,14 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
   registerAdapterTools(pi, () => runtime, audit);
   // Vault tools are schema-only at discovery time. They reuse the endpoint
   // resolved by adapter startup, including its lazy BWS fallback.
+  const notifyAgentId: NotificationAgentProvider = () => {
+    if (runtime === null || runtimeGeneration !== generation || !runtime.registered || runtime.state !== "connected") return undefined;
+    return runtime.card.agent_id;
+  };
   registerVaultTools(pi, { endpoint: () => {
     if (runtime === null) throw new Error("Onclave adapter is not connected");
     return runtime.apiBase;
-  } });
+  }, notifyAgentId });
   pi.registerCommand("onclave", { description: "Show Onclave instance status", handler: async (_args, ctx) => ctx.ui.notify(statusText(runtime), "info") });
 }
 

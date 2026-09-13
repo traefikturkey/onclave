@@ -205,7 +205,7 @@ function config(overrides: Partial<PipelineConfig> = {}): PipelineConfig {
   };
 }
 
-function orchestrator(storage: FakeStorage, llm: LlmProvider, options: { pipeline?: PipelineConfig; fetcher?: (url: string, init?: RequestInit) => Promise<Response>; notify?: (agentId: string, body: string, requestTurn: boolean) => Promise<void> } = {}): PipelineOrchestrator {
+function orchestrator(storage: FakeStorage, llm: LlmProvider, options: { pipeline?: PipelineConfig; fetcher?: (url: string, init?: RequestInit) => Promise<Response>; notify?: (agentId: string, body: string, requestTurn: boolean, schema?: string) => Promise<void> } = {}): PipelineOrchestrator {
   const pipeline = new UnifiedPipeline(llm, storage, options.pipeline ?? config(), { chunkText: (text: string): string[] => [text] }, new FakeEmbeddings(), options.fetcher);
   return new PipelineOrchestrator(pipeline, storage, { pipelineVersion: "1.0.0", notify: options.notify });
 }
@@ -283,9 +283,9 @@ describe("vault unified pipeline and jobs", () => {
       entered: () => subscriberEntered?.(),
       release: new Promise<void>((resolve) => { releaseSubscriber = resolve; }),
     };
-    const notifications: { agentId: string; body: string; requestTurn: boolean }[] = [];
-    const jobs = orchestrator(storage, staticProvider(), { notify: async (agentId, body, requestTurn) => {
-      notifications.push({ agentId, body, requestTurn });
+    const notifications: { agentId: string; body: string; requestTurn: boolean; schema?: string }[] = [];
+    const jobs = orchestrator(storage, staticProvider(), { notify: async (agentId, body, requestTurn, schema) => {
+      notifications.push({ agentId, body, requestTurn, schema });
     } });
 
     const first = await jobs.submit({ contentId: "content-race-enrollment", contentText: "content", contentType: "youtube", title: "Race", resourceKey: "yt:race" });
@@ -311,9 +311,9 @@ describe("vault unified pipeline and jobs", () => {
 
   it("notifies every durable subscriber independently with terminal timing data", async () => {
     const storage = new FakeStorage();
-    const notifications: { agentId: string; body: string; requestTurn: boolean }[] = [];
-    const jobs = orchestrator(storage, staticProvider(), { notify: async (agentId, body, requestTurn) => {
-      notifications.push({ agentId, body, requestTurn });
+    const notifications: { agentId: string; body: string; requestTurn: boolean; schema?: string }[] = [];
+    const jobs = orchestrator(storage, staticProvider(), { notify: async (agentId, body, requestTurn, schema) => {
+      notifications.push({ agentId, body, requestTurn, schema });
       if (agentId === "caller-agent") throw new Error("delivery failed");
     } });
 
@@ -324,7 +324,7 @@ describe("vault unified pipeline and jobs", () => {
 
     expect(notifications).toHaveLength(2);
     expect(notifications.map(({ agentId }) => agentId)).toEqual(["caller-agent", "second-agent"]);
-    expect(notifications[0]).toMatchObject({ agentId: "caller-agent", requestTurn: true });
+    expect(notifications[0]).toMatchObject({ agentId: "caller-agent", requestTurn: true, schema: "onclave.recommendation.request.v1" });
     const notificationBody = notifications[0]?.body;
     if (notificationBody === undefined) throw new Error("completion notification was not captured");
     expect(JSON.parse(notificationBody)).toMatchObject({
@@ -497,12 +497,12 @@ describe("vault unified pipeline and jobs", () => {
     const entered = new Promise<void>((resolve) => { enteredResolve = resolve; });
     const release = new Promise<void>((resolve) => { releaseResolve = resolve; });
     storage.transitionBlock = { status: JobStatus.FAILED, entered: () => enteredResolve?.(), release };
-    const notifications: string[] = [];
+    const notifications: { body: string; requestTurn: boolean; schema?: string }[] = [];
     const jobs = orchestrator(storage, {
       model: "broken-model",
       async generate(): Promise<string> { throw new Error("provider unavailable"); },
       async close(): Promise<void> {},
-    }, { notify: async (_agentId, body): Promise<void> => { notifications.push(body); } });
+    }, { notify: async (_agentId, body, requestTurn, schema): Promise<void> => { notifications.push({ body, requestTurn, schema }); } });
 
     const job = await jobs.submit({ contentId: "content-race-failure", contentText: "content", contentType: "markdown", title: "Race", resourceKey: "cid:race-failure", notifyAgentId: "agent" });
     await entered;
@@ -514,7 +514,8 @@ describe("vault unified pipeline and jobs", () => {
     expect(storage.jobs.get(job.id ?? "")?.status).toBe(JobStatus.FAILED);
     expect(storage.statuses.map((item) => item.status)).toContain(JobStatus.FAILED);
     expect(notifications).toHaveLength(1);
-    expect(JSON.parse(notifications[0] ?? "")).toMatchObject({ event: "job_terminal", status: "failed" });
+    expect(notifications[0]).toMatchObject({ requestTurn: true, schema: "onclave.job.terminal.v1" });
+    expect(JSON.parse(notifications[0]?.body ?? "")).toMatchObject({ event: "job_terminal", status: "failed" });
   });
 
   it("does not cancel after the processing CAS wins", async () => {

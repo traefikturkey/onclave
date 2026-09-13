@@ -25,9 +25,12 @@ export type JobStorage = {
   get_content?(contentId: string): Promise<ContentMetadata | undefined>;
 };
 
+export const JOB_TERMINAL_NOTIFICATION_SCHEMA = "onclave.job.terminal.v1";
+export type JobNotificationSchema = typeof JOB_TERMINAL_NOTIFICATION_SCHEMA | typeof RECOMMENDATION_REQUEST_SCHEMA;
+
 export type JobOrchestratorConfig = {
   pipelineVersion: string;
-  notify?: (agentId: string, body: string, requestTurn: boolean) => Promise<void>;
+  notify?: (agentId: string, body: string, requestTurn: boolean, schema?: JobNotificationSchema) => Promise<void>;
 };
 
 export type JobSubmission = Omit<PipelineRequest, "jobId" | "pipelineVersion"> & {
@@ -326,7 +329,9 @@ export class PipelineOrchestrator {
       started_at: startedAt, finished_at: finishedAt, duration_seconds: durationSeconds,
       ...(summary === undefined ? {} : { summary }),
     };
-    const body = status === JobStatus.COMPLETED
+    const recommendation = status === JobStatus.COMPLETED;
+    const schema: JobNotificationSchema = recommendation ? RECOMMENDATION_REQUEST_SCHEMA : JOB_TERMINAL_NOTIFICATION_SCHEMA;
+    const body = recommendation
       ? JSON.stringify({
         schema: RECOMMENDATION_REQUEST_SCHEMA,
         version: RECOMMENDATION_REQUEST_VERSION,
@@ -353,7 +358,7 @@ export class PipelineOrchestrator {
       : JSON.stringify(event);
     await Promise.all([...subscribers].map(async (subscriber) => {
       try {
-        await this.config.notify?.(subscriber, body, status === JobStatus.COMPLETED);
+        await this.config.notify?.(subscriber, body, true, schema);
       } catch {
         // Terminal job state is authoritative even when notification delivery is unavailable.
       }

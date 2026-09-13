@@ -92,6 +92,8 @@ export class OnclaveClient {
   findByVideoId(videoId: string, signal?: AbortSignal): Promise<ContentListItem | undefined> { return this.findAll({ content_type: "youtube" }, signal).then((items) => items.find((item) => item.metadata.video_id === videoId)); }
   async findAll(options: Parameters<OnclaveClient["listContent"]>[0] = {}, signal?: AbortSignal): Promise<ContentListItem[]> { const result: ContentListItem[] = []; let offset = 0; do { const page = await this.listContent({ ...options, offset, limit: options.limit ?? 100 }, signal); result.push(...page.items); offset += page.items.length; if (page.items.length === 0 || offset >= page.total) break; } while (true); return result; }
   getContent(contentId: string, signal?: AbortSignal): Promise<ContentResponse> { return this.json("GET", `/content/${encodeURIComponent(contentId)}`, undefined, signal); }
+  /** Returns the authenticated download response without buffering its body. */
+  downloadContent(contentId: string, signal?: AbortSignal): Promise<Response> { return this.request("GET", `/content/${encodeURIComponent(contentId)}/download`, undefined, signal, true); }
   async getTranscript(contentId: string, signal?: AbortSignal): Promise<string> { return this.text("GET", `/content/${encodeURIComponent(contentId)}/download`, undefined, signal); }
   search(search: { query: string; limit?: number }, signal?: AbortSignal): Promise<SearchResponse> { return this.json("POST", "/search", search, signal); }
   channel(channel: string, limit?: number, signal?: AbortSignal): Promise<ChannelResponse> { return this.json("GET", `/youtube/channel${query({ channel, limit })}`, undefined, signal); }
@@ -105,11 +107,25 @@ export class OnclaveClient {
   listAnnotations(contentId: string, signal?: AbortSignal): Promise<AnnotationResponse[]> { return this.json("GET", `/content/${encodeURIComponent(contentId)}/annotations`, undefined, signal); }
   private async json<T extends JsonObject | JsonObject[] = JsonObject>(method: string, path: string, body: object | undefined, signal?: AbortSignal): Promise<T> { const response = await this.request(method, path, body, signal); const parsed: unknown = await response.json(); if (!object(parsed) && !Array.isArray(parsed)) throw new Error("Onclave API returned invalid JSON"); return parsed as T; }
   private async text(method: string, path: string, body: object | undefined, signal?: AbortSignal): Promise<string> { return (await this.request(method, path, body, signal)).text(); }
-  private async request(method: string, path: string, body: object | undefined, signal?: AbortSignal): Promise<Response> {
+  private async request(method: string, path: string, body: object | undefined, signal?: AbortSignal, keepBodyDeadline = false): Promise<Response> {
     const combined = signal && this.signal ? AbortSignal.any([signal, this.signal]) : signal ?? this.signal;
-    const controller = new AbortController(); const timer = setTimeout(() => controller.abort(new Error("Onclave request deadline exceeded")), this.timeoutMs); const finalSignal = combined ? AbortSignal.any([combined, controller.signal]) : controller.signal;
+    const controller = new AbortController(); let bodyReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    const deadline = new Error("Onclave request deadline exceeded");
+    const timer = setTimeout(() => { controller.abort(deadline); void bodyReader?.cancel(deadline); }, this.timeoutMs);
+    const finalSignal = combined ? AbortSignal.any([combined, controller.signal]) : controller.signal;
+    let bodyDeadlineKept = false;
     finalSignal.throwIfAborted(); const url = new URL(path.replace(/^\//, ""), this.base); const bytes = body === undefined ? undefined : Buffer.from(JSON.stringify(body)); const signer = await this.signerPromise;
-    try { const response = await this.fetchFn(url.toString(), { method, headers: { ...(bytes ? { "content-type": "application/json" } : {}), ...signer.signRequest(method, `${url.pathname}${url.search}`, url.host, bytes) }, ...(bytes ? { body: bytes } : {}), signal: finalSignal }); if (!response.ok) { const bodyText = await response.text(); let detail: string | undefined; try { const parsed: unknown = JSON.parse(bodyText); if (object(parsed) && typeof parsed.detail === "string") detail = parsed.detail; } catch { /* retain raw body */ } throw new OnclaveApiError(response.status, detail, bodyText); } return response; } finally { clearTimeout(timer); }
+    try { const response = await this.fetchFn(url.toString(), { method, headers: { ...(bytes ? { "content-type": "application/json" } : {}), ...signer.signRequest(method, `${url.pathname}${url.search}`, url.host, bytes) }, ...(bytes ? { body: bytes } : {}), signal: finalSignal }); if (!response.ok) { const bodyText = await response.text(); let detail: string | undefined; try { const parsed: unknown = JSON.parse(bodyText); if (object(parsed) && typeof parsed.detail === "string") detail = parsed.detail; } catch { /* retain raw body */ } throw new OnclaveApiError(response.status, detail, bodyText); }
+      if (keepBodyDeadline && response.body !== null) {
+        bodyReader = response.body.getReader(); bodyDeadlineKept = true;
+        const stream = new ReadableStream<Uint8Array>({
+          async pull(streamController) { try { const chunk = await bodyReader!.read(); finalSignal.throwIfAborted(); if (chunk.done) { clearTimeout(timer); streamController.close(); } else if (chunk.value !== undefined) streamController.enqueue(chunk.value); } catch (error) { clearTimeout(timer); streamController.error(error); } },
+          async cancel(reason) { clearTimeout(timer); await bodyReader!.cancel(reason); },
+        });
+        return new Response(stream, { status: response.status, statusText: response.statusText, headers: response.headers });
+      }
+      return response;
+    } finally { if (!bodyDeadlineKept) clearTimeout(timer); }
   }
 }
 export { DEFAULT_SIGNING_KEY_PATH };

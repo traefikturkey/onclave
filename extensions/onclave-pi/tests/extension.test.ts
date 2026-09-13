@@ -58,14 +58,15 @@ describe("Onclave Pi T2 adapter", () => {
       lifetime: new AbortController(),
       card: { agent_id: "pi-test", name: "pi-test", host: "test", transport: "https" },
       link: { stop: vi.fn(async () => undefined) },
-      client: {},
-      state: "disconnected",
+      client: { ingest: vi.fn(async () => ({ content_id: "content-1", job_id: "job-1" })) },
+      state: "connected",
+      apiBase: "https://onclave.test",
       correlation: { clear: vi.fn() },
       seen: {},
       ui: { setStatus: vi.fn() },
       sendMessage: vi.fn(),
       aliveInstances: 0,
-      registered: false,
+      registered: true,
     };
     onclavePi(registered.pi as never, {
       registerSessionStart: (handler: typeof sessionStart) => { sessionStart = handler; },
@@ -82,9 +83,77 @@ describe("Onclave Pi T2 adapter", () => {
     resolveStart?.(runtime);
     await vi.waitFor(() => expect(recordStartup).toHaveBeenCalledWith({ reason: "reload", durationMs: 25, status: "ok" }));
 
+    const fetchMock = vi.fn(async (..._args: unknown[]) => new Response(JSON.stringify({ content_id: "content-1", job_id: "job-1" }), { status: 202, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const ingest = registered.tools.find((tool) => tool.name === "onclave_vault_ingest");
+    await (ingest as unknown as { execute: Function }).execute("call", { url: "https://example.test/video" });
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect(JSON.parse(String(request?.body))).toMatchObject({ notify_agent_id: "pi-test" });
+    vi.unstubAllGlobals();
+
     const shutdown = registered.pi.on.mock.calls.find(([event]) => event === "session_shutdown")?.[1];
     await shutdown?.();
     expect(runtime.link.stop).toHaveBeenCalledOnce();
+  });
+
+  it("does not use the previous runtime identity while a replacement session starts", async () => {
+    const registered = fakePi();
+    const inherited = process.env.ONCLAVE_AGENT_ID;
+    process.env.ONCLAVE_AGENT_ID = "inherited-agent";
+    const runtime = (agentId: string) => ({
+      lifetime: new AbortController(),
+      card: { agent_id: agentId, name: agentId, host: "test", transport: "https" },
+      link: { stop: vi.fn(async () => undefined) },
+      client: { call: vi.fn(async () => ({ ok: true, agents: [] })) },
+      state: "connected",
+      apiBase: "https://onclave.test",
+      correlation: { clear: vi.fn() },
+      seen: { clear: vi.fn() },
+      ui: { setStatus: vi.fn(), notify: vi.fn() },
+      sendMessage: vi.fn(),
+      aliveInstances: 0,
+      registered: true,
+    });
+    const previous = runtime("old-agent");
+    const replacement = runtime("new-agent");
+    let sessionStart: ((event: { reason?: string }, ctx: never) => void) | undefined;
+    let finishReplacement!: () => void;
+    const startAdapter = vi.fn()
+      .mockImplementationOnce(async (_pi: unknown, _ctx: unknown, startOptions: any) => {
+        startOptions.onRegistered?.("old-agent");
+        return previous;
+      })
+      .mockImplementationOnce((_pi: unknown, _ctx: unknown, startOptions: any) => new Promise((resolve) => {
+        finishReplacement = () => {
+          startOptions.onRegistered?.("new-agent");
+          resolve(replacement);
+        };
+      }));
+    try {
+      onclavePi(registered.pi as never, {
+        registerSessionStart: (handler: typeof sessionStart) => { sessionStart = handler; },
+        startAdapter,
+      } as never);
+      sessionStart?.({}, { ui: { notify: vi.fn() } } as never);
+      await vi.waitFor(() => expect(startAdapter).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(process.env.ONCLAVE_AGENT_ID).toBe("old-agent"));
+
+      sessionStart?.({ reason: "replacement" }, { ui: { notify: vi.fn() } } as never);
+      await vi.waitFor(() => expect(startAdapter).toHaveBeenCalledTimes(2));
+      expect(process.env.ONCLAVE_AGENT_ID).toBe("inherited-agent");
+      const ingest = registered.tools.find((tool) => tool.name === "onclave_vault_ingest");
+      await expect((ingest as unknown as { execute: Function }).execute("call", { url: "https://example.test/video" })).rejects.toThrow("connected runtime agent");
+      await vi.waitFor(() => expect(previous.link.stop).toHaveBeenCalledOnce());
+
+      finishReplacement();
+      await vi.waitFor(() => expect(process.env.ONCLAVE_AGENT_ID).toBe("new-agent"));
+      const shutdown = registered.pi.on.mock.calls.find(([event]) => event === "session_shutdown")?.[1];
+      await shutdown?.();
+      expect(process.env.ONCLAVE_AGENT_ID).toBe("inherited-agent");
+    } finally {
+      if (inherited === undefined) delete process.env.ONCLAVE_AGENT_ID;
+      else process.env.ONCLAVE_AGENT_ID = inherited;
+    }
   });
 
   it("registers nothing and starts no session hooks in a direct subagent", () => {

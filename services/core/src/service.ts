@@ -13,6 +13,7 @@ import { HttpError } from "./vault/errors";
 import { createAgentRouteHandlers } from "./vault/agent-routes";
 import { createVaultRouteHandlers } from "./vault/routes";
 import { createVaultService, type VaultService } from "./vault/vault-service";
+import { JOB_TERMINAL_NOTIFICATION_SCHEMA, type JobNotificationSchema } from "./vault/jobs";
 import { log } from "./log";
 import { Registry } from "./registry";
 import { coreOrigin } from "./core-origin";
@@ -82,12 +83,13 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
     } else {
       const vaultConfig = config.vault;
       vault = await createVaultService(vaultConfig, {
-        notify: async (agentId, body, requestTurn) => {
+        notify: async (agentId, body, requestTurn, schema) => {
           const channel = broker.channel();
           if (channel === undefined) throw new Error("Broker unavailable");
+          const messageSchema: JobNotificationSchema = schema ?? (requestTurn ? RECOMMENDATION_REQUEST_SCHEMA : JOB_TERMINAL_NOTIFICATION_SCHEMA);
           publishMessage(channel, createMessage({
             type: requestTurn ? "ask" : "inform", origin: coreOrigin(), destination: agentId, context_id: ulid(), body,
-            schema: requestTurn ? RECOMMENDATION_REQUEST_SCHEMA : "onclave.job.terminal.v1",
+            schema: messageSchema,
           }));
         },
       });

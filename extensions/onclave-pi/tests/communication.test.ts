@@ -63,6 +63,25 @@ describe("running-session communication", () => {
     ]);
   });
 
+  it.each([
+    ["completed", "onclave.recommendation.request.v1"],
+    ["failed", "onclave.job.terminal.v1"],
+  ] as const)("wakes Pi for a vault %s terminal notification and acknowledges the broker delivery", async (state, schema) => {
+    const { rt, send, client } = runtime();
+    const message = createMessage({
+      type: "ask",
+      origin: { instance_id: "core", name: "Onclave Core", host: "vault" },
+      destination: "b",
+      context_id: ulid(),
+      body: JSON.stringify({ schema, event: "job_terminal", status: state }),
+      schema,
+    });
+    await consume(rt, { deliveryId: `vault-${state}`, kind: "message", message }, { audit });
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ customType: INBOUND_CUSTOM_TYPE }), { triggerTurn: true, deliverAs: "followUp" });
+    expect(client.call.mock.calls.map(([request]) => request.op)).toEqual(["create_task", "update_task"]);
+    expect(client.dispose).toHaveBeenCalledWith(`vault-${state}`, "ack");
+  });
+
   it.each([["stop", "completed"], ["error", "failed"], ["aborted", "canceled"]])("reports %s as %s and never replies to unrelated turns", async (reason, state) => {
     const { rt, client } = runtime(); const message = outgoing("request", ulid(), ulid()); rt.correlation.registerInbound(message);
     await submitRunReply(rt, [assistant("unrelated")], audit);
