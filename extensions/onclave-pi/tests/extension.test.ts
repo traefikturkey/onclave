@@ -37,14 +37,17 @@ describe("Onclave Pi T2 adapter", () => {
     expect(card.agent_id).toBe("pi-01a082");
   });
 
-  it("registers the adapter for a normal Pi process", () => {
+  it("registers the adapter without calling runtime actions during extension loading", () => {
     const registered = fakePi();
-    onclavePi(registered.pi as never);
+    registered.pi.getActiveTools.mockImplementation(() => { throw new Error("runtime action called during loading"); });
+    registered.pi.setActiveTools.mockImplementation(() => { throw new Error("runtime action called during loading"); });
+    expect(() => onclavePi(registered.pi as never)).not.toThrow();
     expect(registered.pi.registerFlag).toHaveBeenCalled();
     expect(registered.pi.on).toHaveBeenCalledWith("session_start", expect.any(Function));
     expect(registered.pi.on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
     expect(registered.tools.map((tool) => tool.name).sort()).toEqual(["onclave_instances", "onclave_message", "onclave_vault_content", "onclave_vault_ingest", "onclave_vault_jobs", "onclave_vault_search"]);
-    expect(registered.pi.setActiveTools).toHaveBeenCalledWith(["read", "onclave_vault_search", "onclave_vault_content", "onclave_vault_ingest", "onclave_vault_jobs"]);
+    expect(registered.pi.getActiveTools).not.toHaveBeenCalled();
+    expect(registered.pi.setActiveTools).not.toHaveBeenCalled();
   });
 
   it("starts initialization after session_start returns and records its duration", async () => {

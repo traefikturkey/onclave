@@ -103,7 +103,8 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
   const registerSessionStart = options.registerSessionStart ?? ((handler) => pi.on("session_start", handler));
   // Registration makes schemas discoverable, but tools must not be callable or
   // offered to the model until the current session has registered remotely.
-  setAdapterToolsActive(pi, false);
+  // Tool visibility is an action API, so defer the initial update until
+  // session_start, after Pi has bound the extension runtime.
   registerSessionStart((event, ctx) => {
     const currentGeneration = ++generation;
     const startedAt = nowMs();
