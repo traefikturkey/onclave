@@ -7,7 +7,7 @@ vi.mock("../src/lib/audit", () => ({ appendAdapterAuditEvent: vi.fn(async () => 
 type Tool = { name: string; parameters?: unknown; promptGuidelines?: string[] };
 function fakePi() {
   const tools: Tool[] = [];
-  let activeTools = ["read", "onclave_instances", "onclave_message"];
+  let activeTools = ["read", "onclave_instances", "onclave_message", "onclave_vault_search", "onclave_vault_content", "onclave_vault_ingest", "onclave_vault_jobs"];
   const pi = {
     registerFlag: vi.fn(), on: vi.fn(), registerCommand: vi.fn(), registerTool: (tool: Tool) => tools.push(tool), getFlag: vi.fn(), sendMessage: vi.fn(),
     getActiveTools: vi.fn(() => [...activeTools]),
@@ -44,8 +44,7 @@ describe("Onclave Pi T2 adapter", () => {
     expect(registered.pi.on).toHaveBeenCalledWith("session_start", expect.any(Function));
     expect(registered.pi.on).toHaveBeenCalledWith("session_shutdown", expect.any(Function));
     expect(registered.tools.map((tool) => tool.name).sort()).toEqual(["onclave_instances", "onclave_message", "onclave_vault_content", "onclave_vault_ingest", "onclave_vault_jobs", "onclave_vault_search"]);
-    expect(registered.pi.getActiveTools).not.toHaveBeenCalled();
-    expect(registered.pi.setActiveTools).not.toHaveBeenCalled();
+    expect(registered.pi.setActiveTools).toHaveBeenCalledWith(["read", "onclave_vault_search", "onclave_vault_content", "onclave_vault_ingest", "onclave_vault_jobs"]);
   });
 
   it("starts initialization after session_start returns and records its duration", async () => {
@@ -94,6 +93,30 @@ describe("Onclave Pi T2 adapter", () => {
     const shutdown = registered.pi.on.mock.calls.find(([event]) => event === "session_shutdown")?.[1];
     await shutdown?.();
     expect(runtime.link.stop).toHaveBeenCalledOnce();
+  });
+
+  it("cancels stale bootstrap generations on replacement and shutdown", async () => {
+    const registered = fakePi();
+    let sessionStart: ((event: { reason?: string }, ctx: never) => void) | undefined;
+    const signals: AbortSignal[] = [];
+    onclavePi(registered.pi as never, {
+      registerSessionStart: (handler: typeof sessionStart) => { sessionStart = handler; },
+      startAdapter: vi.fn((_pi: unknown, _ctx: unknown, options: { signal?: AbortSignal }) => {
+        if (options.signal !== undefined) signals.push(options.signal);
+        return new Promise(() => undefined);
+      }),
+    } as never);
+
+    sessionStart?.({}, { ui: { notify: vi.fn() } } as never);
+    await vi.waitFor(() => expect(signals).toHaveLength(1));
+    sessionStart?.({ reason: "reload" }, { ui: { notify: vi.fn() } } as never);
+    await vi.waitFor(() => expect(signals).toHaveLength(2));
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+
+    const shutdown = registered.pi.on.mock.calls.find(([event]) => event === "session_shutdown")?.[1];
+    await shutdown?.();
+    expect(signals[1]?.aborted).toBe(true);
   });
 
   it("does not use the previous runtime identity while a replacement session starts", async () => {
@@ -166,6 +189,7 @@ describe("Onclave Pi T2 adapter", () => {
     expect(registered.pi.on).not.toHaveBeenCalled();
     expect(registered.pi.registerCommand).not.toHaveBeenCalled();
     expect(registered.tools).toEqual([]);
+    expect(registered.pi.setActiveTools).not.toHaveBeenCalled();
     expect(heartbeat).not.toHaveBeenCalled();
     heartbeat.mockRestore();
   });
@@ -192,10 +216,14 @@ describe("Onclave Pi T2 adapter", () => {
   it("tracks adapter tool visibility without changing unrelated tools", () => {
     const registered = fakePi();
     setAdapterToolsActive(registered.pi as never, false);
-    expect(registered.pi.setActiveTools).toHaveBeenLastCalledWith(["read"]);
+    expect(registered.pi.setActiveTools).toHaveBeenLastCalledWith(["read", "onclave_vault_search", "onclave_vault_content", "onclave_vault_ingest", "onclave_vault_jobs"]);
     setAdapterToolsActive(registered.pi as never, true);
     expect(registered.pi.setActiveTools).toHaveBeenLastCalledWith([
       "read",
+      "onclave_vault_search",
+      "onclave_vault_content",
+      "onclave_vault_ingest",
+      "onclave_vault_jobs",
       "onclave_instances",
       "onclave_message",
     ]);

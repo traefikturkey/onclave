@@ -5,7 +5,7 @@ import { Type } from "typebox";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { A2A_PROTOCOL_VERSION, createMessage, ulid, type AgentCard, type A2AOrigin, type Message, type TaskStatusEvent } from "@onclave/envelope";
 import { appendAdapterAuditEvent, type AdapterAuditEventName, type AdapterAuditMetadata } from "./lib/audit";
-import { loadApiBaseFromBws, loadWorkstationS3ConfigFromBws } from "./lib/bws";
+import { isRetryableBwsCommandError, loadApiBaseFromBws, loadWorkstationS3ConfigFromBws } from "./lib/bws";
 import { HttpLink, type ConnectionState } from "./lib/connection";
 import { CorrelationStore, INBOUND_CUSTOM_TYPE, STATUS_CUSTOM_TYPE } from "./lib/correlation";
 import { SeenIds } from "./lib/dedup";
@@ -24,6 +24,10 @@ const MAX_MESSAGE_LENGTH = 100_000;
 const MAX_WAIT_TIMEOUT_MS = 300_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const DELIVERY_WAIT_MS = 25_000;
+const BOOTSTRAP_INITIAL_ATTEMPTS = 3;
+const BOOTSTRAP_INITIAL_RETRY_DELAYS_MS = [1_000, 2_000] as const;
+const BOOTSTRAP_BACKGROUND_RETRY_MS = 60_000;
+const BOOTSTRAP_ATTEMPT_TIMEOUT_MS = 10_000;
 const FOOTER_STATUS_KEY = "onclave-v2";
 const ANSI_GREEN = "\x1b[32m";
 const ANSI_RED = "\x1b[31m";
@@ -42,6 +46,18 @@ export type Runtime = { lifetime: AbortController; card: AgentCard; link: HttpLi
 type Audit = (event: AdapterAuditEventName, metadata?: AdapterAuditMetadata) => Promise<void>;
 type RuntimeGetter = () => Runtime | null;
 type SessionStartHandler = (event: { reason?: string }, ctx: ExtensionContext) => void | Promise<void>;
+export type BootstrapState = "retrying" | "degraded" | "ready" | "closed";
+export type BootstrapRecoveryOptions = {
+  signal?: AbortSignal;
+  isCurrent?: () => boolean;
+  initialAttempts?: number;
+  initialRetryDelaysMs?: readonly number[];
+  backgroundRetryMs?: number;
+  /** Bounds a single bootstrap subprocess/network attempt. */
+  attemptTimeoutMs?: number;
+  onStateChange?: (state: BootstrapState) => void;
+  onWarning?: () => void;
+};
 export type OnclaveStartupMeasurement = {
   reason: string;
   durationMs: number;
@@ -52,6 +68,7 @@ type OnclavePiOptions = {
   recordStartup?: (measurement: OnclaveStartupMeasurement) => void;
   nowMs?: () => number;
   startAdapter?: typeof startAdapter;
+  bootstrap?: Omit<BootstrapRecoveryOptions, "signal" | "isCurrent" | "onStateChange" | "onWarning">;
 };
 
 class StaleAdapterStartError extends Error {}
@@ -68,6 +85,10 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
   let runMessages: unknown[] = [];
   let generation = 0;
   let runtimeGeneration: number | undefined;
+  let startupAbort: AbortController | null = null;
+  let bootstrapState: BootstrapState = "closed";
+  let bootstrapUsesBws = true;
+  let bootstrapUi: ExtensionContext["ui"] | undefined;
   const inherited = process.env.ONCLAVE_AGENT_ID;
   let exposed: string | undefined;
   const restoreExposedIdentity = (): void => {
@@ -80,20 +101,45 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
   const nowMs = options.nowMs ?? (() => performance.now());
   const initializeAdapter = options.startAdapter ?? startAdapter;
   const registerSessionStart = options.registerSessionStart ?? ((handler) => pi.on("session_start", handler));
+  // Registration makes schemas discoverable, but tools must not be callable or
+  // offered to the model until the current session has registered remotely.
+  setAdapterToolsActive(pi, false);
   registerSessionStart((event, ctx) => {
     const currentGeneration = ++generation;
     const startedAt = nowMs();
     const reason = event.reason ?? "startup";
+    startupAbort?.abort();
+    const currentStartupAbort = new AbortController();
+    startupAbort = currentStartupAbort;
+    bootstrapUi = ctx.ui;
+    bootstrapUsesBws = process.env.ONCLAVE_API_BASE === undefined;
+    bootstrapState = "retrying";
+    refreshBootstrapFooter(ctx.ui, bootstrapState, bootstrapUsesBws);
     setAdapterToolsActive(pi, false);
     const previousRuntime = runtime;
     runtime = null;
     runtimeGeneration = undefined;
     if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; }
     restoreExposedIdentity();
-    if (previousRuntime !== null) void shutdownAdapter(previousRuntime, audit).catch(() => undefined);
+    if (previousRuntime !== null) void shutdownAdapter(previousRuntime, audit, false).catch(() => undefined);
     void initializeAdapter(pi, ctx, {
       audit,
+      signal: currentStartupAbort.signal,
+      bootstrap: options.bootstrap,
       isCurrent: () => generation === currentGeneration,
+      onBootstrapMode: (usesBws) => {
+        if (generation !== currentGeneration) return;
+        bootstrapUsesBws = usesBws;
+        refreshBootstrapFooter(ctx.ui, bootstrapState, usesBws);
+      },
+      onBootstrapState: (state) => {
+        if (generation !== currentGeneration) return;
+        bootstrapState = state;
+        refreshBootstrapFooter(ctx.ui, state, bootstrapUsesBws);
+      },
+      onBootstrapWarning: () => {
+        if (generation === currentGeneration) ctx.ui.notify("Onclave Bitwarden bootstrap unavailable; retrying in background", "warning");
+      },
       onRegistered: (id) => {
         if (generation !== currentGeneration) return;
         exposed = id;
@@ -106,23 +152,31 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
         restoreExposedIdentity();
       },
     }).then((startedRuntime) => {
-      if (generation !== currentGeneration) {
-        void shutdownAdapter(startedRuntime, audit).catch(() => undefined);
+      if (generation !== currentGeneration || currentStartupAbort.signal.aborted) {
+        void shutdownAdapter(startedRuntime, audit, false).catch(() => undefined);
         options.recordStartup?.({ reason, durationMs: nowMs() - startedAt, status: "cancelled" });
         return;
       }
       runtime = startedRuntime;
       runtimeGeneration = currentGeneration;
+      bootstrapState = "ready";
+      startupAbort = startupAbort === currentStartupAbort ? null : startupAbort;
       heartbeat = setInterval(() => { void heartbeatTick(runtime).catch(() => undefined); }, HEARTBEAT_INTERVAL_MS);
       heartbeat.unref?.();
       options.recordStartup?.({ reason, durationMs: nowMs() - startedAt, status: "ok" });
     }).catch((error) => {
-      const stale = error instanceof StaleAdapterStartError || generation !== currentGeneration;
+      const stale = error instanceof StaleAdapterStartError || currentStartupAbort.signal.aborted || generation !== currentGeneration;
       options.recordStartup?.({ reason, durationMs: nowMs() - startedAt, status: stale ? "cancelled" : "error" });
-      if (!stale) ctx.ui.notify(`Onclave initialization failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+      if (!stale) {
+        if (bootstrapState !== "ready") {
+          bootstrapState = "degraded";
+          refreshBootstrapFooter(ctx.ui, bootstrapState, bootstrapUsesBws);
+        }
+        ctx.ui.notify(`Onclave initialization failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+      }
     });
   });
-  pi.on("session_shutdown", async () => { generation += 1; runMessages = []; setAdapterToolsActive(pi, false); if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; } const activeRuntime = runtime; runtime = null; runtimeGeneration = undefined; if (activeRuntime !== null) await shutdownAdapter(activeRuntime, audit); restoreExposedIdentity(); });
+  pi.on("session_shutdown", async () => { generation += 1; startupAbort?.abort(); startupAbort = null; runMessages = []; bootstrapState = "closed"; if (bootstrapUi !== undefined) refreshBootstrapFooter(bootstrapUi, bootstrapState, bootstrapUsesBws); bootstrapUi = undefined; setAdapterToolsActive(pi, false); if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; } const activeRuntime = runtime; runtime = null; runtimeGeneration = undefined; if (activeRuntime !== null) await shutdownAdapter(activeRuntime, audit); restoreExposedIdentity(); });
   // agent_end may be followed by automatic retries. Reply only after Pi settles.
   pi.on("agent_end", (event) => { runMessages.push(...event.messages); });
   pi.on("agent_settled", async () => {
@@ -147,7 +201,7 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
       return config === undefined ? undefined : createAuthenticatedS3Client(config);
     },
   });
-  pi.registerCommand("onclave", { description: "Show Onclave instance status", handler: async (_args, ctx) => ctx.ui.notify(statusText(runtime), "info") });
+  pi.registerCommand("onclave", { description: "Show Onclave instance status", handler: async (_args, ctx) => ctx.ui.notify(statusText(runtime, bootstrapState, bootstrapUsesBws), "info") });
 }
 
 export function setAdapterToolsActive(pi: Pick<ExtensionAPI, "getActiveTools" | "setActiveTools">, active: boolean): void {
@@ -159,19 +213,94 @@ export function setAdapterToolsActive(pi: Pick<ExtensionAPI, "getActiveTools" | 
   if (next.length !== current.length || next.some((name, index) => name !== current[index])) pi.setActiveTools(next);
 }
 
-type StartOptions = { audit: Audit; isCurrent?: () => boolean; onRegistered?: (instanceId: string) => void; onDisconnected?: () => void };
-export type ApiBaseLoader = () => Promise<string | undefined>;
-export async function resolveAdapterApiBase(explicitUrl: string | undefined, environment: NodeJS.ProcessEnv = process.env, loader: ApiBaseLoader = () => loadApiBaseFromBws(environment)): Promise<string> { if (explicitUrl !== undefined || environment.ONCLAVE_API_BASE !== undefined) return resolveApiBase(explicitUrl, environment); const base = await loader(); if (base === undefined) throw new Error("Onclave BWS bootstrap is missing BITWARDEN_ACCESS_KEY"); return resolveApiBase(base, {}); }
+type StartOptions = { audit: Audit; signal?: AbortSignal; bootstrap?: Omit<BootstrapRecoveryOptions, "signal" | "isCurrent" | "onStateChange" | "onWarning">; isCurrent?: () => boolean; onBootstrapMode?: (usesBws: boolean) => void; onBootstrapState?: (state: BootstrapState) => void; onBootstrapWarning?: () => void; onRegistered?: (instanceId: string) => void; onDisconnected?: () => void };
+export type ApiBaseLoader = (signal?: AbortSignal) => Promise<string | undefined>;
+export async function resolveAdapterApiBase(explicitUrl: string | undefined, environment: NodeJS.ProcessEnv = process.env, loader: ApiBaseLoader = (signal) => loadApiBaseFromBws(environment, undefined, signal), signal?: AbortSignal): Promise<string> { signal?.throwIfAborted(); if (explicitUrl !== undefined || environment.ONCLAVE_API_BASE !== undefined) return resolveApiBase(explicitUrl, environment); const base = signal === undefined ? await loader() : await loader(signal); if (base === undefined) throw new Error("Onclave BWS bootstrap is missing BITWARDEN_ACCESS_KEY"); return resolveApiBase(base, {}); }
 
-async function startAdapter(pi: ExtensionAPI, ctx: ExtensionContext, options: StartOptions): Promise<Runtime> {
+export async function resolveAdapterApiBaseWithRecovery(
+  loader: (signal?: AbortSignal) => Promise<string>,
+  options: BootstrapRecoveryOptions = {},
+): Promise<string> {
+  const signal = options.signal;
+  const initialAttempts = options.initialAttempts ?? BOOTSTRAP_INITIAL_ATTEMPTS;
+  const initialRetryDelaysMs = options.initialRetryDelaysMs ?? BOOTSTRAP_INITIAL_RETRY_DELAYS_MS;
+  const backgroundRetryMs = options.backgroundRetryMs ?? BOOTSTRAP_BACKGROUND_RETRY_MS;
+  const attemptTimeoutMs = options.attemptTimeoutMs ?? BOOTSTRAP_ATTEMPT_TIMEOUT_MS;
+  const current = (): void => {
+    signal?.throwIfAborted();
+    if (options.isCurrent?.() === false) throw new StaleAdapterStartError("Onclave session was replaced during initialization");
+  };
+  const pause = async (delayMs: number): Promise<void> => {
+    current();
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, delayMs);
+      timer.unref?.();
+      if (signal === undefined) return;
+      const abort = (): void => { clearTimeout(timer); signal.removeEventListener("abort", abort); reject(signal.reason ?? new DOMException("The operation was aborted", "AbortError")); };
+      if (signal.aborted) { abort(); return; }
+      signal.addEventListener("abort", abort, { once: true });
+    });
+    current();
+  };
+  const runAttempt = async (): Promise<string> => {
+    current();
+    const timeoutSignal = AbortSignal.timeout(Math.max(1, attemptTimeoutMs));
+    const attemptSignal = signal === undefined ? timeoutSignal : AbortSignal.any([signal, timeoutSignal]);
+    return loader(attemptSignal);
+  };
+  const attempts = Math.max(1, Math.floor(initialAttempts));
+  options.onStateChange?.("retrying");
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    current();
+    try {
+      const result = await runAttempt();
+      current();
+      options.onStateChange?.("ready");
+      return result;
+    } catch (error) {
+      current();
+      if (!isRetryableBwsCommandError(error)) throw error;
+      if (attempt + 1 < attempts) {
+        const delay = initialRetryDelaysMs[Math.min(attempt, Math.max(0, initialRetryDelaysMs.length - 1))] ?? 1_000;
+        await pause(Math.max(0, delay));
+      }
+    }
+  }
+  options.onStateChange?.("degraded");
+  options.onWarning?.();
+  while (true) {
+    await pause(Math.max(1, backgroundRetryMs));
+    try {
+      const result = await runAttempt();
+      current();
+      options.onStateChange?.("ready");
+      return result;
+    } catch (error) {
+      current();
+      if (!isRetryableBwsCommandError(error)) throw error;
+      // A failed background attempt is expected degraded state, not a new
+      // warning. The next attempt is kept behind the same single timer.
+    }
+  }
+}
+
+export async function startAdapter(pi: ExtensionAPI, ctx: ExtensionContext, options: StartOptions): Promise<Runtime> {
   const card = await buildAgentCard(pi, ctx);
-  const apiBase = await resolveAdapterApiBase(readStringFlag(pi, "onclave-url"));
+  const explicitUrl = readStringFlag(pi, "onclave-url");
+  const hasExplicitEndpoint = explicitUrl !== undefined || process.env.ONCLAVE_API_BASE !== undefined;
+  options.onBootstrapMode?.(!hasExplicitEndpoint);
+  const apiBase = hasExplicitEndpoint
+    ? await resolveAdapterApiBase(explicitUrl, process.env, undefined, options.signal)
+    : await resolveAdapterApiBaseWithRecovery(
+      (signal) => resolveAdapterApiBase(undefined, process.env, undefined, signal),
+      { ...options.bootstrap, signal: options.signal, isCurrent: options.isCurrent, onStateChange: options.onBootstrapState, onWarning: options.onBootstrapWarning },
+    );
   const signer = await loadDefaultRequestSigner();
-  if (options.isCurrent?.() === false) throw new StaleAdapterStartError("Onclave session was replaced during initialization");
+  if (options.isCurrent?.() === false || options.signal?.aborted) throw new StaleAdapterStartError("Onclave session was replaced during initialization");
   const lifetime = new AbortController();
   const client = new OnclaveHttpClient({ apiBase, signer, signal: lifetime.signal });
   const runtime = { lifetime, card, link: undefined as unknown as HttpLink, client, apiBase, state: "disconnected" as ConnectionState, correlation: new CorrelationStore(), seen: new SeenIds(), ui: ctx.ui, sendMessage: (message: unknown, delivery: { triggerTurn: boolean; deliverAs: "followUp" }) => { if (!lifetime.signal.aborted && options.isCurrent?.() !== false) pi.sendMessage(message as never, delivery); }, aliveInstances: 0, registered: false };
-  runtime.link = new HttpLink({ retryBaseMs: 500, retryMaxMs: 15_000, onReady: (signal) => onHttpReady(runtime, options, signal), poll: (signal) => receive(runtime, options, signal), onStateChange: (state, detail) => { runtime.state = state; if (state === "disconnected") { runtime.registered = false; options.onDisconnected?.(); void options.audit("adapter_disconnect", { detail: detail ?? "" }); } refreshFooterStatus(runtime); } });
+  runtime.link = new HttpLink({ retryBaseMs: 500, retryMaxMs: 15_000, onReady: (signal) => onHttpReady(runtime, options, signal), poll: (signal) => receive(runtime, options, signal), onStateChange: (state, detail) => { runtime.state = state; if (options.isCurrent?.() === false) return; if (state === "disconnected") { runtime.registered = false; options.onDisconnected?.(); void options.audit("adapter_disconnect", { detail: detail ?? "" }); } refreshFooterStatus(runtime); } });
   runtime.link.start(); refreshFooterStatus(runtime); return runtime;
 }
 async function onHttpReady(runtime: Runtime, options: StartOptions, signal: AbortSignal): Promise<void> {
@@ -254,7 +383,7 @@ export async function submitRunReply(runtime: Runtime, messages: unknown[], audi
 }
 async function heartbeatTick(runtime: Runtime | null): Promise<void> { if (runtime === null || !runtime.registered || runtime.state !== "connected") return; await runtime.client.call({ op: "heartbeat", agent_id: runtime.card.agent_id }); await updateAliveInstances(runtime); }
 async function updateAliveInstances(runtime: Runtime): Promise<void> { const response = await runtime.client.call({ op: "list_agents" }); if (response.ok === true && Array.isArray(response.agents)) runtime.aliveInstances = (response.agents as Array<{ agent_id?: unknown; alive?: unknown }>).filter((item) => item.alive === true && item.agent_id !== runtime.card.agent_id).length; refreshFooterStatus(runtime); }
-async function shutdownAdapter(runtime: Runtime, audit: Audit): Promise<void> {
+async function shutdownAdapter(runtime: Runtime, audit: Audit, clearStatus = true): Promise<void> {
   const registered = runtime.registered;
   runtime.registered = false;
   // Stop receiving immediately; bound unregister so an unavailable API cannot hold Pi open.
@@ -270,7 +399,7 @@ async function shutdownAdapter(runtime: Runtime, audit: Audit): Promise<void> {
   finally {
     runtime.lifetime.abort();
     await stopped;
-    runtime.ui.setStatus?.(FOOTER_STATUS_KEY, undefined);
+    if (clearStatus) runtime.ui.setStatus?.(FOOTER_STATUS_KEY, undefined);
   }
 }
 function origin(card: AgentCard): A2AOrigin { return { instance_id: card.agent_id, name: card.name, host: card.host, ...(card.project === undefined ? {} : { project: card.project }) }; }
@@ -278,8 +407,24 @@ export async function buildAgentCard(pi: ExtensionAPI, ctx: ExtensionContext): P
 function sanitize(value: string): string { return value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64) || "onclave-instance"; }
 function readStringFlag(pi: ExtensionAPI, name: string): string | undefined { const value = pi.getFlag(name); return typeof value === "string" && value.length > 0 ? value : undefined; }
 function refreshFooterStatus(runtime: Pick<Runtime, "aliveInstances" | "card" | "state" | "ui">): void { const color = runtime.state === "connected" ? ANSI_GREEN : ANSI_RED; runtime.ui.setStatus?.(FOOTER_STATUS_KEY, `Onclave[${runtime.aliveInstances}]: ${color}${runtime.card.agent_id}${ANSI_RESET}`); }
+function refreshBootstrapFooter(ui: ExtensionContext["ui"], state: BootstrapState, usesBws: boolean): void {
+  if (state === "closed") { ui.setStatus?.(FOOTER_STATUS_KEY, undefined); return; }
+  const label = state === "degraded"
+    ? usesBws ? "Bitwarden degraded; retrying" : "initialization degraded"
+    : state === "ready" ? "starting"
+    : usesBws ? "Bitwarden retrying" : "starting";
+  ui.setStatus?.(FOOTER_STATUS_KEY, `Onclave: ${ANSI_RED}${label}${ANSI_RESET}`);
+}
 export { refreshFooterStatus };
-function statusText(runtime: Runtime | null): string { if (runtime === null) return "Onclave adapter is not initialized"; return `state: ${runtime.state}\ninstance_id: ${runtime.card.agent_id}\nregistered: ${runtime.registered}\ninstances alive: ${runtime.aliveInstances}`; }
+function statusText(runtime: Runtime | null, bootstrapState: BootstrapState, usesBws: boolean): string {
+  if (runtime === null) {
+    if (bootstrapState === "degraded") return usesBws ? "state: degraded\nbootstrap: Bitwarden retrying in background" : "state: degraded\nbootstrap: retrying in background";
+    if (bootstrapState === "retrying") return usesBws ? "state: starting\nbootstrap: Bitwarden retrying" : "state: starting\nbootstrap: resolving";
+    if (bootstrapState === "ready") return "state: starting\nbootstrap: ready";
+    return "Onclave adapter is not initialized";
+  }
+  return `state: ${runtime.state}\ninstance_id: ${runtime.card.agent_id}\nregistered: ${runtime.registered}\ninstances alive: ${runtime.aliveInstances}`;
+}
 function usage(value: { inputTokens?: number; outputTokens?: number } | { input_tokens: number; output_tokens: number }): { input_tokens: number; output_tokens: number } { if ("input_tokens" in value) return value; return { input_tokens: value.inputTokens ?? 0, output_tokens: value.outputTokens ?? 0 }; }
 function textResult(text: string, details: Record<string, unknown>) { return { content: [{ type: "text" as const, text }], details }; }
 
