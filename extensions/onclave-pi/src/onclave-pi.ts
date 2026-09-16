@@ -3,25 +3,23 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { Type } from "typebox";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { A2A_PROTOCOL_VERSION, createMessage, ulid, type AgentCard, type A2AOrigin, type Message, type TaskStatusEvent } from "@onclave/envelope";
+import { PROTOCOL_VERSION, ulid, type AgentCard, type ChannelMessage, type ChannelMessageKind, type ChannelSatisfaction, type TaskStatusEvent } from "@onclave/envelope";
 import { appendAdapterAuditEvent, type AdapterAuditEventName, type AdapterAuditMetadata } from "./lib/audit";
 import { isRetryableBwsCommandError, loadApiBaseFromBws, loadWorkstationS3ConfigFromBws } from "./lib/bws";
 import { HttpLink, type ConnectionState } from "./lib/connection";
 import { CorrelationStore, INBOUND_CUSTOM_TYPE, STATUS_CUSTOM_TYPE } from "./lib/correlation";
 import { SeenIds } from "./lib/dedup";
-import { handleInbound, shouldTriggerStatusTurn, type Delivered } from "./lib/delivery";
-import { buildInformDisplayText, buildMessageFraming, buildStatusFraming } from "./lib/framing";
+import { handleInbound, type Delivered } from "./lib/delivery";
+import { buildMessageDisplayText, buildMessageFraming, buildStatusFraming } from "./lib/framing";
 import { OnclaveHttpClient, resolveApiBase, type Delivery } from "./lib/http-client";
 import { loadDefaultRequestSigner } from "./lib/http-signer";
 import { resolveProjectLabel } from "./lib/project-label";
-import { runOutcome, runUsage } from "./lib/run-summary";
 import { isPiSubagent } from "./lib/subagent-eligibility";
 import { createAuthenticatedS3Client } from "@onclave/client";
 import { registerVaultTools, type NotificationAgentProvider } from "./lib/vault-tools";
 
 export { isPiSubagent, resolveApiBase };
 const MAX_MESSAGE_LENGTH = 100_000;
-const MAX_WAIT_TIMEOUT_MS = 300_000;
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const DELIVERY_WAIT_MS = 25_000;
 const BOOTSTRAP_INITIAL_ATTEMPTS = 3;
@@ -82,7 +80,6 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
   const audit: Audit = (event, metadata = {}) => appendAdapterAuditEvent(auditPath, event, metadata);
   let runtime: Runtime | null = null;
   let heartbeat: NodeJS.Timeout | null = null;
-  let runMessages: unknown[] = [];
   let generation = 0;
   let runtimeGeneration: number | undefined;
   let startupAbort: AbortController | null = null;
@@ -177,13 +174,7 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
       }
     });
   });
-  pi.on("session_shutdown", async () => { generation += 1; startupAbort?.abort(); startupAbort = null; runMessages = []; bootstrapState = "closed"; if (bootstrapUi !== undefined) refreshBootstrapFooter(bootstrapUi, bootstrapState, bootstrapUsesBws); bootstrapUi = undefined; setAdapterToolsActive(pi, false); if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; } const activeRuntime = runtime; runtime = null; runtimeGeneration = undefined; if (activeRuntime !== null) await shutdownAdapter(activeRuntime, audit); restoreExposedIdentity(); });
-  // agent_end may be followed by automatic retries. Reply only after Pi settles.
-  pi.on("agent_end", (event) => { runMessages.push(...event.messages); });
-  pi.on("agent_settled", async () => {
-    const messages = runMessages; runMessages = [];
-    if (runtime !== null) await submitRunReply(runtime, messages, audit);
-  });
+  pi.on("session_shutdown", async () => { generation += 1; startupAbort?.abort(); startupAbort = null; bootstrapState = "closed"; if (bootstrapUi !== undefined) refreshBootstrapFooter(bootstrapUi, bootstrapState, bootstrapUsesBws); bootstrapUi = undefined; setAdapterToolsActive(pi, false); if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; } const activeRuntime = runtime; runtime = null; runtimeGeneration = undefined; if (activeRuntime !== null) await shutdownAdapter(activeRuntime, audit); restoreExposedIdentity(); });
   registerAdapterTools(pi, () => runtime, audit);
   // Vault tools are schema-only at discovery time. They reuse the endpoint
   // resolved by adapter startup, including its lazy BWS fallback.
@@ -305,13 +296,17 @@ export async function startAdapter(pi: ExtensionAPI, ctx: ExtensionContext, opti
   runtime.link.start(); refreshFooterStatus(runtime); return runtime;
 }
 async function onHttpReady(runtime: Runtime, options: StartOptions, signal: AbortSignal): Promise<void> {
-  const response = await runtime.client.call({ op: "register", protocol_version: A2A_PROTOCOL_VERSION, card: runtime.card }, signal);
+  const response = await runtime.client.call({ op: "register", protocol_version: PROTOCOL_VERSION, card: runtime.card }, signal);
   if (response.ok !== true) throw new Error(`register rejected: ${String(response.error ?? "unknown")}`);
   runtime.registered = true; options.onRegistered?.(runtime.card.agent_id); await updateAliveInstances(runtime); await options.audit("adapter_register", { instance_id: runtime.card.agent_id });
 }
 async function receive(runtime: Runtime, options: StartOptions, signal: AbortSignal): Promise<void> { const delivery = await runtime.client.next(runtime.card.agent_id, DELIVERY_WAIT_MS, signal); if (delivery === undefined) return; await consume(runtime, delivery, options); }
 export async function consume(runtime: Runtime, delivery: Delivery, options: StartOptions): Promise<void> {
-  const delivered: Delivered = delivery.kind === "message" && delivery.message !== undefined ? { kind: "message", message: delivery.message } : delivery.kind === "task-status" && delivery.status !== undefined ? { kind: "task-status", status: delivery.status } : (() => { throw new Error("invalid delivery"); })();
+  const delivered: Delivered = delivery.kind === "message" && delivery.message !== undefined ? {
+    kind: "message",
+    message: delivery.message,
+    ...(delivery.satisfaction === undefined ? {} : { satisfaction: delivery.satisfaction }),
+  } : delivery.kind === "task-status" && delivery.status !== undefined ? { kind: "task-status", status: delivery.status } : (() => { throw new Error("invalid delivery"); })();
   const deps = buildDeliveryDeps(runtime, options);
   let decision: "ack" | undefined;
   try {
@@ -325,63 +320,38 @@ export async function consume(runtime: Runtime, delivery: Delivery, options: Sta
 }
 function buildDeliveryDeps(runtime: Runtime, options: StartOptions) {
   return {
-    seen: runtime.seen, correlation: runtime.correlation,
-    createTask: async (message: Message) => {
-      if (message.type === "inform") return message;
-      const response = await runtime.client.call({ op: "create_task", context_id: message.context_id, origin_instance_id: message.origin.instance_id, assignee_instance_id: runtime.card.agent_id, ...(message.task_id === undefined ? {} : { task_id: message.task_id }) });
-      if (response.ok !== true || response.task === undefined) throw new Error(`task creation failed: ${String(response.error ?? "invalid response")}`);
-      let task = response.task as { task_id?: unknown; state?: unknown };
-      if (message.task_id !== undefined && ["completed", "failed", "canceled", "rejected"].includes(String(task.state))) {
-        const followUp = await runtime.client.call({ op: "create_task", context_id: message.context_id, origin_instance_id: message.origin.instance_id, assignee_instance_id: runtime.card.agent_id, prior_task_id: message.task_id });
-        if (followUp.ok !== true || followUp.task === undefined) throw new Error(`terminal task continuation failed: ${String(followUp.error ?? "invalid response")}`);
-        task = followUp.task as { task_id?: unknown; state?: unknown };
-      }
-      return typeof task.task_id === "string" && message.task_id !== task.task_id ? { ...message, task_id: task.task_id } : message;
+    agentId: runtime.card.agent_id,
+    seen: runtime.seen,
+    correlation: runtime.correlation,
+    deliverTurn: (message: ChannelMessage) => {
+      runtime.ui.notify?.("Onclave request received", "info");
+      runtimeSend(runtime, {
+        customType: INBOUND_CUSTOM_TYPE,
+        content: buildMessageFraming(message),
+        display: true,
+        details: { messageId: message.message_id, channelId: message.channel_id, sequence: message.sequence },
+      }, true);
     },
-    markWorking: async (message: Message) => {
-      if (message.task_id === undefined) return;
-      const response = await runtime.client.call({ op: "update_task", task_id: message.task_id, state: "working", destination: message.origin.instance_id, message_id: message.message_id });
-      if (response.ok !== true && response.error !== "illegal_transition") throw new Error(`task working transition failed: ${String(response.error)}`);
+    deliverInert: (message: ChannelMessage, satisfaction?: ChannelSatisfaction) => {
+      runtimeSend(runtime, {
+        customType: "onclave-channel-message",
+        content: buildMessageDisplayText(message, satisfaction),
+        display: true,
+        details: { messageId: message.message_id, channelId: message.channel_id, sequence: message.sequence, ...(message.in_reply_to === undefined ? {} : { inReplyTo: message.in_reply_to }) },
+      }, false);
     },
-    deliverTurn: (message: Message) => { runtime.ui.notify?.("Onclave message received", "info"); runtime.correlation.registerInbound(message); runtimeSend(runtime, { customType: INBOUND_CUSTOM_TYPE, content: buildMessageFraming(message), display: true, details: { messageId: message.message_id, contextId: message.context_id, taskId: message.task_id } }, true); },
-    deliverInert: (message: Message) => runtimeSend(runtime, { customType: "onclave-inform", content: buildInformDisplayText(message), display: true, details: { messageId: message.message_id, contextId: message.context_id } }, false),
-    deliverStatus: (event: TaskStatusEvent, correlated: boolean) => { if (correlated && shouldTriggerStatusTurn(event)) runtimeSend(runtime, { customType: STATUS_CUSTOM_TYPE, content: buildStatusFraming(event), display: true, details: { eventId: event.event_id, taskId: event.task_id, contextId: event.context_id } }, true); else runtimeSend(runtime, { customType: STATUS_CUSTOM_TYPE, content: buildStatusFraming(event), display: true, details: { eventId: event.event_id, taskId: event.task_id, contextId: event.context_id } }, false); },
-    registerInbound: (message: Message) => runtime.correlation.registerInbound(message), audit: options.audit,
+    deliverStatus: (event: TaskStatusEvent) => runtimeSend(runtime, {
+      customType: STATUS_CUSTOM_TYPE,
+      content: buildStatusFraming(event),
+      display: true,
+      details: { eventId: event.event_id, taskId: event.task_id, contextId: event.context_id },
+    }, false),
+    registerInbound: (message: ChannelMessage) => runtime.correlation.registerInbound(message),
+    audit: options.audit,
   };
 }
 function runtimeSend(runtime: Runtime, message: { customType: string; content: string; display: boolean; details: Record<string, unknown> }, triggerTurn: boolean): void { runtime.sendMessage(message, { triggerTurn, deliverAs: "followUp" }); }
 
-export async function submitRunReply(runtime: Runtime, messages: unknown[], audit: Audit): Promise<void> {
-  if (!runtime.registered || runtime.state !== "connected") return;
-  // A low-level run can contain several queued follow-ups. Partition at the
-  // next incoming prompt after a response, not just the final message in a run.
-  let pending: Message[] = [];
-  let response: unknown[] = [];
-  const flush = async () => {
-    if (pending.length === 0) return;
-    const { state, body } = runOutcome(response);
-    for (const inbound of pending) {
-      runtime.lifetime.signal.throwIfAborted();
-      const reply = createMessage({ type: "inform", origin: origin(runtime.card), destination: inbound.origin.instance_id, context_id: inbound.context_id, body, trace_id: inbound.trace_id, usage: usage(runUsage(response)) });
-      if (inbound.task_id !== undefined) {
-        const status = await runtime.client.call({ op: "update_task", task_id: inbound.task_id, state, destination: inbound.origin.instance_id, message_id: inbound.message_id, body });
-        if (status.ok !== true) throw new Error(`task outcome transition failed: ${String(status.error ?? "unknown")}`);
-      }
-      await runtime.client.publish(reply);
-      runtime.correlation.completeInbound(inbound.message_id);
-      await audit("reply_published", { message_id: reply.message_id, context_id: reply.context_id });
-    }
-    pending = []; response = [];
-  };
-  for (const message of messages) {
-    const inbound = runtime.correlation.matchAgentRun([message]);
-    const role = (message as { role?: string } | null)?.role;
-    if ((inbound || role === "user") && response.some((item) => (item as { role?: string })?.role === "assistant")) await flush();
-    if (inbound) { if (!pending.some((item) => item.message_id === inbound.message_id)) pending.push(inbound); }
-    else if (pending.length) response.push(message);
-  }
-  await flush();
-}
 async function heartbeatTick(runtime: Runtime | null): Promise<void> { if (runtime === null || !runtime.registered || runtime.state !== "connected") return; await runtime.client.call({ op: "heartbeat", agent_id: runtime.card.agent_id }); await updateAliveInstances(runtime); }
 async function updateAliveInstances(runtime: Runtime): Promise<void> { const response = await runtime.client.call({ op: "list_agents" }); if (response.ok === true && Array.isArray(response.agents)) runtime.aliveInstances = (response.agents as Array<{ agent_id?: unknown; alive?: unknown }>).filter((item) => item.alive === true && item.agent_id !== runtime.card.agent_id).length; refreshFooterStatus(runtime); }
 async function shutdownAdapter(runtime: Runtime, audit: Audit, clearStatus = true): Promise<void> {
@@ -403,7 +373,6 @@ async function shutdownAdapter(runtime: Runtime, audit: Audit, clearStatus = tru
     if (clearStatus) runtime.ui.setStatus?.(FOOTER_STATUS_KEY, undefined);
   }
 }
-function origin(card: AgentCard): A2AOrigin { return { instance_id: card.agent_id, name: card.name, host: card.host, ...(card.project === undefined ? {} : { project: card.project }) }; }
 export async function buildAgentCard(pi: ExtensionAPI, ctx: ExtensionContext): Promise<AgentCard> { const project = await resolveProjectLabel(ctx.cwd || process.cwd()); const flag = readStringFlag(pi, "onclave-id"); const id = flag === undefined ? `pi-${sanitize(ctx.sessionManager.getSessionId())}` : sanitize(flag); return { agent_id: id, name: pi.getSessionName?.() ?? id, host: hostname(), project, transport: "https" }; }
 function sanitize(value: string): string { return value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 64) || "onclave-instance"; }
 function readStringFlag(pi: ExtensionAPI, name: string): string | undefined { const value = pi.getFlag(name); return typeof value === "string" && value.length > 0 ? value : undefined; }
@@ -434,15 +403,122 @@ function statusText(runtime: Runtime | null, bootstrapState: BootstrapState, use
   }
   return `state: ${runtime.state}\ninstance_id: ${runtime.card.agent_id}\nregistered: ${runtime.registered}\ninstances alive: ${runtime.aliveInstances}`;
 }
-function usage(value: { inputTokens?: number; outputTokens?: number } | { input_tokens: number; output_tokens: number }): { input_tokens: number; output_tokens: number } { if ("input_tokens" in value) return value; return { input_tokens: value.inputTokens ?? 0, output_tokens: value.outputTokens ?? 0 }; }
 function textResult(text: string, details: Record<string, unknown>) { return { content: [{ type: "text" as const, text }], details }; }
 
 function registerAdapterTools(pi: ExtensionAPI, getRuntime: RuntimeGetter, audit: Audit): void { registerInstancesTool(pi, getRuntime); registerMessageTool(pi, getRuntime, audit); }
 function registerInstancesTool(pi: ExtensionAPI, getRuntime: RuntimeGetter): void { pi.registerTool({ name: "onclave_instances", label: "Onclave Instances", description: "List live independent Pi instances with short aliases and full routing ids only for user-directed Onclave communication.", promptGuidelines: [...INSTANCES_PROMPT_GUIDELINES], parameters: Type.Object({}), async execute() { const runtime = requireRuntime(getRuntime); const response = await runtime.client.call({ op: "list_agents" }); if (response.ok !== true) throw new Error(`list_agents failed: ${String(response.error)}`); const instances = Array.isArray(response.agents) ? response.agents : []; return textResult(instances.map((item) => { const agent = item as Record<string, unknown>; const id = String(agent.agent_id); return `${shortInstanceId(id)} (${String(agent.name)}) full=${id} host=${String(agent.host)} alive=${String(agent.alive)}`; }).join("\n") || "no instances registered", { instances }); } }); }
+type MessageToolParams = {
+  kind?: unknown;
+  to?: unknown;
+  body?: unknown;
+  channel_id?: unknown;
+  response_policy?: unknown;
+  in_reply_to?: unknown;
+  schema?: unknown;
+};
+
 function registerMessageTool(pi: ExtensionAPI, getRuntime: RuntimeGetter, audit: Audit): void {
-  pi.registerTool({ name: "onclave_message", label: "Onclave Message", description: "Communicate with an independent Onclave instance by full id or short alias only for user-directed Onclave work; never use it as a Pi subagent or reviewer fallback.", promptGuidelines: [...MESSAGE_PROMPT_GUIDELINES], parameters: Type.Object({ type: Type.String({ description: "ask, request, or inform", enum: ["ask", "request", "inform"] }), to: Type.Optional(Type.String({ description: "Target instance full id or short alias. Omit only for broadcast inform." })), body: Type.String({ maxLength: MAX_MESSAGE_LENGTH }), context_id: Type.Optional(Type.String()), task_id: Type.Optional(Type.String()), timeout_ms: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_WAIT_TIMEOUT_MS })) }), async execute(_callId, params, signal) { const runtime = requireRuntime(getRuntime); const type = validateMessageParams(params); const recipients = type === "inform" && params.to === undefined ? await broadcastTargets(runtime) : [await resolveMessageTarget(runtime, params.to as string)]; const results: Array<Record<string, unknown>> = []; for (const target of recipients) { const messageId = ulid(); const message = createMessage({ messageId, trace_id: messageId, type, origin: origin(runtime.card), destination: target, context_id: params.context_id ?? (await import("@onclave/envelope")).ulid(), ...(params.task_id === undefined ? {} : { task_id: params.task_id }), body: params.body }); runtime.correlation.registerOutbound(message); try { await runtime.client.publish(message, signal); } catch (error) { runtime.correlation.forgetOutbound(message.message_id); throw error; } if (type === "inform") { await audit("inform_published", { message_id: message.message_id, to: target }); results.push({ message_id: message.message_id, context_id: message.context_id, to: target }); continue; } if (type === "request") { results.push({ message_id: message.message_id, context_id: message.context_id, to: target, published: true }); continue; } const result = await runtime.correlation.waitFor(message, params.timeout_ms ?? 30_000, signal); results.push({ message_id: message.message_id, context_id: message.context_id, to: target, result: result ?? (runtime.lifetime.signal.aborted || !runtime.registered ? "session_closed" : "timeout") }); } return textResult(`${type} published to ${recipients.length} instance${recipients.length === 1 ? "" : "s"}`, { type, messages: results }); } });
+  pi.registerTool({
+    name: "onclave_message",
+    label: "Onclave Message",
+    description: "Post an asynchronous request, response, or note to an independent Onclave channel. New messages use kind, to, and body. During an inbound request turn, respond with only body; the adapter infers the response link and destination.",
+    promptGuidelines: [...MESSAGE_PROMPT_GUIDELINES],
+    parameters: Type.Object({
+      kind: Type.Optional(Type.String({ description: "request, response, or note; omit only to respond to the active inbound request", enum: ["request", "response", "note"] })),
+      to: Type.Optional(Type.Array(Type.String({ description: "Full instance id or short alias" }), { minItems: 1 })),
+      body: Type.String({ maxLength: MAX_MESSAGE_LENGTH }),
+      channel_id: Type.Optional(Type.String({ description: "Advanced channel continuation/correlation; normally inferred" })),
+      response_policy: Type.Optional(Type.String({ description: "For group requests only: any (default) or all", enum: ["any", "all"] })),
+      in_reply_to: Type.Optional(Type.String({ description: "Advanced response correlation; inferred during an inbound request turn" })),
+      schema: Type.Optional(Type.String()),
+    }),
+    async execute(_callId, params, signal) {
+      const runtime = requireRuntime(getRuntime);
+      const active = runtime.correlation.activeInboundRequest();
+      const type = validateMessageParams(params, active !== undefined);
+      const implicitResponse = type === "response" && params.kind === undefined;
+      const draft = implicitResponse
+        ? {
+          kind: "response" as const,
+          body: params.body as string,
+          channel_id: active?.channel_id,
+          in_reply_to: active?.message_id,
+          idempotency_key: ulid(),
+        }
+        : await buildMessageDraft(runtime, params, type);
+      if (type === "response" && (draft.channel_id === undefined || draft.in_reply_to === undefined)) {
+        throw new Error("response correlation could not be inferred; provide channel_id and in_reply_to outside an active request");
+      }
+      const result = await runtime.client.postChannelMessage(draft, signal);
+      if (implicitResponse && active !== undefined) runtime.correlation.completeInbound(active.message_id);
+      await audit("channel_message_published", {
+        message_id: result.message.message_id,
+        channel_id: result.message.channel_id,
+        kind: result.message.kind,
+        recipient_count: result.message.participants.length - 1,
+      });
+      return textResult(`${type} posted to channel ${result.message.channel_id}`, {
+        message: result.message,
+        ...(result.satisfaction === undefined ? {} : { satisfaction: result.satisfaction }),
+        duplicate: result.duplicate,
+      });
+    },
+  });
 }
-export function validateMessageParams(params: { type?: unknown; to?: unknown; body?: unknown; context_id?: unknown; task_id?: unknown; timeout_ms?: unknown }): "ask" | "request" | "inform" { if (params.type !== "ask" && params.type !== "request" && params.type !== "inform") throw new Error("onclave_message.type must be ask, request, or inform"); if (typeof params.body !== "string" || params.body.length === 0 || params.body.length > MAX_MESSAGE_LENGTH) throw new Error("onclave_message.body must be a non-empty message within the size limit"); if (params.to !== undefined && (typeof params.to !== "string" || params.to.length === 0)) throw new Error("onclave_message.to must be a non-empty instance id"); if (params.type !== "inform" && params.to === undefined) throw new Error(`${params.type} requires to`); if (params.type === "inform" && (params.task_id !== undefined || params.timeout_ms !== undefined)) throw new Error("inform does not accept task_id or timeout_ms"); if (params.task_id !== undefined && typeof params.task_id !== "string") throw new Error("task_id must be a string"); if (params.context_id !== undefined && typeof params.context_id !== "string") throw new Error("context_id must be a string"); if (params.timeout_ms !== undefined && (typeof params.timeout_ms !== "number" || !Number.isSafeInteger(params.timeout_ms) || params.timeout_ms < 1 || params.timeout_ms > MAX_WAIT_TIMEOUT_MS)) throw new Error("timeout_ms is outside the allowed range"); return params.type; }
-async function resolveMessageTarget(runtime: Runtime, target: string): Promise<string> { const response = await runtime.client.call({ op: "list_agents" }); if (response.ok !== true || !Array.isArray(response.agents)) throw new Error(`list_agents failed: ${String(response.error ?? "invalid response")}`); const ids = (response.agents as Array<Record<string, unknown>>).filter((item) => item.alive === true && typeof item.agent_id === "string").map((item) => item.agent_id as string); return resolveInstanceAlias(target, ids); }
-async function broadcastTargets(runtime: Runtime): Promise<string[]> { const response = await runtime.client.call({ op: "list_agents" }); if (response.ok !== true || !Array.isArray(response.agents)) throw new Error(`list_agents failed: ${String(response.error ?? "invalid response")}`); return (response.agents as Array<Record<string, unknown>>).filter((item) => item.alive === true && typeof item.agent_id === "string" && item.agent_id !== runtime.card.agent_id && item.agent_id !== "*").map((item) => item.agent_id as string); }
+
+export function validateMessageParams(params: MessageToolParams, hasActiveInboundRequest = false): ChannelMessageKind {
+  const candidate = params as Record<string, unknown>;
+  if ("type" in candidate || "context_id" in candidate || "task_id" in candidate || "timeout_ms" in candidate) throw new Error("onclave_message uses kind, to, and body; task/context/wait fields are not supported");
+  if (typeof params.body !== "string" || params.body.length === 0 || params.body.length > MAX_MESSAGE_LENGTH) throw new Error("onclave_message.body must be a non-empty message within the size limit");
+  if (params.kind === undefined) {
+    if (!hasActiveInboundRequest) throw new Error("onclave_message.kind is required for a new request, response, or note");
+    if (params.to !== undefined || params.channel_id !== undefined || params.in_reply_to !== undefined || params.response_policy !== undefined || params.schema !== undefined) throw new Error("active request responses use only body; correlation fields are inferred");
+    return "response";
+  }
+  if (params.kind !== "request" && params.kind !== "response" && params.kind !== "note") throw new Error("onclave_message.kind must be request, response, or note");
+  if (params.to !== undefined && (!Array.isArray(params.to) || params.to.length === 0 || !params.to.every((target) => typeof target === "string" && target.length > 0) || new Set(params.to).size !== params.to.length)) throw new Error("onclave_message.to must be a non-empty list of unique instance ids or aliases");
+  if (params.kind === "request" || params.kind === "note") {
+    if (params.to === undefined) throw new Error(`${params.kind} requires to as a list of instances`);
+    if (params.in_reply_to !== undefined) throw new Error(`${params.kind} cannot use in_reply_to`);
+    if (params.kind === "note" && params.response_policy !== undefined) throw new Error("note cannot use response_policy");
+    if (params.kind === "request" && params.to.length === 1 && params.response_policy === "any") throw new Error("a single-recipient request must use response_policy all");
+  } else {
+    if (hasActiveInboundRequest) throw new Error("active request responses use only body; correlation fields are inferred");
+    if (params.to !== undefined) throw new Error("response destination is inferred from the request; do not provide to");
+    if (params.channel_id === undefined || params.in_reply_to === undefined) throw new Error("response outside an active request requires channel_id and in_reply_to");
+    if (params.response_policy !== undefined) throw new Error("response cannot use response_policy");
+  }
+  if (params.channel_id !== undefined && (typeof params.channel_id !== "string" || params.channel_id.length === 0)) throw new Error("channel_id must be a non-empty channel id");
+  if (params.in_reply_to !== undefined && (typeof params.in_reply_to !== "string" || params.in_reply_to.length === 0)) throw new Error("in_reply_to must be a non-empty message id");
+  if (params.response_policy !== undefined && params.response_policy !== "any" && params.response_policy !== "all") throw new Error("response_policy must be any or all");
+  if (params.schema !== undefined && (typeof params.schema !== "string" || params.schema.length === 0)) throw new Error("schema must be a non-empty string");
+  return params.kind;
+}
+
+async function buildMessageDraft(runtime: Runtime, params: MessageToolParams, type: ChannelMessageKind): Promise<import("./lib/http-client").ChannelMessageDraft> {
+  const targets = params.to === undefined ? undefined : await resolveMessageTargets(runtime, params.to);
+  return {
+    kind: type,
+    ...(targets === undefined ? {} : { to: targets }),
+    body: params.body as string,
+    ...(typeof params.channel_id === "string" ? { channel_id: params.channel_id } : {}),
+    ...(params.response_policy === "any" || params.response_policy === "all" ? { response_policy: params.response_policy } : {}),
+    ...(typeof params.in_reply_to === "string" ? { in_reply_to: params.in_reply_to } : {}),
+    ...(typeof params.schema === "string" ? { schema: params.schema } : {}),
+    idempotency_key: ulid(),
+  };
+}
+
+async function resolveMessageTargets(runtime: Runtime, targets: unknown): Promise<string[]> {
+  if (!Array.isArray(targets)) throw new Error("onclave_message.to must be a list of instances");
+  const response = await runtime.client.call({ op: "list_agents" });
+  if (response.ok !== true || !Array.isArray(response.agents)) throw new Error(`list_agents failed: ${String(response.error ?? "invalid response")}`);
+  const ids = (response.agents as Array<Record<string, unknown>>).filter((item) => item.alive === true && typeof item.agent_id === "string").map((item) => item.agent_id as string);
+  const resolved = targets.map((target) => {
+    if (typeof target !== "string") throw new Error("onclave_message.to must contain strings");
+    return resolveInstanceAlias(target, ids);
+  });
+  if (new Set(resolved).size !== resolved.length) throw new Error("onclave_message.to must resolve to unique full instance ids");
+  return resolved;
+}
 function requireRuntime(getRuntime: RuntimeGetter): Runtime { const runtime = getRuntime(); if (runtime === null || !runtime.registered || runtime.state !== "connected") throw new Error("Onclave is not connected; use /onclave for status."); return runtime; }

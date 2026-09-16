@@ -262,28 +262,27 @@ describe("Onclave Pi T2 adapter", () => {
     onclavePi(registered.pi as never);
     const message = registered.tools.find((tool) => tool.name === "onclave_message");
     const serialized = JSON.stringify(message?.parameters);
-    expect(serialized).toContain("ask");
     expect(serialized).toContain("request");
-    expect(serialized).toContain("inform");
+    expect(serialized).toContain("response");
+    expect(serialized).toContain("note");
     expect(serialized).not.toContain("oneOf");
     expect(serialized).not.toContain("delegat");
     expect(serialized).not.toContain("performative");
   });
 
   it.each([
-    [{ type: "inform", body: "notice", timeout_ms: 10 }, "inform does not accept"],
-    [{ type: "inform", body: "notice", task_id: "task" }, "inform does not accept"],
-    [{ type: "ask", body: "question" }, "ask requires to"],
-    [{ type: "request", body: "work" }, "request requires to"],
-    [{ type: "request", to: "peer", body: "work", timeout_ms: 0 }, "timeout_ms"],
-  ] as const)("rejects invalid conditional arguments before publication", (params, error) => {
+    [{ kind: "request", body: "work" }, "request requires to"],
+    [{ kind: "note", to: ["peer"], response_policy: "all", body: "notice" }, "note"],
+    [{ kind: "response", body: "answer" }, "outside an active request"],
+    [{ body: "answer" }, "kind is required"],
+  ] as const)("rejects invalid channel arguments before publication", (params, error) => {
     expect(() => validateMessageParams(params)).toThrow(error);
   });
 
-  it("accepts direct and broadcast forms for all applicable fields", () => {
-    expect(validateMessageParams({ type: "ask", to: "peer", body: "question", timeout_ms: 100 })).toBe("ask");
-    expect(validateMessageParams({ type: "request", to: "peer", body: "work", context_id: "context", task_id: "task" })).toBe("request");
-    expect(validateMessageParams({ type: "inform", to: "peer", body: "notice" })).toBe("inform");
-    expect(validateMessageParams({ type: "inform", body: "notice" })).toBe("inform");
+  it("accepts direct, group, note, and active response forms", () => {
+    expect(validateMessageParams({ kind: "request", to: ["peer"], body: "question" })).toBe("request");
+    expect(validateMessageParams({ kind: "request", to: ["peer", "other"], response_policy: "all", body: "work" })).toBe("request");
+    expect(validateMessageParams({ kind: "note", to: ["peer"], body: "notice" })).toBe("note");
+    expect(validateMessageParams({ body: "answer" }, true)).toBe("response");
   });
 });

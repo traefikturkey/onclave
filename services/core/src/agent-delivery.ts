@@ -2,16 +2,17 @@ import { randomUUID } from "node:crypto";
 import type { Channel, ConsumeMessage } from "amqplib";
 import {
   agentQueueName,
-  fromA2AMessage,
+  fromChannelMessage,
   fromA2ATaskStatus,
-  type Message,
+  type ChannelMessage,
+  type ChannelSatisfaction,
   type TaskStatusEvent,
 } from "@onclave/envelope";
 
 export const DEFAULT_DELIVERY_LEASE_MS = 30_000;
 
 export type DeliveredA2AItem =
-  | { kind: "message"; message: Message }
+  | { kind: "message"; message: ChannelMessage; satisfaction?: ChannelSatisfaction }
   | { kind: "task-status"; status: TaskStatusEvent };
 
 export type DeliveredAgentMessage = DeliveredA2AItem & {
@@ -107,23 +108,28 @@ export class AgentDeliveryService {
           this.requeue(channel, message);
           return;
         }
-        const kind = message.properties.headers?.["x-onclave-a2a-kind"];
-        if (kind === "message") {
-          const parsed = fromA2AMessage(message);
+        const channelKind = message.properties.headers?.["x-onclave-channel-kind"];
+        const taskKind = message.properties.headers?.["x-onclave-a2a-kind"];
+        if (channelKind === "message") {
+          const parsed = fromChannelMessage(message);
           if (!parsed.ok) {
             this.reject(channel, message);
             return;
           }
-          settle(this.claim(channel, message, keyId, { kind, message: parsed.message }));
+          settle(this.claim(channel, message, keyId, {
+            kind: "message",
+            message: parsed.message,
+            ...(parsed.satisfaction === undefined ? {} : { satisfaction: parsed.satisfaction }),
+          }));
           return;
         }
-        if (kind === "task-status") {
+        if (taskKind === "task-status") {
           const parsed = fromA2ATaskStatus(message);
           if (!parsed.ok) {
             this.reject(channel, message);
             return;
           }
-          settle(this.claim(channel, message, keyId, { kind, status: parsed.event }));
+          settle(this.claim(channel, message, keyId, { kind: "task-status", status: parsed.event }));
           return;
         }
         this.reject(channel, message);

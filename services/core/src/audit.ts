@@ -12,8 +12,8 @@ export type AuditEventName =
   | "dead_letter_received"
   | "dead_letter_unparseable"
   | "dead_letter_advisory_sent"
-  | "a2a_status_routed"
-  | "a2a_budget_blocked"
+  | "channel_message_posted"
+  | "task_status_routed"
   | "rpc_rejected"
   | "trust_loaded";
 

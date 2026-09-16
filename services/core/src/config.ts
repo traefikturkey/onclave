@@ -8,6 +8,7 @@ export type CoreConfig = {
   dataDir: string;
   registryPath: string;
   a2aStatePath?: string;
+  channelStatePath?: string;
   auditPath: string;
   trustDir: string;
   queueTtlMs: number;
@@ -45,6 +46,7 @@ export function loadCoreConfig(env: NodeJS.ProcessEnv = process.env): CoreConfig
     dataDir,
     registryPath: join(dataDir, "registry.json"),
     a2aStatePath: join(dataDir, "a2a-state-v1.json"),
+    channelStatePath: join(dataDir, "channels-state-v2.json"),
     auditPath: join(dataDir, "audit.jsonl"),
     trustDir: join(dataDir, "trust"),
     queueTtlMs: parseIntEnv(env.ONCLAVE_QUEUE_TTL_MS, 86400000, "queue ttl"),

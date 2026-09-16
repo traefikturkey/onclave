@@ -11,15 +11,7 @@ export type AdapterAuditEventName =
   | "message_delivered_turn"
   | "message_delivered_inert"
   | "message_deduplicated"
-  | "message_rejected"
-  | "message_disposition_failed"
-  | "message_budget_blocked"
-  | "remote_confirm_prompted"
-  | "remote_confirm_declined"
-  | "reply_published"
-  | "reply_received"
-  | "correlation_miss"
-  | "inform_published"
+  | "channel_message_published"
   | "task_status_delivered";
 
 export type AdapterAuditMetadata = Record<string, unknown>;

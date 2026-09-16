@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it } from "vitest";
 import type { Channel, ConsumeMessage } from "amqplib";
-import { agentQueueName, createMessage, toA2AMessagePublish, type A2AOrigin, type Message } from "@onclave/envelope";
+import { agentQueueName, createChannelMessage, toChannelMessagePublish, type A2AOrigin, type ChannelMessage } from "@onclave/envelope";
 import { AgentDeliveryService } from "../src/agent-delivery";
 
 const card = {
@@ -47,8 +47,8 @@ class FakeChannel extends EventEmitter {
     this.queued.set(queue, messages);
   }
 
-  enqueue(agentId: string, item: Message): void {
-    const spec = toA2AMessagePublish(item);
+  enqueue(agentId: string, item: ChannelMessage): void {
+    const spec = toChannelMessagePublish(item, agentId);
     const queue = agentQueueName(agentId);
     const message = {
       content: spec.content,
@@ -69,13 +69,13 @@ class FakeChannel extends EventEmitter {
   }
 }
 
-function message(): Message {
-  const origin: A2AOrigin = { instance_id: card.agent_id, name: card.name, host: card.host };
-  return createMessage({
-    context_id: "01J00000000000000000000000",
-    type: "request",
+function message(): ChannelMessage {
+  const origin: A2AOrigin = { instance_id: "origin-a", name: "Origin A", host: "origin-host" };
+  return createChannelMessage({
+    channel_id: "01J00000000000000000000000",
+    kind: "note",
     origin,
-    destination: card.agent_id,
+    participants: [origin.instance_id, card.agent_id],
     body: "hello",
   });
 }

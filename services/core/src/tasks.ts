@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import {
-  A2A_PROTOCOL_VERSION,
+  TASK_PROTOCOL_VERSION,
   createTask,
   createTaskStatusEvent,
   isTerminalTaskState,
@@ -46,7 +46,7 @@ export class TaskStore {
     let parsed: unknown;
     try { parsed = JSON.parse(await readFile(this.options.path, "utf8")); } catch { return { contexts: 0, tasks: 0, events: 0 }; }
     if (!isPersistedState(parsed)) throw new Error("invalid A2A state file");
-    if (parsed.protocol_version !== A2A_PROTOCOL_VERSION) throw new Error("protocol_version_mismatch");
+    if (parsed.protocol_version !== TASK_PROTOCOL_VERSION) throw new Error("protocol_version_mismatch");
     for (const context of parsed.contexts) this.contexts.set(context.context_id, context);
     for (const task of parsed.tasks) this.tasks.set(task.task_id, task);
     for (const event of parsed.events) this.events.set(event.event_id, event);
@@ -54,7 +54,7 @@ export class TaskStore {
   }
 
   private async persist(): Promise<void> {
-    const state: PersistedState = { protocol_version: A2A_PROTOCOL_VERSION, contexts: [...this.contexts.values()], tasks: [...this.tasks.values()], events: [...this.events.values()] };
+    const state: PersistedState = { protocol_version: TASK_PROTOCOL_VERSION, contexts: [...this.contexts.values()], tasks: [...this.tasks.values()], events: [...this.events.values()] };
     await atomicWriteJson(this.options.path, state, 0o600);
   }
 

@@ -1,15 +1,9 @@
-import type { Message } from "@onclave/envelope";
-
 export type DeliveryDomain = "message" | "task-status";
 
 export type DeliveryRecord = {
   domain: DeliveryDomain;
   id: string;
-  prepared?: Message;
-  correlationApplied: boolean;
-  correlated?: boolean;
   registered: boolean;
-  workingMarked: boolean;
   piDelivered: boolean;
   auditAttempted: boolean;
   completed: boolean;
@@ -36,8 +30,8 @@ export class SeenIds {
     this.makeRoom();
     if (this.records.size >= this.maxEntries) throw new Error("Onclave delivery deduplication capacity is exhausted");
     const record: DeliveryRecord = {
-      domain, id, correlationApplied: false, registered: false,
-      workingMarked: false, piDelivered: false, auditAttempted: false,
+      domain, id, registered: false,
+      piDelivered: false, auditAttempted: false,
       completed: false, active: false,
     };
     this.records.set(key, record);

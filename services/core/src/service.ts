@@ -1,5 +1,5 @@
 import { mkdir } from "node:fs/promises";
-import { createMessage, ulid } from "@onclave/envelope";
+import { ChannelStore } from "./channel-store";
 import type { Server } from "node:http";
 import { AgentDeliveryService } from "./agent-delivery";
 import { startBroker, type BrokerClient } from "./broker";
@@ -16,8 +16,7 @@ import { createVaultService, type VaultService } from "./vault/vault-service";
 import { JOB_TERMINAL_NOTIFICATION_SCHEMA, type JobNotificationSchema } from "./vault/jobs";
 import { log } from "./log";
 import { Registry } from "./registry";
-import { coreOrigin } from "./core-origin";
-import { publishMessage, startRpcServer, type CoreServices } from "./rpc";
+import { postCoreChannelMessage, startRpcServer, type CoreServices } from "./rpc";
 import { loadTrustEntries } from "./trust";
 import { RECOMMENDATION_REQUEST_SCHEMA } from "./vault/recommendation-contract";
 
@@ -46,13 +45,17 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
     path: config.a2aStatePath ?? `${config.dataDir}/a2a-state-v1.json`,
     limits: { maxTotalTokens: config.budgetLimits.maxTotalTokens },
   });
+  const channels = new ChannelStore({
+    path: config.channelStatePath ?? `${config.dataDir}/channels-state-v2.json`,
+  });
   const audit = (event: AuditEventName, metadata: AuditMetadata = {}) =>
     appendAuditEvent(config.auditPath, event, metadata);
 
-  const services: CoreServices = { config, registry, tasks, audit };
+  const services: CoreServices = { config, registry, tasks, channels, audit };
 
   const restoredAgents = await registry.load();
   const restoredTasks = await tasks.load();
+  const restoredChannels = await channels.load();
   const trustEntries = await loadTrustEntries(config.trustDir);
   await audit("trust_loaded", { entries: trustEntries.length });
   log("info", "core.state_loaded", {
@@ -60,6 +63,9 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
     a2aContexts: restoredTasks.contexts,
     a2aTasks: restoredTasks.tasks,
     a2aEvents: restoredTasks.events,
+    channelCount: restoredChannels.channels,
+    channelMessages: restoredChannels.messages,
+    channelRequests: restoredChannels.requests,
     trustEntries: trustEntries.length,
   });
 
@@ -87,10 +93,12 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
           const channel = broker.channel();
           if (channel === undefined) throw new Error("Broker unavailable");
           const messageSchema: JobNotificationSchema = schema ?? (requestTurn ? RECOMMENDATION_REQUEST_SCHEMA : JOB_TERMINAL_NOTIFICATION_SCHEMA);
-          publishMessage(channel, createMessage({
-            type: requestTurn ? "ask" : "inform", origin: coreOrigin(), destination: agentId, context_id: ulid(), body,
+          await postCoreChannelMessage(services, channel, {
+            kind: requestTurn ? "request" : "note",
+            to: [agentId],
+            body,
             schema: messageSchema,
-          }));
+          });
         },
       });
       healthServer = createVaultHttpServer({

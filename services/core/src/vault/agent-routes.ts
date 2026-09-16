@@ -1,9 +1,9 @@
 import type { Channel } from "amqplib";
-import { parseMessage, parseRpcRequest } from "@onclave/envelope";
+import { parseRpcRequest } from "@onclave/envelope";
 import { AgentDeliveryService, type DeliveryDisposition } from "../agent-delivery";
 import { AgentKeyMismatchError } from "../registry";
 import type { CoreServices } from "../rpc";
-import { handleRpcRequest, publishMessage } from "../rpc";
+import { handleRpcRequest } from "../rpc";
 import { HttpError } from "./errors";
 import { jsonResponse, rawResponse, type VaultHandlers } from "./http";
 
@@ -75,13 +75,6 @@ function requireExistingAgentKey(services: CoreServices, agentId: string, keyId:
   }
 }
 
-function requireAuthorizedA2AOrigin(services: CoreServices, origin: { instance_id: string; name: string; host: string; project?: string }, keyId: string): void {
-  const agent = services.registry.get(origin.instance_id);
-  if (agent === undefined) throw new HttpError(404, "Agent not found");
-  if (agent.key_id !== keyId) throw new HttpError(403, "Agent is bound to a different key");
-  if (agent.name !== origin.name || agent.host !== origin.host || agent.project !== origin.project) throw new HttpError(403, "Message origin does not match registered instance");
-}
-
 function brokerChannel(deps: AgentRouteDependencies): Channel {
   const channel = deps.channel();
   if (channel === undefined) throw new HttpError(503, "Broker unavailable");
@@ -92,6 +85,13 @@ function disposition(body: JsonObject): DeliveryDisposition {
   const value = body.disposition;
   if (value === "ack" || value === "reject") return value;
   throw bodyValidationError("disposition must be 'ack' or 'reject'");
+}
+
+function channelPostError(error: unknown): HttpError | undefined {
+  if (!(error instanceof Error)) return undefined;
+  if (error.message === "response refers to an unknown request") return new HttpError(404, error.message);
+  if (/^(a single-recipient|channel message|channel_id|channel request|note |participants |request |response )/.test(error.message)) return bodyValidationError(error.message);
+  return undefined;
 }
 
 /** Builds the signed HTTPS agent transport handlers. */
@@ -106,6 +106,8 @@ export function createAgentRouteHandlers(deps: AgentRouteDependencies): VaultHan
         requireExistingAgentKey(deps.services, parsed.request.card.agent_id, keyId);
       } else if (parsed.request.op === "heartbeat" || parsed.request.op === "unregister") {
         requireKnownAgentKey(deps.services, parsed.request.agent_id, keyId);
+      } else if (parsed.request.op === "post_channel_message") {
+        requireKnownAgentKey(deps.services, parsed.request.sender_instance_id, keyId);
       }
 
       try {
@@ -114,19 +116,34 @@ export function createAgentRouteHandlers(deps: AgentRouteDependencies): VaultHan
         if (error instanceof AgentKeyMismatchError) {
           throw new HttpError(403, error.message);
         }
+        const mapped = channelPostError(error);
+        if (mapped !== undefined) throw mapped;
         throw error;
       }
     },
-    agentsMessages: (request) => {
+    agentsMessages: async (request) => {
       const keyId = requestKeyId(request.keyId);
+      const sender = deps.services.registry.findByKeyId(keyId);
+      if (sender === undefined) throw new HttpError(403, "Signing key is not registered to an agent");
       const body = parseJsonObject(request.body);
-      const message = parseMessage(body);
-      if (message.ok) {
-        requireAuthorizedA2AOrigin(deps.services, message.value.origin, keyId);
-        publishMessage(brokerChannel(deps), message.value);
-        return jsonResponse({ ok: true, message_id: message.value.message_id }, 202);
+      const parsed = parseRpcRequest({ ...body, op: "post_channel_message", sender_instance_id: sender.agent_id });
+      if (!parsed.ok) throw bodyValidationError(parsed.error);
+      if (parsed.request.op !== "post_channel_message") throw bodyValidationError("invalid channel post");
+      let result: object;
+      try {
+        result = await handleRpcRequest(deps.services, brokerChannel(deps), parsed.request, keyId);
+      } catch (error) {
+        const mapped = channelPostError(error);
+        if (mapped !== undefined) throw mapped;
+        throw error;
       }
-      throw bodyValidationError(`message is not a supported A2A message: ${message.error}`);
+      const response = result as JsonObject;
+      if (response.ok !== true) {
+        const error = String(response.error ?? "channel post failed");
+        if (error === "unknown_participant" || error === "unknown_channel" || error === "unknown_request") throw new HttpError(404, error);
+        throw new HttpError(422, error);
+      }
+      return jsonResponse(result, 202);
     },
     agentsMessagesNext: async (request) => {
       const keyId = requestKeyId(request.keyId);
@@ -139,7 +156,7 @@ export function createAgentRouteHandlers(deps: AgentRouteDependencies): VaultHan
         throw new HttpError(503, "Broker unavailable");
       }
       if (delivered === undefined) return rawResponse("", undefined, 204);
-      return jsonResponse({ delivery_id: delivered.deliveryId, kind: delivered.kind, ...(delivered.kind === "message" ? { message: delivered.message } : { status: delivered.status }) });
+      return jsonResponse({ delivery_id: delivered.deliveryId, kind: delivered.kind, ...(delivered.kind === "message" ? { message: delivered.message, ...(delivered.satisfaction === undefined ? {} : { satisfaction: delivered.satisfaction }) } : { status: delivered.status }) });
     },
     agentsMessageDisposition: (request) => {
       const keyId = requestKeyId(request.keyId);

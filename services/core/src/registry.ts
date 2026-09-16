@@ -116,6 +116,10 @@ export class Registry {
     return this.agents.get(agentId);
   }
 
+  findByKeyId(keyId: string): RegisteredAgent | undefined {
+    return [...this.agents.values()].find((agent) => agent.key_id === keyId);
+  }
+
   isAlive(agent: RegisteredAgent): boolean {
     const age = this.now().getTime() - Date.parse(agent.heartbeat_at);
     return age <= this.options.staleMs;
