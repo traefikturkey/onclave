@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import onclavePi, { buildAgentCard, isPiSubagent, setAdapterToolsActive, validateMessageParams } from "../src/onclave-pi";
+import onclavePi, { buildAgentCard, isPiSubagent, refreshFooterStatus, resolveInstanceAlias, setAdapterToolsActive, shortInstanceId, validateMessageParams } from "../src/onclave-pi";
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({ getAgentDir: () => ".test-profile" }));
 vi.mock("../src/lib/audit", () => ({ appendAdapterAuditEvent: vi.fn(async () => undefined) }));
@@ -27,14 +27,39 @@ describe("Onclave Pi T2 adapter", () => {
     delete process.env.PI_SUBAGENT_TREE_RUN_ID;
   });
 
-  it("derives a compact six-character instance id from the Pi session", async () => {
+  it("uses the complete Pi session id as the default instance id", async () => {
     const registered = fakePi();
     registered.pi.getFlag.mockReturnValue(undefined);
-    const card = await buildAgentCard(registered.pi as never, {
+    const first = await buildAgentCard(registered.pi as never, {
       cwd: process.cwd(),
-      sessionManager: { getSessionId: () => "01a08233-adcb-rest" },
+      sessionManager: { getSessionId: () => "01a0a580-130b-7565-92e2-6d9fbd2747d2" },
     } as never);
-    expect(card.agent_id).toBe("pi-01a082");
+    const second = await buildAgentCard(registered.pi as never, {
+      cwd: process.cwd(),
+      sessionManager: { getSessionId: () => "01a0a580-1ecd-701e-8b32-4e1409003ce5" },
+    } as never);
+    expect(first.agent_id).toBe("pi-01a0a580-130b-7565-92e2-6d9fbd2747d2");
+    expect(second.agent_id).toBe("pi-01a0a580-1ecd-701e-8b32-4e1409003ce5");
+    expect(second.agent_id).not.toBe(first.agent_id);
+  });
+
+  it("presents and resolves a short alias without shortening the routing identity", () => {
+    const full = "pi-01a0a580-130b-7565-92e2-6d9fbd2747d2";
+    expect(shortInstanceId(full)).toBe("pi-6d9fbd27");
+    expect(resolveInstanceAlias("pi-6d9fbd27", [full])).toBe(full);
+    expect(resolveInstanceAlias(full, [full])).toBe(full);
+
+    const setStatus = vi.fn();
+    refreshFooterStatus({ aliveInstances: 2, card: { agent_id: full }, state: "connected", ui: { setStatus } } as never);
+    expect(setStatus).toHaveBeenCalledWith("onclave-v2", expect.stringContaining("pi-6d9fbd27"));
+    expect(setStatus.mock.calls[0]?.[1]).not.toContain(full);
+  });
+
+  it("rejects an ambiguous short alias", () => {
+    expect(() => resolveInstanceAlias("pi-6d9fbd27", [
+      "pi-01a0a580-130b-7565-92e2-6d9fbd2747d2",
+      "pi-01a0a581-2222-3333-4444-6d9fbd27aaaa",
+    ])).toThrow("ambiguous");
   });
 
   it("registers the adapter without calling runtime actions during extension loading", () => {
