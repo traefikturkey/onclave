@@ -35,9 +35,39 @@ function normalizeApiBase(value: string): URL {
   return parsed;
 }
 
+function formatDetail(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    const entries = value.flatMap((entry): string[] => {
+      if (typeof entry === "string") return [entry];
+      if (!record(entry)) return [];
+      const message = typeof entry.msg === "string"
+        ? entry.msg
+        : typeof entry.message === "string" ? entry.message : undefined;
+      if (message === undefined) return [];
+      const location = Array.isArray(entry.loc)
+        ? entry.loc.filter((part): part is string | number => typeof part === "string" || typeof part === "number").map(String).join(".")
+        : "";
+      const rule = typeof entry.type === "string" ? ` [${entry.type}]` : "";
+      return [`${location === "" ? "" : `${location}: `}${message}${rule}`];
+    });
+    return entries.length === 0 ? undefined : entries.join("; ");
+  }
+  if (record(value)) {
+    const message = typeof value.msg === "string"
+      ? value.msg
+      : typeof value.message === "string" ? value.message : undefined;
+    return message;
+  }
+  return undefined;
+}
+
 function errorFor(status: number, body: string): Error {
   let detail: string | undefined;
-  try { const parsed: unknown = JSON.parse(body); if (record(parsed) && typeof parsed.detail === "string") detail = parsed.detail; } catch { /* public error only */ }
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (record(parsed)) detail = formatDetail(parsed.detail);
+  } catch { /* public error only */ }
   return new Error(`Onclave API request failed (${status})${detail === undefined ? "" : `: ${detail}`}`);
 }
 

@@ -1,9 +1,9 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it, vi } from "vitest";
 import type { Channel as AmqpChannel } from "amqplib";
-import { CHANNEL_PROTOCOL_VERSION, type AgentCard, ulid } from "@onclave/envelope";
+import { CHANNEL_PROTOCOL_VERSION, LEGACY_CHANNEL_PROTOCOL_VERSION, type AgentCard, ulid } from "@onclave/envelope";
 import { ChannelStore } from "../src/channel-store";
 import { handleRpcRequest } from "../src/rpc";
 import { Registry } from "../src/registry";
@@ -114,6 +114,62 @@ describe("ChannelStore", () => {
     }
   });
 
+  it("migrates validated protocol-v2 state and persists protocol-v3 without losing history", async () => {
+    const { dir, path } = await fixture();
+    try {
+      const source = new ChannelStore({ path });
+      const request = await source.post({ origin: originA, kind: "request", to: ["pi-b"], body: "restore me" });
+      await source.post({ origin: originB, kind: "note", to: ["pi-a"], body: "historical note" });
+      const current = JSON.parse(await readFile(path, "utf8")) as {
+        protocol_version: number;
+        channels: Array<{ protocol_version: number; messages: Array<{ protocol_version: number }>; requests: Array<{ protocol_version: number }> }>;
+      };
+      const legacy = {
+        ...current,
+        protocol_version: LEGACY_CHANNEL_PROTOCOL_VERSION,
+        channels: current.channels.map((channel) => ({
+          ...channel,
+          protocol_version: LEGACY_CHANNEL_PROTOCOL_VERSION,
+          messages: channel.messages.map((message) => ({ ...message, protocol_version: LEGACY_CHANNEL_PROTOCOL_VERSION })),
+          requests: channel.requests.map((requestState) => ({ ...requestState, protocol_version: LEGACY_CHANNEL_PROTOCOL_VERSION })),
+        })),
+      };
+      await writeFile(path, JSON.stringify(legacy), "utf8");
+
+      const restored = new ChannelStore({ path });
+      expect(await restored.load()).toEqual({ channels: 1, messages: 2, requests: 1 });
+      expect(restored.listMessages(request.message.channel_id).map((message) => message.body)).toEqual(["restore me", "historical note"]);
+      const persisted = JSON.parse(await readFile(path, "utf8")) as typeof current;
+      expect(persisted.protocol_version).toBe(CHANNEL_PROTOCOL_VERSION);
+      expect(persisted.channels[0]?.protocol_version).toBe(CHANNEL_PROTOCOL_VERSION);
+      expect(persisted.channels[0]?.messages.every((message) => message.protocol_version === CHANNEL_PROTOCOL_VERSION)).toBe(true);
+      expect(persisted.channels[0]?.requests.every((requestState) => requestState.protocol_version === CHANNEL_PROTOCOL_VERSION)).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects protocol-v2 state containing the new notification kind", async () => {
+    const { dir, path } = await fixture();
+    try {
+      const source = new ChannelStore({ path });
+      await source.post({ origin: originA, kind: "note", to: ["pi-b"], body: "legacy" });
+      const current = JSON.parse(await readFile(path, "utf8")) as { channels: Array<{ messages: Array<Record<string, unknown>> }> };
+      const legacy = {
+        protocol_version: LEGACY_CHANNEL_PROTOCOL_VERSION,
+        channels: current.channels.map((channel) => ({
+          ...channel,
+          protocol_version: LEGACY_CHANNEL_PROTOCOL_VERSION,
+          messages: channel.messages.map((message) => ({ ...message, protocol_version: LEGACY_CHANNEL_PROTOCOL_VERSION, kind: "notification" })),
+        })),
+      };
+      await writeFile(path, JSON.stringify(legacy), "utf8");
+      await expect(new ChannelStore({ path }).load()).rejects.toThrow("invalid channel state file");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("persists canonical state and restores sequence and response linkage", async () => {
     const { dir, path } = await fixture();
     try {
@@ -136,6 +192,21 @@ describe("ChannelStore", () => {
 });
 
 describe("channel RPC aggregate boundary", () => {
+  it("rejects protocol-v2 live registrations after the channel version bump", async () => {
+    const { dir } = await fixture();
+    try {
+      const { services } = await registeredServices(dir);
+      const response = await handleRpcRequest(services, fakeChannel(), {
+        op: "register",
+        protocol_version: LEGACY_CHANNEL_PROTOCOL_VERSION,
+        card: { agent_id: "new-agent", name: "New Agent", host: "host-new", transport: "amqp" },
+      });
+      expect(response).toEqual({ ok: false, error: "protocol_version_mismatch", expected: CHANNEL_PROTOCOL_VERSION });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("authenticates participants, persists before fan-out, and fans out to durable mailboxes", async () => {
     const { dir } = await fixture();
     try {

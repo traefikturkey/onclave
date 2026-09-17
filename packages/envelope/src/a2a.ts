@@ -5,10 +5,11 @@ import { isUlid, ulid } from "./ulid";
  * protocol described point-to-point task messages; it must not be accepted by
  * a channel-aware core or adapter.
  */
-export const CHANNEL_PROTOCOL_VERSION = 2;
+export const CHANNEL_PROTOCOL_VERSION = 3;
+export const LEGACY_CHANNEL_PROTOCOL_VERSION = 2;
 export const TASK_PROTOCOL_VERSION = 1;
 
-export const CHANNEL_MESSAGE_KINDS = ["request", "response", "note"] as const;
+export const CHANNEL_MESSAGE_KINDS = ["request", "response", "note", "notification"] as const;
 export type ChannelMessageKind = (typeof CHANNEL_MESSAGE_KINDS)[number];
 
 export const RESPONSE_POLICIES = ["any", "all"] as const;
@@ -254,8 +255,13 @@ export function parseChannelMessage(value: unknown): ParseResult<ChannelMessage>
   } else if (value.kind === "response") {
     if (!isUlid(value.in_reply_to)) return { ok: false, error: "response requires in_reply_to" };
     if (value.response_requested_from !== undefined || value.response_policy !== undefined) return { ok: false, error: "response cannot carry response expectation" };
-  } else if (value.response_requested_from !== undefined || value.response_policy !== undefined || value.in_reply_to !== undefined) {
+  } else if (value.kind === "note" && (value.response_requested_from !== undefined || value.response_policy !== undefined || value.in_reply_to !== undefined)) {
     return { ok: false, error: "note cannot carry response expectation or in_reply_to" };
+  } else if (value.kind === "notification") {
+    if (!candidateParticipants.some((id) => id !== candidateOrigin.instance_id)) return { ok: false, error: "notification requires at least one recipient" };
+    if (value.response_requested_from !== undefined || value.response_policy !== undefined || value.in_reply_to !== undefined) {
+      return { ok: false, error: "notification cannot carry response expectation or in_reply_to" };
+    }
   }
   return { ok: true, value: value as ChannelMessage };
 }
@@ -279,7 +285,8 @@ export type CreateChannelMessageInput = {
 export function createChannelMessage(input: CreateChannelMessageInput): ChannelMessage {
   if (input.kind === "request" && input.in_reply_to !== undefined) throw new Error("request cannot carry in_reply_to");
   if (input.kind === "response" && (input.response_requested_from !== undefined || input.response_policy !== undefined)) throw new Error("response cannot carry response expectation");
-  if (input.kind === "note" && (input.response_requested_from !== undefined || input.response_policy !== undefined || input.in_reply_to !== undefined)) throw new Error("note cannot carry response expectation or in_reply_to");
+  if ((input.kind === "note" || input.kind === "notification") && (input.response_requested_from !== undefined || input.response_policy !== undefined || input.in_reply_to !== undefined)) throw new Error(`${input.kind} cannot carry response expectation or in_reply_to`);
+  if (input.kind === "notification" && !input.participants.some((id) => id !== input.origin.instance_id)) throw new Error("notification requires at least one recipient");
   const responders = input.kind === "request"
     ? resolveResponseExpectation(input.response_requested_from ?? input.participants.filter((id) => id !== input.origin.instance_id), input.response_policy)
     : undefined;

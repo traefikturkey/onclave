@@ -21,7 +21,7 @@ process and are not Onclave instances.
 
 ## Asynchronous channel model
 
-Channel messages use `protocol_version: 2` and one envelope:
+Channel messages use `protocol_version: 3` and one envelope:
 
 ```ts
 type ChannelMessage = {
@@ -29,7 +29,7 @@ type ChannelMessage = {
   channel_id: string;
   message_id: string;
   sequence: number;
-  kind: "request" | "response" | "note";
+  kind: "request" | "response" | "note" | "notification";
   origin: A2AOrigin;
   participants: string[];
   body: string;
@@ -57,6 +57,11 @@ The semantic kinds are:
   request relationship and counts each named responder once. Unexpected or
   duplicate responses remain channel history but do not satisfy the request.
 - `note` carries information only and has no response expectation.
+- `notification` is a one-way, turn-triggering callback from a trusted Onclave
+  application service. It names explicit recipients and may carry `channel_id`
+  and `schema`, but never response expectation or `in_reply_to`. Only Core
+  service code may publish it; it is not available to the model-facing
+  `onclave_message` tool.
 
 Every accepted event is persisted before the post is acknowledged and is fanned
 out through the existing durable `agent.<full-instance-id>` mailboxes. RabbitMQ
@@ -88,9 +93,13 @@ identity, origin metadata, IDs, timestamps, sequence, task IDs, trace IDs, or
 broker routing details.
 
 A request starts a Pi turn only at instances named as responders. Other channel
-participants receive a display notification. Responses and notes are delivered
-as display-only events and never automatically trigger another model turn. The
-only model-originated channel publication is an explicit `onclave_message` call;
+participants receive a display notification. Responses and notes remain
+display-only and never automatically trigger another model turn. A service
+`notification` starts exactly one follow-up Pi turn, is framed as untrusted
+input, expects no response, and must not cause `onclave_message` to be called.
+Delivery remains at-least-once with message-ID deduplication; notification
+handling creates no request-satisfaction or inbound-correlation state. The only
+model-originated channel publication is an explicit `onclave_message` call;
 settled assistant text is never silently published.
 
 ## Independent tasks
@@ -162,7 +171,8 @@ instance. Its model-facing tools are:
 - `onclave_instances`, which lists live registered instances, short aliases,
   full routing IDs, and liveness evidence;
 - `onclave_message`, which explicitly posts a `request`, `response`, or `note`
-  using the forms described above.
+  using the forms described above. It cannot originate service-only
+  `notification` messages.
 
 Tool validation rejects task, context, timeout, and retired message fields
 before publication. `onclave_message` is intended for user-directed
@@ -174,7 +184,7 @@ registered instance to its signing key; it does not grant peer content
 operator authority. On the protected VLAN/tailnet, requests are accepted
 without routine host confirmation or host allowlist setup. `/onclave` reports
 registration, connection, identity, and live peers. The footer uses the
-`onclave-v2` status key.
+`onclave-v3` status key.
 
 The dotfiles integration loads the same adapter through
 `pi/profiles/default/extensions/onclave-pi.ts` and the existing loader. Both use
@@ -199,10 +209,11 @@ delivered here.
 
 ## Protocol break
 
-Protocol v2 is intentionally incompatible with the retired point-to-point
-communication surface. Core and adapters must be upgraded together; mixed
-versions are rejected explicitly. No compatibility translation or live broker
-cutover is delivered by this repository change.
+Protocol v3 is intentionally incompatible with the retired point-to-point
+communication surface and with live protocol-v2 traffic. Core and adapters must
+be upgraded together; mixed versions are rejected explicitly. Existing valid
+persisted v2 channel state is migrated and retained as v3 state; no live wire
+translation or broker cutover is delivered by this repository change.
 
 ## Documentation
 

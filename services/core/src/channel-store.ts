@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import {
   CHANNEL_PROTOCOL_VERSION,
+  LEGACY_CHANNEL_PROTOCOL_VERSION,
   createChannelMessage,
   isChannelMessageKind,
   isResponsePolicy,
@@ -90,13 +91,19 @@ export class ChannelStore {
     } catch {
       return { channels: 0, messages: 0, requests: 0 };
     }
-    if (!isPersistedState(parsed)) throw new Error("invalid channel state file");
-    if (parsed.protocol_version !== CHANNEL_PROTOCOL_VERSION) throw new Error("protocol_version_mismatch");
+    const migration = parsedIsLegacyState(parsed)
+      ? migratePersistedState(parsed, this.maxMessages, this.maxRequests)
+      : undefined;
+    const state = migration ?? (isPersistedState(parsed) ? parsed : undefined);
+    if (state === undefined) {
+      if (isRecord(parsed) && parsed.protocol_version !== CHANNEL_PROTOCOL_VERSION && parsed.protocol_version !== LEGACY_CHANNEL_PROTOCOL_VERSION) throw new Error("protocol_version_mismatch");
+      throw new Error("invalid channel state file");
+    }
     this.channels.clear();
     this.byParticipants.clear();
     this.messageIds.clear();
     this.idempotency.clear();
-    for (const channel of parsed.channels) {
+    for (const channel of state.channels) {
       if (this.channels.has(channel.channel_id)) throw new Error("duplicate channel id");
       const key = participantKey(channel.participants);
       if (this.byParticipants.has(key)) throw new Error("duplicate channel participant set");
@@ -105,6 +112,7 @@ export class ChannelStore {
       for (const message of channel.messages) this.messageIds.set(message.message_id, { channelId: channel.channel_id, message });
       for (const entry of channel.idempotency_keys) this.idempotency.set(entry.key, entry.message_id);
     }
+    if (migration !== undefined) await this.persist();
     return {
       channels: this.channels.size,
       messages: [...this.channels.values()].reduce((total, channel) => total + channel.messages.length, 0),
@@ -463,12 +471,35 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function isPersistedState(value: unknown): value is PersistedState {
+function parsedIsLegacyState(value: unknown): value is { protocol_version: number; channels: unknown[] } {
+  return isRecord(value) && value.protocol_version === LEGACY_CHANNEL_PROTOCOL_VERSION && Array.isArray(value.channels);
+}
+
+function migratePersistedState(value: unknown, maxMessages: number, maxRequests: number): PersistedState | undefined {
+  if (!parsedIsLegacyState(value)) return undefined;
+  const channels: Record<string, unknown>[] = [];
+  for (const candidate of value.channels) {
+    if (!isRecord(candidate) || !Array.isArray(candidate.messages) || !Array.isArray(candidate.requests) || !Array.isArray(candidate.idempotency_keys)) return undefined;
+    if (candidate.messages.length > maxMessages || candidate.requests.length > maxRequests || candidate.idempotency_keys.length > maxMessages) return undefined;
+    if (candidate.messages.some((message) => isRecord(message) && message.kind === "notification")) return undefined;
+    channels.push({
+      ...candidate,
+      protocol_version: CHANNEL_PROTOCOL_VERSION,
+      messages: candidate.messages.map((message) => isRecord(message) ? { ...message, protocol_version: CHANNEL_PROTOCOL_VERSION } : message),
+      requests: candidate.requests.map((request) => isRecord(request) ? { ...request, protocol_version: CHANNEL_PROTOCOL_VERSION } : request),
+    });
+  }
+  const migrated: unknown = { protocol_version: CHANNEL_PROTOCOL_VERSION, channels };
+  return isPersistedState(migrated, maxMessages, maxRequests) ? migrated : undefined;
+}
+
+function isPersistedState(value: unknown, maxMessages?: number, maxRequests?: number): value is PersistedState {
   if (!isRecord(value) || value.protocol_version !== CHANNEL_PROTOCOL_VERSION || !Array.isArray(value.channels)) return false;
   const channelIds = new Set<string>();
   const messageIds = new Set<string>();
+  const requestIds = new Set<string>();
   for (const candidate of value.channels) {
-    if (!isRecord(candidate) || candidate.protocol_version !== CHANNEL_PROTOCOL_VERSION || !isUlid(candidate.channel_id) || !Array.isArray(candidate.participants) || !candidate.participants.every((id) => typeof id === "string" && id.length > 0) || !Number.isSafeInteger(candidate.next_sequence) || (candidate.next_sequence as number) < 1 || typeof candidate.created_at !== "string" || Number.isNaN(Date.parse(candidate.created_at)) || typeof candidate.updated_at !== "string" || Number.isNaN(Date.parse(candidate.updated_at)) || candidate.open !== true || !Array.isArray(candidate.messages) || !Array.isArray(candidate.requests) || !Array.isArray(candidate.idempotency_keys)) return false;
+    if (!isRecord(candidate) || candidate.protocol_version !== CHANNEL_PROTOCOL_VERSION || !isUlid(candidate.channel_id) || !Array.isArray(candidate.participants) || !candidate.participants.every((id) => typeof id === "string" && id.length > 0) || !Number.isSafeInteger(candidate.next_sequence) || (candidate.next_sequence as number) < 1 || typeof candidate.created_at !== "string" || Number.isNaN(Date.parse(candidate.created_at)) || typeof candidate.updated_at !== "string" || Number.isNaN(Date.parse(candidate.updated_at)) || candidate.open !== true || !Array.isArray(candidate.messages) || (maxMessages !== undefined && candidate.messages.length > maxMessages) || !Array.isArray(candidate.requests) || (maxRequests !== undefined && candidate.requests.length > maxRequests) || !Array.isArray(candidate.idempotency_keys) || (maxMessages !== undefined && candidate.idempotency_keys.length > maxMessages)) return false;
     let normalizedParticipants: string[];
     try {
       normalizedParticipants = normalizeParticipants(candidate.participants as string[]);
@@ -491,6 +522,8 @@ function isPersistedState(value: unknown): value is PersistedState {
       const parsed = parseChannelRequestState(rawRequest);
       if (!parsed.ok) return false;
       const request = parsed.value;
+      if (requestIds.has(request.request_message_id)) return false;
+      requestIds.add(request.request_message_id);
       const requestMessage = channel.messages.find((message) => message.message_id === request.request_message_id);
       if (request.channel_id !== channel.channel_id || !channel.participants.includes(request.origin_instance_id) || request.response_requested_from.some((id) => !channel.participants.includes(id))) return false;
       if (requestMessage !== undefined && (requestMessage.kind !== "request" || requestMessage.origin.instance_id !== request.origin_instance_id || requestMessage.response_policy !== request.response_policy || !sameSet(requestMessage.response_requested_from ?? [], request.response_requested_from))) return false;
