@@ -5,8 +5,8 @@ const theme = {
   bg: (_name: string, value: string) => value,
 } as never;
 
-function rendered(component: { render: (width: number) => string[] }): string {
-  return component.render(120).join("\n").trim();
+function rendered(component: { render: (width: number) => string[] }, width = 120): string {
+  return component.render(width).map((line) => line.trimEnd()).join("\n").trim();
 }
 
 describe("Onclave TUI presentation", () => {
@@ -17,6 +17,47 @@ describe("Onclave TUI presentation", () => {
     expect(collapsed).toBe("Onclave from Alice [pi-a] on host host-a\nhello from Alice");
     expect(collapsed).not.toContain("Channel:");
     expect(rendered(renderInboundMessage({ content: framed }, { expanded: false }, theme))).toContain("hello from Alice");
+  });
+
+  it("summarizes terminal envelopes when collapsed but preserves the raw envelope when expanded", () => {
+    const envelope = JSON.stringify({
+      schema: "onclave.job.terminal.v1",
+      version: 1,
+      event: "job_terminal",
+      job_id: "job-1234567890",
+      content_id: "content-abcdef",
+      status: "failed",
+      started_at: "2026-01-02T03:04:05.000Z",
+      finished_at: "2026-01-02T03:05:06.000Z",
+      duration_seconds: 61,
+      summary: "OCR completed for the uploaded document; the final indexing stage failed.",
+      trust: "untrusted_data",
+      output: "a large terminal payload that should not be dumped into the collapsed view",
+    });
+    const content = framed.replace("hello from Alice", envelope);
+    const collapsed = inboundCollapsedText({ content });
+    expect(collapsed).toContain("Job terminal: failed · job job-1234567890 · content content-abcdef");
+    expect(collapsed).toContain("OCR completed for the uploaded document");
+    expect(collapsed).not.toContain("onclave.job.terminal.v1");
+    expect(collapsed).not.toContain("2026-01-02T03:04:05.000Z");
+    expect(collapsed).not.toContain("large terminal payload");
+
+    const expanded = rendered(renderInboundMessage({ content }, { expanded: true }, theme), 1000);
+    expect(expanded).toBe(content);
+    expect(expanded).toContain(envelope);
+  });
+
+  it("leaves malformed and non-terminal bodies unchanged", () => {
+    const malformed = framed.replace("hello from Alice", "{not json}");
+    expect(inboundCollapsedText({ content: malformed })).toContain("{not json}");
+    const unknown = framed.replace("hello from Alice", JSON.stringify({ schema: "other.v1", timestamp: "2026-01-02T03:04:05.000Z" }));
+    expect(inboundCollapsedText({ content: unknown })).toContain('"schema":"other.v1"');
+  });
+
+  it("requires the matching framing marker before extracting a body", () => {
+    const mismatched = framed.replace("end Onclave notification content marker", "end Onclave different marker");
+    expect(inboundCollapsedText({ content: mismatched })).toContain("hello from Alice");
+    expect(inboundCollapsedText({ content: mismatched })).toContain("----- end Onclave different marker -----");
   });
 
   it("keeps the original inbound framing when expanded", () => {
