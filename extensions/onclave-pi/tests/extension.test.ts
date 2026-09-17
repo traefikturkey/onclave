@@ -9,7 +9,7 @@ function fakePi() {
   const tools: Tool[] = [];
   let activeTools = ["read", "onclave_instances", "onclave_message", "onclave_vault_search", "onclave_vault_content", "onclave_vault_ingest", "onclave_vault_jobs"];
   const pi = {
-    registerFlag: vi.fn(), on: vi.fn(), registerCommand: vi.fn(), registerTool: (tool: Tool) => tools.push(tool), getFlag: vi.fn(), sendMessage: vi.fn(),
+    registerFlag: vi.fn(), on: vi.fn(), registerCommand: vi.fn(), registerMessageRenderer: vi.fn(), registerTool: (tool: Tool) => tools.push(tool), getFlag: vi.fn(), sendMessage: vi.fn(),
     getActiveTools: vi.fn(() => [...activeTools]),
     setActiveTools: vi.fn((names: string[]) => { activeTools = [...names]; }),
   };

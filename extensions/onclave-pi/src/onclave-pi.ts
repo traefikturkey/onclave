@@ -17,6 +17,7 @@ import { resolveProjectLabel } from "./lib/project-label";
 import { isPiSubagent } from "./lib/subagent-eligibility";
 import { createAuthenticatedS3Client } from "@onclave/client";
 import { registerVaultTools, type NotificationAgentProvider } from "./lib/vault-tools";
+import { registerPresentation } from "./lib/presentation";
 
 export { isPiSubagent, resolveApiBase };
 const MAX_MESSAGE_LENGTH = 100_000;
@@ -176,6 +177,7 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
   });
   pi.on("session_shutdown", async () => { generation += 1; startupAbort?.abort(); startupAbort = null; bootstrapState = "closed"; if (bootstrapUi !== undefined) refreshBootstrapFooter(bootstrapUi, bootstrapState, bootstrapUsesBws); bootstrapUi = undefined; setAdapterToolsActive(pi, false); if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; } const activeRuntime = runtime; runtime = null; runtimeGeneration = undefined; if (activeRuntime !== null) await shutdownAdapter(activeRuntime, audit); restoreExposedIdentity(); });
   registerAdapterTools(pi, () => runtime, audit);
+  registerPresentation(pi);
   // Vault tools are schema-only at discovery time. They reuse the endpoint
   // resolved by adapter startup, including its lazy BWS fallback.
   const notifyAgentId: NotificationAgentProvider = () => {

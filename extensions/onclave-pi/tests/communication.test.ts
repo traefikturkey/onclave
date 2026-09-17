@@ -142,6 +142,7 @@ describe("onclave_message tool boundary", () => {
       setActiveTools() {},
       on: (name: string, handler: (...args: unknown[]) => unknown) => { hooks.set(name, handler); },
       registerTool: (tool: { name: string; execute: (...args: unknown[]) => Promise<unknown> }) => tools.push(tool),
+      registerMessageRenderer() {},
       registerCommand() {},
       sendMessage: vi.fn(),
     };
@@ -162,7 +163,7 @@ describe("onclave_message tool boundary", () => {
     const pi = {
       registerFlag() {}, getFlag: vi.fn(), getSessionName: () => "B", getActiveTools: () => [], setActiveTools() {},
       on: (name: string, handler: (...args: unknown[]) => unknown) => { hooks.set(name, handler); },
-      registerTool: (tool: { name: string; execute: (...args: unknown[]) => Promise<unknown> }) => tools.push(tool), registerCommand() {}, sendMessage: vi.fn(),
+      registerTool: (tool: { name: string; execute: (...args: unknown[]) => Promise<unknown> }) => tools.push(tool), registerMessageRenderer() {}, registerCommand() {}, sendMessage: vi.fn(),
     };
     onclavePi(pi as never, { startAdapter: async () => rt });
     hooks.get("session_start")?.({}, { ui: { notify: vi.fn() } });

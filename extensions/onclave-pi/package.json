@@ -8,6 +8,7 @@
     "@onclave/client": "workspace:*"
   },
   "devDependencies": {
+    "@earendil-works/pi-tui": "^0.85.0",
     "vitest": "^3.2.4"
   },
   "scripts": {
@@ -16,6 +17,7 @@
   "peerDependencies": {
     "@earendil-works/pi-ai": "^0.85.0",
     "@earendil-works/pi-coding-agent": "^0.85.0",
+    "@earendil-works/pi-tui": "^0.85.0",
     "typebox": "*"
   },
   "pi": {
