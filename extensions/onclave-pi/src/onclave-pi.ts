@@ -324,10 +324,11 @@ function buildDeliveryDeps(runtime: Runtime, options: StartOptions) {
     seen: runtime.seen,
     correlation: runtime.correlation,
     deliverTurn: (message: ChannelMessage) => {
-      runtime.ui.notify?.("Onclave request received", "info");
+      const notification = message.kind === "notification";
+      runtime.ui.notify?.(notification ? "Onclave notification received" : "Onclave request received", "info");
       runtimeSend(runtime, {
         customType: INBOUND_CUSTOM_TYPE,
-        content: buildMessageFraming(message),
+        content: buildMessageFraming(message, !notification),
         display: true,
         details: { messageId: message.message_id, channelId: message.channel_id, sequence: message.sequence },
       }, true);

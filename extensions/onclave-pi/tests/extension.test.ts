@@ -265,6 +265,7 @@ describe("Onclave Pi T2 adapter", () => {
     expect(serialized).toContain("request");
     expect(serialized).toContain("response");
     expect(serialized).toContain("note");
+    expect(serialized).not.toContain("notification");
     expect(serialized).not.toContain("oneOf");
     expect(serialized).not.toContain("delegat");
     expect(serialized).not.toContain("performative");
@@ -272,6 +273,7 @@ describe("Onclave Pi T2 adapter", () => {
 
   it.each([
     [{ kind: "request", body: "work" }, "request requires to"],
+    [{ kind: "notification", to: ["peer"], body: "callback" }, "must be request, response, or note"],
     [{ kind: "note", to: ["peer"], response_policy: "all", body: "notice" }, "note"],
     [{ kind: "response", body: "answer" }, "outside an active request"],
     [{ body: "answer" }, "kind is required"],

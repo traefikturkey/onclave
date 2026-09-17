@@ -40,6 +40,17 @@ describe("Onclave HTTP channel boundary", () => {
     expect(delivery).toEqual({ deliveryId: "delivery", kind: "task-status", status: event });
   });
 
+  it("renders structured validation details in HTTP errors", async () => {
+    const fetchFn = vi.fn(async () => Response.json({ detail: [
+      { type: "missing", loc: ["body", "notify_agent_id"], msg: "Field required", input: { secret: "must-not-leak" } },
+      { type: "value_error", loc: ["body", "schema"], msg: "Unsupported schema" },
+    ] }, { status: 422 }));
+    await expect(client(fetchFn).postChannelMessage({ kind: "request", to: ["receiver"], body: "check" }))
+      .rejects.toThrow("Onclave API request failed (422): body.notify_agent_id: Field required [missing]; body.schema: Unsupported schema [value_error]");
+    await expect(client(fetchFn).postChannelMessage({ kind: "request", to: ["receiver"], body: "check" }))
+      .rejects.not.toThrow("must-not-leak");
+  });
+
   it("rejects incompatible or malformed deliveries before handling them", async () => {
     const message = createChannelMessage({ channel_id: ulid(), kind: "note", origin: { instance_id: "origin", name: "Origin", host: "host" }, participants: ["origin", "receiver"], body: "done" });
     const fetchFn = vi.fn(async () => Response.json({ delivery_id: "delivery", kind: "message", message: { ...message, protocol_version: 1 } }));

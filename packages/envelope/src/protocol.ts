@@ -136,10 +136,11 @@ export function parseChannelPostRequest(record: JsonRecord): RpcParseResult {
   if ("task_id" in record || "context_id" in record || "timeout_ms" in record) return { ok: false, error: "channel messages do not accept task_id, context_id, or timeout_ms" };
 
   if (record.kind === "request" && !parseStringList(record.to)) return { ok: false, error: "request requires to as a non-empty list" };
-  if (record.kind === "note" && !parseStringList(record.to)) return { ok: false, error: "note requires to as a non-empty list" };
+  if ((record.kind === "note" || record.kind === "notification") && !parseStringList(record.to)) return { ok: false, error: `${String(record.kind)} requires to as a non-empty list` };
   if (record.kind === "request" && record.in_reply_to !== undefined) return { ok: false, error: "request cannot carry in_reply_to" };
   if (record.kind === "request" && parseStringList(record.to) && record.to.length === 1 && record.response_policy === "any") return { ok: false, error: "a single-recipient request must use response_policy all" };
   if (record.kind === "note" && (record.in_reply_to !== undefined || record.response_policy !== undefined)) return { ok: false, error: "note cannot carry response correlation or policy" };
+  if (record.kind === "notification" && (record.in_reply_to !== undefined || record.response_policy !== undefined)) return { ok: false, error: "notification cannot carry response correlation or policy" };
   if (record.kind === "response" && record.in_reply_to === undefined) return { ok: false, error: "response requires in_reply_to outside an active request" };
   if (record.kind === "response" && record.channel_id === undefined) return { ok: false, error: "response requires channel_id and in_reply_to outside an active request" };
   if (record.kind === "response" && record.to !== undefined) return { ok: false, error: "response destination is inferred from the request" };

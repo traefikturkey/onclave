@@ -63,6 +63,23 @@ describe("asynchronous channel delivery", () => {
     expect(client.dispose).toHaveBeenLastCalledWith("request", "ack");
   });
 
+  it("delivers notifications as one-way turns without inbound correlation", async () => {
+    const { rt, send, ui } = runtime();
+    const notification = createChannelMessage({
+      channel_id: channelId,
+      kind: "notification",
+      origin: agentA,
+      participants: [agentA.instance_id, agentB.instance_id],
+      body: "vault job completed",
+    });
+    await consume(rt, { deliveryId: "notification", kind: "message", message: notification }, { audit });
+    await consume(rt, { deliveryId: "notification", kind: "message", message: notification }, { audit });
+    expect(send).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({ customType: INBOUND_CUSTOM_TYPE, content: expect.stringContaining("do not call onclave_message") }), { triggerTurn: true, deliverAs: "followUp" });
+    expect(rt.correlation.inFlightCount()).toBe(0);
+    expect(ui.notify).toHaveBeenCalledWith("Onclave notification received", "info");
+  });
+
   it("displays non-responders, notes, and responses without starting turns", async () => {
     const { rt, send } = runtime();
     const group = request(["pi-c"]);

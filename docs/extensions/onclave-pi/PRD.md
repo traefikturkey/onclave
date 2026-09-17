@@ -20,7 +20,7 @@ adapter, or complete A2A server is delivered.
 
 ## Channel contract
 
-Channel messages use the incompatible protocol version 2 and the shared
+Channel messages use the incompatible protocol version 3 and the shared
 `ChannelMessage` envelope:
 
 ```ts
@@ -29,7 +29,7 @@ type ChannelMessage = {
   channel_id: string;
   message_id: string;
   sequence: number;
-  kind: "request" | "response" | "note";
+  kind: "request" | "response" | "note" | "notification";
   origin: A2AOrigin;
   participants: string[];
   body: string;
@@ -68,6 +68,17 @@ unread cursor, deadline, cancellation workflow, or synchronous wait.
   history but do not satisfy another participant's obligation.
 - **`note`** carries information only. It has no response expectation or
   response policy.
+- **`notification`** is a one-way, turn-triggering terminal callback from a
+  trusted Onclave application service. It requires explicit recipients and may
+  carry `channel_id` and `schema`, but cannot carry response expectation or
+  `in_reply_to`. Core service code may publish it; the model-facing adapter
+  tool cannot.
+
+Vault terminal notifications use schema `onclave.job.terminal.v1` and carry
+`version`, `event: "job_terminal"`, `job_id`, `content_id`, terminal `status`,
+optional timing and `summary`, and `trust: "untrusted_data"`. Completed and
+failed asynchronous work uses this callback path; it does not ask the Pi to
+reply through Onclave.
 
 The core persists accepted events before acknowledging a post, assigns a
 monotonic per-channel sequence, and fans the canonical event out to each
@@ -78,7 +89,9 @@ message-ID deduplication and delivery leases preserve safe retry behavior.
 
 ## Model-facing interface
 
-The adapter registers exactly two model-facing tools:
+The adapter registers exactly two model-facing tools. Notifications are
+service-only deliveries and are deliberately absent from the outbound tool
+schema.
 
 - **`onclave_instances`** has an empty parameter object and lists live
   registered independent instances with short aliases and full routing IDs.
@@ -120,12 +133,16 @@ execution, or autonomous workload distribution. Subagents must not use Onclave.
 ## Delivery and activation
 
 A request starts a Pi turn only for instances named in
-`response_requested_from`. Other participants receive a display notification.
-A response is displayed to channel participants without automatically starting
-another model turn or sending a network response. A note is display-only and
-never starts a turn. Thus explicit `onclave_message` execution is the only
-model-originated channel publication; arbitrary settled assistant text is not
-published automatically.
+`response_requested_from`; the active request context preserves the existing
+response behavior. Other participants receive a display notification. A
+response is displayed to channel participants without automatically starting
+another model turn or sending a network response. A note remains display-only
+and never starts a turn. A service notification starts one follow-up Pi turn,
+is framed as untrusted data, explicitly expects no response, and does not
+register inbound correlation. Message-ID deduplication prevents a completed
+delivery from starting a second turn. Thus explicit `onclave_message` execution
+remains the only model-originated channel publication; arbitrary settled
+assistant text is not published automatically.
 
 Inbound peer bodies are framed as untrusted data with sender, channel,
 sequence, and participant context. Peer content does not carry operator
@@ -155,10 +172,12 @@ this milestone.
 
 ## Protocol break and non-goals
 
-Protocol v2 is an explicit incompatible boundary. Core and adapters must be
-upgraded together, and mismatched versions are rejected rather than translated.
-The retired point-to-point communication vocabulary and automatic reply
-behavior are not active interfaces.
+Protocol v3 is an explicit incompatible boundary. Core and adapters must be
+upgraded together, and mismatched live versions are rejected rather than
+translated. Valid persisted v2 channel state is migrated to v3 without losing
+history; new wire traffic and persisted state use v3. The retired
+point-to-point communication vocabulary and automatic reply behavior are not
+active interfaces.
 
 Non-goals are:
 
@@ -173,14 +192,16 @@ Non-goals are:
 
 Maintainers should be able to trace from code and tests:
 
-1. the v2 envelope and `request`/`response`/`note` rules;
+1. the v3 envelope and `request`/`response`/`note`/`notification` rules,
+   including service-only publication and one-way notification delivery;
 2. one-recipient `all`, group `any`, explicit group `all`, and persisted
    satisfaction;
 3. exact participant-set channel reuse, core-assigned sequence, persistence,
    authentication, fan-out, offline delivery, leases, and deduplication;
 4. the two-tool adapter schema, alias resolution, active-response inference,
    and no hidden assistant-text publication;
-5. request turn activation versus inert response/note delivery;
+5. request turn activation, one-way notification turns, and inert
+   response/note delivery;
 6. independent task APIs and their separation from channels; and
 7. untrusted-peer framing, authority boundaries, and explicit version rejection.
 

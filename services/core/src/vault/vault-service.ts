@@ -8,7 +8,7 @@ import { KeyStore as FileKeyStore } from "./keys";
 import { createConfiguredLlmProvider, providerName, type UsageReportingLlmProvider } from "./llm-providers";
 import { MeteringLLMProvider, type LlmUsageStorage } from "./llm-metering";
 import { LLMPricingService, type PricingSnapshotStorage } from "./llm-pricing";
-import { PipelineOrchestrator, type JobNotificationSchema, type JobStorage } from "./jobs";
+import { PipelineOrchestrator, type JobNotificationDelivery, type JobStorage } from "./jobs";
 import { UnifiedPipeline, type PipelineStorage } from "./pipeline";
 import { SearchService, type SearchStorage } from "./search";
 import { PostgresRepository, S3Storage } from "./storage";
@@ -65,7 +65,7 @@ export type VaultServiceOverrides = {
   embeddingReindexer?: VaultEmbeddingReindexer;
   readiness?: VaultReadinessChecks;
   close?: () => Promise<void>;
-  notify?: (agentId: string, body: string, requestTurn: boolean, schema?: JobNotificationSchema) => Promise<void>;
+  notify?: (agentId: string, delivery: JobNotificationDelivery) => Promise<void>;
 };
 
 function errorValue(error: unknown): string {

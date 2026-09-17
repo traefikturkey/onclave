@@ -13,12 +13,11 @@ import { HttpError } from "./vault/errors";
 import { createAgentRouteHandlers } from "./vault/agent-routes";
 import { createVaultRouteHandlers } from "./vault/routes";
 import { createVaultService, type VaultService } from "./vault/vault-service";
-import { JOB_TERMINAL_NOTIFICATION_SCHEMA, type JobNotificationSchema } from "./vault/jobs";
+import type { JobNotificationDelivery } from "./vault/jobs";
 import { log } from "./log";
 import { Registry } from "./registry";
 import { postCoreChannelMessage, startRpcServer, type CoreServices } from "./rpc";
 import { loadTrustEntries } from "./trust";
-import { RECOMMENDATION_REQUEST_SCHEMA } from "./vault/recommendation-contract";
 
 export type CoreRuntime = {
   config: CoreConfig;
@@ -89,15 +88,15 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
     } else {
       const vaultConfig = config.vault;
       vault = await createVaultService(vaultConfig, {
-        notify: async (agentId, body, requestTurn, schema) => {
+        notify: async (agentId, delivery: JobNotificationDelivery) => {
           const channel = broker.channel();
           if (channel === undefined) throw new Error("Broker unavailable");
-          const messageSchema: JobNotificationSchema = schema ?? (requestTurn ? RECOMMENDATION_REQUEST_SCHEMA : JOB_TERMINAL_NOTIFICATION_SCHEMA);
           await postCoreChannelMessage(services, channel, {
-            kind: requestTurn ? "request" : "note",
+            kind: delivery.kind,
             to: [agentId],
-            body,
-            schema: messageSchema,
+            body: delivery.body,
+            schema: delivery.schema,
+            idempotency_key: delivery.idempotency_key,
           });
         },
       });

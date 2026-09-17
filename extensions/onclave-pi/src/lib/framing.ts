@@ -37,6 +37,14 @@ function content(message: ChannelMessage, label: string): string[] {
 }
 
 export function buildMessageFraming(message: ChannelMessage, responseExpected = true): string {
+  if (message.kind === "notification") {
+    return [
+      "Onclave inbound notification from an independent service.",
+      ...common(message),
+      "This is a one-way delivery. No response is expected from this instance; do not call onclave_message for this delivery.",
+      ...content(message, "notification content"),
+    ].join("\n");
+  }
   if (message.kind === "request") {
     return [
       "Onclave inbound request from an independent instance.",

@@ -43,10 +43,13 @@ export async function handleInbound(deps: DeliveryDeps, delivered: Delivered): P
         state: delivered.status.state,
       });
     } else {
+      const isNotification = delivered.message.kind === "notification";
       const respondsToThisInstance = delivered.message.kind === "request"
         && delivered.message.response_requested_from?.includes(deps.agentId) === true;
-      if (respondsToThisInstance) {
-        if (!record.registered) {
+      if (isNotification || respondsToThisInstance) {
+        // Notifications are one-way service callbacks. They start a turn but
+        // never create the session-owned response context used by requests.
+        if (respondsToThisInstance && !record.registered) {
           deps.registerInbound(delivered.message);
           record.registered = true;
         }

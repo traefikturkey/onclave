@@ -16,8 +16,8 @@ deployed or merged into another checkout.
 
 ## Delivered channel behavior
 
-- `ChannelMessage` uses protocol version 2 and semantic kinds `request`,
-  `response`, and `note`.
+- `ChannelMessage` uses protocol version 3 and semantic kinds `request`,
+  `response`, `note`, and service-only `notification`.
 - The core creates or reuses an open channel for the exact normalized
   participant set, assigns channel/message IDs and monotonic sequence numbers,
   persists before acknowledgement, and restores bounded state on restart.
@@ -25,7 +25,8 @@ deployed or merged into another checkout.
   defaults to `any`; a group may explicitly require `all`.
 - Responses link to a known request. Named responders count once, and objective
   `open`/`satisfied` state is persisted. Unexpected or repeated responses stay
-  in history without satisfying the request.
+  in history without satisfying the request. Notifications carry no response
+  expectation and create no request-satisfaction state.
 - Full instance IDs remain routing identities. The adapter resolves short
   aliases before publication. RabbitMQ continues using durable
   `agent.<full-instance-id>` mailboxes and application-owned fan-out rather
@@ -43,10 +44,14 @@ request link, and destination. Explicit response correlation is an advanced
 outside-turn path.
 
 Only named request responders receive a turn trigger. Other participants,
-responses, notes, and independent task-status events are display-only. There
-is no synchronous outbound wait, automatic response loop, or automatic
-publication of settled assistant text. The session-owned correlation store is
-only active inbound-request context and is cleared on reload/shutdown.
+responses, notes, and independent task-status events are display-only. Trusted
+Onclave services may publish terminal `notification` messages; each notification
+is delivered as one untrusted, one-way follow-up turn, never registers inbound
+correlation, and expects no `onclave_message` response. Completed delivery is
+message-ID deduplicated. There is no synchronous outbound wait, automatic
+response loop, or automatic publication of settled assistant text. The
+session-owned correlation store is only active inbound-request context and is
+cleared on reload/shutdown.
 
 ## Independent task boundary
 
@@ -57,16 +62,13 @@ remain independent of request satisfaction.
 
 ## Validation state
 
-The latest focused offline run passed 9 test files and 56 tests, together with
-`pnpm run typecheck`. The full offline unit run passed 32 test files and 265
-tests, with one pre-existing skipped test. The focused suites cover envelope and
-protocol validation, AMQP mapping, channel persistence and satisfaction,
-delivery leases, adapter activation and deduplication, alias/tool validation,
-HTTP parsing, and session lifecycle. Broker-backed integration and live
-multi-instance Pi behavior remain separate acceptance limits; broker
-integration requires the documented RabbitMQ prerequisite. The integration
-configuration was run offline: 2 tests passed and 1 RabbitMQ-dependent test was
-skipped because `ONCLAVE_TEST_AMQP_URL` was unavailable.
+A focused notification/protocol offline run passed 6 test files and 55 tests,
+together with `pnpm run typecheck`. The focused suites cover envelope and
+protocol validation, vault terminal publication, notification delivery without
+correlation, adapter activation and deduplication, and framing. The broader
+offline unit run and broker-backed integration remain separate acceptance
+checks; broker integration requires the documented RabbitMQ prerequisite. No
+live multi-instance Pi behavior, deployment, or broker cutover is claimed.
 
 Run the bounded checks from the module root with:
 
@@ -78,8 +80,9 @@ pnpm exec vitest run --config vitest.integration.config.ts
 
 ## Protocol and deployment status
 
-Protocol v2 is an explicit incompatible boundary. Core and adapters must be
-upgraded together; mismatched versions are rejected and no translation layer is
-provided. No live deployment or broker cutover has occurred. The implementation
+Protocol v3 is an explicit incompatible boundary. Core and adapters must be
+upgraded together; mismatched live versions are rejected and no translation
+layer is provided. Valid persisted v2 channel state is migrated without history
+loss. No live deployment or broker cutover has occurred. The implementation
 branch is `task/asynchronous-channel-messaging`; integration and commit status
 are intentionally pending the authorized closeout workflow.

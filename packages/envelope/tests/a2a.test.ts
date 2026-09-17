@@ -57,11 +57,14 @@ describe("asynchronous channel contract", () => {
     const request = message("request");
     const response = createChannelMessage({ channel_id: channelId, kind: "response", origin: { instance_id: "instance-b", name: "B", host: "host-b" }, participants: request.participants, in_reply_to: request.message_id, body: "healthy" });
     const note = createChannelMessage({ channel_id: channelId, kind: "note", origin, participants: request.participants, body: "deployment completed" });
+    const notification = createChannelMessage({ channel_id: channelId, kind: "notification", origin, participants: request.participants, body: "vault job completed", schema: "onclave.vault.notification.v1" });
     expect(response).toMatchObject({ kind: "response", in_reply_to: request.message_id });
     expect(response).not.toHaveProperty("response_policy");
     expect(response).not.toHaveProperty("task_id");
     expect(note).toMatchObject({ kind: "note" });
     expect(parseChannelMessage(note)).toEqual({ ok: true, value: note });
+    expect(notification).toMatchObject({ kind: "notification", schema: "onclave.vault.notification.v1" });
+    expect(parseChannelMessage(notification)).toEqual({ ok: true, value: notification });
   });
 
   it("rejects incompatible versions and invalid semantic combinations", () => {
@@ -70,7 +73,10 @@ describe("asynchronous channel contract", () => {
     expect(parseChannelMessage({ ...request, task_id: ulid() })).toEqual({ ok: false, error: "channel messages do not accept task_id, context_id, or timeout_ms" });
     expect(parseChannelMessage({ ...request, participants: ["instance-a", "instance-b", "instance-c"], response_policy: "all", response_requested_from: ["instance-b", "instance-c"] })).toMatchObject({ ok: true });
     expect(parseChannelMessage({ ...request, kind: "note", response_policy: "all" })).toEqual({ ok: false, error: "note cannot carry response expectation or in_reply_to" });
+    expect(parseChannelMessage({ ...request, kind: "notification", response_policy: "all" })).toEqual({ ok: false, error: "notification cannot carry response expectation or in_reply_to" });
+    expect(parseChannelMessage({ ...request, kind: "notification", participants: ["instance-a"] })).toEqual({ ok: false, error: "notification requires at least one recipient" });
     expect(parseChannelMessage({ ...request, kind: "response", in_reply_to: undefined, response_requested_from: undefined, response_policy: undefined })).toEqual({ ok: false, error: "response requires in_reply_to" });
+    expect(() => createChannelMessage({ channel_id: channelId, kind: "notification", origin, participants: request.participants, in_reply_to: request.message_id, body: "bad" })).toThrow("notification cannot carry");
     expect(parseChannelMessage({ ...request, kind: "request", response_requested_from: ["instance-a"], response_policy: "all" })).toEqual({ ok: false, error: "request must name unique participant responders" });
     expect(() => createChannelMessage({ channel_id: channelId, kind: "request", origin, participants: ["instance-a", "instance-b"], response_requested_from: ["instance-b"], response_policy: "any", body: "bad" })).toThrow("single-recipient");
   });
