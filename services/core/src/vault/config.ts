@@ -1,3 +1,5 @@
+import { DEFAULT_ANALYSIS_INPUT_BUDGET_TOKENS } from "./analysis-budget";
+
 export type LlmProviderType = "ollama" | "openai" | "anthropic" | "openrouter" | "none";
 export type EmbeddingProviderType = "ollama" | "openrouter";
 export type RerankerProviderType = "rerankers" | "llm" | "none";
@@ -40,6 +42,7 @@ export type VaultConfig = {
   unifiedPipelineProvider: LlmProviderType;
   unifiedPipelineModel: string;
   unifiedPipelineMaxConcurrency: number;
+  unifiedPipelineInputBudget: number;
   unifiedPipelineMaxNewTags: number;
   callbackUrl?: string;
   callbackSecret?: string;
@@ -68,6 +71,16 @@ function integer(env: NodeJS.ProcessEnv, name: string, fallback: number, minimum
   const raw = optional(env, name);
   if (raw === undefined) return fallback;
   const parsed = Number.parseInt(raw, 10);
+  if (!Number.isInteger(parsed) || parsed < minimum) {
+    throw new Error(`invalid ${name}: ${raw}`);
+  }
+  return parsed;
+}
+
+function strictInteger(env: NodeJS.ProcessEnv, name: string, fallback: number, minimum: number): number {
+  const raw = optional(env, name);
+  if (raw === undefined) return fallback;
+  const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed < minimum) {
     throw new Error(`invalid ${name}: ${raw}`);
   }
@@ -156,6 +169,7 @@ export function loadVaultConfig(env: NodeJS.ProcessEnv = process.env): VaultConf
     unifiedPipelineProvider: llmProvider(env, "UNIFIED_PIPELINE_PROVIDER", "openrouter"),
     unifiedPipelineModel: optional(env, "UNIFIED_PIPELINE_MODEL") ?? "",
     unifiedPipelineMaxConcurrency: integer(env, "UNIFIED_PIPELINE_MAX_CONCURRENCY", 4, 1),
+    unifiedPipelineInputBudget: strictInteger(env, "UNIFIED_PIPELINE_INPUT_BUDGET", DEFAULT_ANALYSIS_INPUT_BUDGET_TOKENS, 1),
     unifiedPipelineMaxNewTags: integer(env, "UNIFIED_PIPELINE_MAX_NEW_TAGS", 3, 0),
     callbackUrl: optional(env, "CALLBACK_URL"),
     callbackSecret: optional(env, "CALLBACK_SECRET"),

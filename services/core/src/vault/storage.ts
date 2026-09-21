@@ -472,7 +472,6 @@ export class PostgresRepository {
   async delete_chunks(contentId: string): Promise<void> { await this.database.query("DELETE FROM chunk WHERE content_id=$1", [contentId]); }
 
   async replace_content_chunks(contentId: string, chunks: ChunkModel[]): Promise<void> {
-    if (chunks.length === 0) throw new Error("reindexed content requires at least one chunk");
     const pool = this.database as TransactionPool;
     if (typeof pool.connect !== "function") throw new Error("database does not support transactions");
     const client = await pool.connect();
@@ -579,7 +578,6 @@ export class PostgresRepository {
   async update_content_processing_result(contentId: string, result: JsonObject, pipelineVersion: string): Promise<void> { await this.database.query("UPDATE content SET metadata=jsonb_set(metadata,'{unified_result}',$1), processing_status='completed',processed_at=now(),pipeline_version=$2,updated_at=now() WHERE id=$3", [result, pipelineVersion, contentId]); }
 
   async complete_content_processing(contentId: string, result: JsonObject, pipelineVersion: string, chunks: ChunkModel[], relationships: ContentEntityEdge[]): Promise<void> {
-    if (chunks.length === 0) throw new Error("completed content requires at least one chunk");
     const pool = this.database as TransactionPool;
     if (typeof pool.connect !== "function") throw new Error("database does not support transactions");
     const now = new Date();

@@ -15,6 +15,8 @@ import { PostgresRepository, S3Storage } from "./storage";
 import { YouTubeTranscriptService } from "./youtube-transcript";
 import { YouTubeMetadataService } from "./youtube-metadata";
 import { DoclingClient } from "./docling";
+import { SponsorBlockService } from "./sponsorblock";
+import { TranscriptArtifactResolver, type TranscriptSponsorBlock } from "./transcript-artifacts";
 import type { VaultConfig } from "./config";
 import type { ChunkModel, LlmUsage } from "./models";
 import type {
@@ -63,6 +65,8 @@ export type VaultServiceOverrides = {
   youtube?: VaultYouTubeMetadataService;
   docling?: VaultDoclingClient;
   embeddingReindexer?: VaultEmbeddingReindexer;
+  sponsorblock?: TranscriptSponsorBlock;
+  transcriptResolver?: VaultRouteDependencies["transcriptResolver"];
   readiness?: VaultReadinessChecks;
   close?: () => Promise<void>;
   notify?: (agentId: string, delivery: JobNotificationDelivery) => Promise<void>;
@@ -150,6 +154,11 @@ export async function createVaultService(
     chunkText,
   );
   const search = overrides.search ?? new SearchService(embeddings, repository);
+  const transcriptResolver = overrides.transcriptResolver ?? new TranscriptArtifactResolver({
+    storage,
+    repository,
+    sponsorblock: overrides.sponsorblock ?? new SponsorBlockService(),
+  });
   let llm: UsageReportingLlmProvider | undefined;
   let jobs = overrides.jobs;
   if (jobs === undefined) {
@@ -162,6 +171,7 @@ export async function createVaultService(
     jobs = new PipelineOrchestrator(pipeline, repository, {
       pipelineVersion: config.appVersion,
       notify: overrides.notify,
+      transcriptResolver,
     });
   }
   const transcript = overrides.transcript ?? new YouTubeTranscriptService({
@@ -184,6 +194,7 @@ export async function createVaultService(
     youtube,
     docling,
     embeddingReindexer,
+    transcriptResolver,
     ready: async (): Promise<VaultReadiness> => readinessResult(readiness),
     close: async (): Promise<void> => {
       if (overrides.close !== undefined) {

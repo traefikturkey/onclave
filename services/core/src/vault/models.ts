@@ -35,6 +35,39 @@ export enum DataTier {
 }
 
 import type { PipelineStages } from "./job-stages";
+import type {
+  CanonicalSummary,
+  SummaryCoverage,
+  VersionedOutline,
+} from "./transcript-analysis";
+
+export type {
+  AnalysisTranscript,
+  CanonicalSummary,
+  CurrentTranscriptProvenance,
+  FullSummaryCoverage,
+  HistoricalArtifactProvenance,
+  LegacySummaryCoverage,
+  OriginalTranscript,
+  OutlineSection,
+  SummaryCoverage,
+  TimedTranscript,
+  TranscriptAnalysisMetadata,
+  TranscriptArtifactMetadata,
+  TranscriptArtifactSet,
+  TranscriptDownloadRequest,
+  TranscriptDownloadResponse,
+  TranscriptDownloadVariant,
+  TranscriptFilteringProvenance,
+  TranscriptRepresentation,
+  TranscriptSourceKind,
+  TranscriptTiming,
+  UntimedTranscriptSegment,
+  VersionedOutline,
+  WholeTranscriptResolveRequest,
+  WholeTranscriptResolution,
+  WholeTranscriptResolver,
+} from "./transcript-analysis";
 
 export type JsonPrimitive = boolean | number | string | null;
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
@@ -137,11 +170,7 @@ export type PreDetectedValidation = {
   confirmed: boolean;
 };
 
-export type StructuredSummary = {
-  version: 1;
-  overview: string;
-  key_points: string[];
-};
+export type StructuredSummary = CanonicalSummary;
 
 export type UnifiedResult = {
   tags?: string[];
@@ -152,6 +181,8 @@ export type UnifiedResult = {
   score_explanation?: string[];
   summary?: string;
   structured_summary?: StructuredSummary;
+  outline?: VersionedOutline;
+  summary_coverage?: SummaryCoverage;
   topics?: ExtractedEntity[];
   pre_detected_validations?: PreDetectedValidation[];
   additional_entities?: ExtractedEntity[];

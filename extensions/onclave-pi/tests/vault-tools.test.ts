@@ -74,16 +74,16 @@ describe("Onclave vault tools", () => {
   it("downloads a complete transcript to a private opaque file without returning content", async () => {
     const signal = AbortSignal.timeout(1000);
     const payload = Buffer.from("transcript-secret-".repeat(2_000), "utf8");
-    const getContent = vi.fn(async () => ({ id: "content/unsafe", content_type: "youtube", file_path: "youtube/video/transcript.txt" }));
+    const getContent = vi.fn(async () => ({ id: "content/unsafe", content_type: "youtube", file_path: "youtube/video/transcript.txt", metadata: { transcript_analysis: { artifacts: { analysis: { object_key: "youtube/video/transcript.analysis.json" } } } } }));
     const getObject = vi.fn(async (objectKey: string, received: AbortSignal) => {
-      expect(objectKey).toBe("youtube/video/transcript.txt");
+      expect(objectKey).toBe("youtube/video/transcript.analysis.json");
       expect(received).toBe(signal);
       return new Response(payload, { headers: { "content-length": String(payload.length) } });
     });
     const tool = createVaultToolDefinitions({ client: async () => ({ getContent } as never), s3: async () => ({ getObject } as never) }).find((item) => item.name === "onclave_vault_content")!;
     const result = await (tool.execute as Function)("call", { operation: "transcript", content_id: "content/unsafe" }, signal);
     const details = result.details as { local_path: string; content_id: string; bytes: number };
-    expect(details).toEqual({ local_path: expect.any(String), content_id: "content/unsafe", bytes: payload.length });
+    expect(details).toEqual({ local_path: expect.any(String), content_id: "content/unsafe", bytes: payload.length, selected_variant: "analysis" });
     expect(await readFile(details.local_path)).toEqual(payload);
     expect(basename(details.local_path)).toMatch(/^download-[0-9a-f]{36}\.bin$/);
     expect(result.content[0].text).not.toContain(payload.toString("utf8"));
@@ -104,10 +104,21 @@ describe("Onclave vault tools", () => {
     expect(result.details.bytes).toBe("compatibility transcript".length);
   });
 
+  it("uses the HTTP resolver for analysis by default and honors explicit original", async () => {
+    const downloadContent = vi.fn(async (_id: string, options: { variant: string; signal?: AbortSignal }) => new Response(`${options.variant} transcript`));
+    const tool = createVaultToolDefinitions({ client: async () => ({ getContent: vi.fn(async () => ({ id: "c", content_type: "youtube", file_path: "legacy.txt" })), downloadContent } as never) }).find((item) => item.name === "onclave_vault_content")!;
+    const analysis = await (tool.execute as Function)("call", { operation: "transcript", content_id: "c" });
+    expect(analysis.details.selected_variant).toBe("analysis");
+    const original = await (tool.execute as Function)("call", { operation: "transcript", variant: "original", content_id: "c" });
+    expect(downloadContent).toHaveBeenLastCalledWith("c", { variant: "original", signal: undefined });
+    await rm(dirname(analysis.details.local_path), { recursive: true, force: true });
+    await rm(dirname(original.details.local_path), { recursive: true, force: true });
+  });
+
   it("downloads objects larger than the former local size gate", async () => {
     const before = await privateTempEntries();
     const payload = new Uint8Array(50 * 1024 * 1024 + 1);
-    const getContent = vi.fn(async () => ({ id: "large", content_type: "youtube", file_path: "youtube/large/transcript.txt" }));
+    const getContent = vi.fn(async () => ({ id: "large", content_type: "youtube", file_path: "youtube/large/transcript.txt", metadata: { transcript_analysis: { artifacts: { analysis: { object_key: "youtube/large/transcript.analysis.json" } } } } }));
     const getObject = vi.fn(async () => new Response(payload));
     const tool = createVaultToolDefinitions({ client: async () => ({ getContent } as never), s3: async () => ({ getObject } as never) }).find((item) => item.name === "onclave_vault_content")!;
     const result = await (tool.execute as Function)("call", { operation: "transcript", content_id: "large" });
@@ -120,7 +131,7 @@ describe("Onclave vault tools", () => {
     const before = await privateTempEntries();
     const controller = new AbortController();
     let pulls = 0;
-    const getContent = vi.fn(async () => ({ id: "cancel-me", content_type: "youtube", file_path: "youtube/cancel/transcript.txt" }));
+    const getContent = vi.fn(async () => ({ id: "cancel-me", content_type: "youtube", file_path: "youtube/cancel/transcript.txt", metadata: { transcript_analysis: { artifacts: { analysis: { object_key: "youtube/cancel/transcript.analysis.json" } } } } }));
     const getObject = vi.fn(async (_key: string, signal: AbortSignal) => new Response(new ReadableStream<Uint8Array>({
       start(stream) { stream.enqueue(Buffer.from("secret chunk")); },
       pull(stream) {
@@ -138,7 +149,7 @@ describe("Onclave vault tools", () => {
 
   it("cleans up after an upstream error", async () => {
     const before = await privateTempEntries();
-    const getContent = vi.fn(async () => ({ id: "error-case", content_type: "youtube", file_path: "youtube/error/transcript.txt" }));
+    const getContent = vi.fn(async () => ({ id: "error-case", content_type: "youtube", file_path: "youtube/error/transcript.txt", metadata: { transcript_analysis: { artifacts: { analysis: { object_key: "youtube/error/transcript.analysis.json" } } } } }));
     const getObject = vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ start(stream) { stream.error(new Error("upstream failed")); } })));
     const tool = createVaultToolDefinitions({ client: async () => ({ getContent } as never), s3: async () => ({ getObject } as never) }).find((item) => item.name === "onclave_vault_content")!;
     await expect((tool.execute as Function)("call", { operation: "transcript", content_id: "error-case" })).rejects.toThrow();

@@ -431,6 +431,13 @@ describe("vault configuration", () => {
     expect(() => loadVaultConfig(configuredEnv({ ONCLAVE_VAULT_POSTGRES_PASSWORD: undefined, MENOS_POSTGRES_PASSWORD: "menos-password", POSTGRES_PASSWORD: "legacy-password" }))).toThrow("ONCLAVE_VAULT_POSTGRES_PASSWORD is required");
   });
 
+  it("uses the conservative analysis input budget by default and validates overrides", () => {
+    expect(loadVaultConfig(configuredEnv()).unifiedPipelineInputBudget).toBe(12_000);
+    expect(loadVaultConfig(configuredEnv({ ONCLAVE_VAULT_UNIFIED_PIPELINE_INPUT_BUDGET: "16000" })).unifiedPipelineInputBudget).toBe(16_000);
+    expect(() => loadVaultConfig(configuredEnv({ ONCLAVE_VAULT_UNIFIED_PIPELINE_INPUT_BUDGET: "0" }))).toThrow("invalid UNIFIED_PIPELINE_INPUT_BUDGET: 0");
+    expect(() => loadVaultConfig(configuredEnv({ ONCLAVE_VAULT_UNIFIED_PIPELINE_INPUT_BUDGET: "12.5" }))).toThrow("invalid UNIFIED_PIPELINE_INPUT_BUDGET: 12.5");
+  });
+
   it("configures the embedding provider and model", () => {
     const defaults = loadVaultConfig(configuredEnv());
     expect(defaults.embeddingProvider).toBe("ollama");

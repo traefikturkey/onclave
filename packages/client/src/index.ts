@@ -47,7 +47,25 @@ function query(params: Record<string, string | number | boolean | undefined>): s
 
 export type ContentListItem = { id: string; content_type: string; title: string | null; status: string | null; created_at: string; chunk_count: number; tags: string[]; metadata: JsonObject };
 export type ContentListResponse = { items: ContentListItem[]; total: number; offset: number; limit: number };
-export type ContentResponse = JsonObject & { id: string; content_type: string };
+export type TranscriptDownloadVariant = "original" | "analysis";
+export type TranscriptDownloadOptions = { variant?: TranscriptDownloadVariant; signal?: AbortSignal };
+export type TranscriptFilteringSummary = {
+  outcome: string;
+  reason: string;
+  lookup_state: string;
+  timing: "available" | "unavailable";
+  retained_segment_count: number | null;
+  excluded_segment_count: number | null;
+};
+export type ContentResponse = JsonObject & {
+  id: string;
+  content_type: string;
+  summary?: string | null;
+  structured_summary?: JsonObject;
+  outline?: JsonObject;
+  summary_coverage?: JsonObject;
+  filtering?: TranscriptFilteringSummary | null;
+};
 export type IngestResponse = { content_id: string; content_type: string; title: string; job_id: string };
 export type JobStatus = "pending" | "processing" | "completed" | "failed" | "cancelled" | string;
 export type JobResponse = JsonObject & { job_id: string; content_id: string; status: JobStatus };
@@ -73,6 +91,11 @@ function encodeObjectPath(value: string): string {
   // dots before constructing the request URL. This keeps the S3 key and the
   // SigV4 canonical URI identical to the bytes sent on the wire.
   return value.split("/").map((part) => part === "." || part === ".." ? part.replaceAll(".", "%2E") : encodePathSegment(part)).join("/");
+}
+
+function transcriptDownloadOptions(value: AbortSignal | TranscriptDownloadOptions | undefined): TranscriptDownloadOptions {
+  if (value === undefined) return {};
+  return value instanceof AbortSignal ? { signal: value } : value;
 }
 
 function s3Endpoint(value: string): URL {
@@ -170,9 +193,20 @@ export class OnclaveClient {
   findByVideoId(videoId: string, signal?: AbortSignal): Promise<ContentListItem | undefined> { return this.findAll({ content_type: "youtube" }, signal).then((items) => items.find((item) => item.metadata.video_id === videoId)); }
   async findAll(options: Parameters<OnclaveClient["listContent"]>[0] = {}, signal?: AbortSignal): Promise<ContentListItem[]> { const result: ContentListItem[] = []; let offset = 0; do { const page = await this.listContent({ ...options, offset, limit: options.limit ?? 100 }, signal); result.push(...page.items); offset += page.items.length; if (page.items.length === 0 || offset >= page.total) break; } while (true); return result; }
   getContent(contentId: string, signal?: AbortSignal): Promise<ContentResponse> { return this.json("GET", `/content/${encodeURIComponent(contentId)}`, undefined, signal); }
-  /** Returns the authenticated download response without buffering its body. */
-  downloadContent(contentId: string, signal?: AbortSignal): Promise<Response> { return this.request("GET", `/content/${encodeURIComponent(contentId)}/download`, undefined, signal); }
-  async getTranscript(contentId: string, signal?: AbortSignal): Promise<string> { return this.text("GET", `/content/${encodeURIComponent(contentId)}/download`, undefined, signal); }
+  /** Returns the authenticated raw download. The historical default is the original variant. */
+  downloadContent(contentId: string, signal?: AbortSignal): Promise<Response>;
+  downloadContent(contentId: string, options?: TranscriptDownloadOptions): Promise<Response>;
+  downloadContent(contentId: string, signalOrOptions?: AbortSignal | TranscriptDownloadOptions): Promise<Response> {
+    const options = transcriptDownloadOptions(signalOrOptions);
+    return this.request("GET", `/content/${encodeURIComponent(contentId)}/download${query({ variant: options.variant })}`, undefined, options.signal);
+  }
+  /** Reads a transcript as text. Analysis must be requested explicitly. */
+  getTranscript(contentId: string, signal?: AbortSignal): Promise<string>;
+  getTranscript(contentId: string, options?: TranscriptDownloadOptions): Promise<string>;
+  async getTranscript(contentId: string, signalOrOptions?: AbortSignal | TranscriptDownloadOptions): Promise<string> {
+    const options = transcriptDownloadOptions(signalOrOptions);
+    return this.text("GET", `/content/${encodeURIComponent(contentId)}/download${query({ variant: options.variant })}`, undefined, options.signal);
+  }
   search(search: { query: string; limit?: number }, signal?: AbortSignal): Promise<SearchResponse> { return this.json("POST", "/search", search, signal); }
   channel(channel: string, limit?: number, signal?: AbortSignal): Promise<ChannelResponse> { return this.json("GET", `/youtube/channel${query({ channel, limit })}`, undefined, signal); }
   jobs(options: { content_id?: string; status?: string; offset?: number; limit?: number } = {}, signal?: AbortSignal): Promise<JobListResponse> { return this.json("GET", `/jobs${query(options)}`, undefined, signal); }

@@ -13,6 +13,7 @@ import { createVaultHttpServer } from "../src/vault/http";
 import { computeKeyId } from "../src/vault/keys";
 import { createVaultRouteHandlers } from "../src/vault/routes";
 import { createVaultService, type VaultServiceOverrides } from "../src/vault/vault-service";
+import type { TranscriptSponsorBlock } from "../src/vault/transcript-artifacts";
 import type { VaultConfig } from "../src/vault/config";
 import { UnifiedPipeline, type PipelineStorage } from "../src/vault/pipeline";
 import type { JobStorage } from "../src/vault/jobs";
@@ -67,7 +68,7 @@ function vaultConfig(keysPath: string): VaultConfig {
   return {
     apiBaseUrl: "http://localhost:8000", appVersion: "test", postgresHost: "localhost", postgresPort: 5432, postgresUser: "menos", postgresPassword: "secret", postgresDatabase: "menos", postgresPoolMinSize: 1, postgresPoolMaxSize: 1,
     s3EndpointUrl: "localhost:9000", s3AccessKey: "access", s3SecretKey: "secret", s3Secure: false, s3Bucket: "menos", s3Region: "us-east-1", ollamaUrl: "http://ollama", ollamaModel: "embed", embeddingProvider: "ollama", embeddingModel: "embed", doclingUrl: "http://docling", sshPublicKeysPath: keysPath,
-    webshareProxyUsername: "user", webshareProxyPassword: "password", agentExpansionProvider: "none", agentExpansionModel: "", agentRerankProvider: "none", agentRerankModel: "", agentSynthesisProvider: "none", agentSynthesisModel: "", unifiedPipelineEnabled: true, unifiedPipelineProvider: "none", unifiedPipelineModel: "", unifiedPipelineMaxConcurrency: 1, unifiedPipelineMaxNewTags: 3, entityMaxTopicsPerContent: 7, entityMinConfidence: 0.6, entityFetchExternalMetadata: true,
+    webshareProxyUsername: "user", webshareProxyPassword: "password", agentExpansionProvider: "none", agentExpansionModel: "", agentRerankProvider: "none", agentRerankModel: "", agentSynthesisProvider: "none", agentSynthesisModel: "", unifiedPipelineEnabled: true, unifiedPipelineProvider: "none", unifiedPipelineModel: "", unifiedPipelineMaxConcurrency: 1, unifiedPipelineInputBudget: 12_000, unifiedPipelineMaxNewTags: 3, entityMaxTopicsPerContent: 7, entityMinConfidence: 0.6, entityFetchExternalMetadata: true,
   };
 }
 
@@ -77,6 +78,9 @@ describe("vault routes", () => {
   let key: TestKey;
   let keysDir: string;
   let jobs: PipelineOrchestrator;
+  let bytes: Map<string, Buffer>;
+  const reindexTexts: string[] = [];
+  let sponsorblockCalls = 0;
 
   beforeEach(async () => {
     key = testKey();
@@ -84,9 +88,11 @@ describe("vault routes", () => {
     const keysPath = join(keysDir, "authorized_keys");
     writeFileSync(keysPath, `${key.authorizedKeysLine}\n`);
     const contents = new Map<string, ContentMetadata>([["video-1", {
-      id: "video-1", content_type: "youtube", title: "Existing video", mime_type: "text/plain", file_size: 10, file_path: "youtube/video-1/transcript.txt", tags: ["test", "typescript"], metadata: { video_id: "existing123" }, created_at: new Date("2026-01-01T00:00:00Z"),
+      id: "video-1", content_type: "youtube", title: "Existing video", mime_type: "text/plain", file_size: 10, file_path: "youtube/video-1/transcript.txt", tags: ["test", "typescript"], metadata: { video_id: "existing123", unified_result: { summary: "Historical summary" } }, created_at: new Date("2026-01-01T00:00:00Z"),
     }]]);
-    const bytes = new Map<string, Buffer>([["youtube/video-1/transcript.txt", Buffer.from("existing transcript")]]);
+    bytes = new Map<string, Buffer>([["youtube/video-1/transcript.txt", Buffer.from("existing transcript")]]);
+    reindexTexts.length = 0;
+    sponsorblockCalls = 0;
     const pipelineJobs = new Map<string, PipelineJob>();
     const entities = new Map<string, EntityModel>([
       ["topic-typescript", { id: "topic-typescript", entity_type: EntityType.TOPIC, name: "TypeScript", normalized_name: "typescript", hierarchy: ["Engineering", "TypeScript"] }],
@@ -123,7 +129,7 @@ describe("vault routes", () => {
         contentEntities.set(contentId, relationships.map((relationship) => ({ ...relationship })));
         processingStatuses.set(contentId, JobStatus.COMPLETED);
       },
-      async update_content(_id: string, content: ContentMetadata): Promise<ContentMetadata> { return content; },
+      async update_content(id: string, content: ContentMetadata): Promise<ContentMetadata> { contents.set(id, content); return content; },
       async delete_content(id: string): Promise<void> { contents.delete(id); },
       async delete_chunks(): Promise<void> {}, async delete_links_by_source(): Promise<void> {},
       async get_chunks(): Promise<[]> { return []; },
@@ -205,13 +211,14 @@ describe("vault routes", () => {
       jobs,
       search: { async search(query: string): Promise<{ query: string; total: number; results: unknown[] }> { return { query, total: 1, results: [{ id: "video-1", title: "Existing video", snippet: "existing transcript" }] }; } } as unknown as SearchService,
       pricing: new LLMPricingService(repository as unknown as PricingSnapshotStorage),
-      transcript: { async fetchTranscript(): Promise<{ videoId: string; segments: []; language: string; fullText: string; timestampedText: string }> { return { videoId: "dQw4w9WgXcQ", segments: [], language: "en", fullText: "youtube transcript", timestampedText: "youtube transcript" }; } },
+      transcript: { async fetchTranscript(): Promise<{ videoId: string; segments: [{ text: string; start: number; duration: number }]; language: string; fullText: string; timestampedText: string }> { return { videoId: "dQw4w9WgXcQ", segments: [{ text: "youtube transcript", start: 0, duration: 1 }], language: "en", fullText: "youtube transcript", timestampedText: "[00:00] youtube transcript" }; } },
+      sponsorblock: { async lookup() { sponsorblockCalls += 1; return { state: "not_attempted" as const }; } } satisfies TranscriptSponsorBlock,
       youtube: {
         async fetchMetadata(): Promise<never> { throw new Error("metadata unavailable"); },
         async fetchChannelVideosResponse(): Promise<{ source: "youtube-data-api-v3"; videos: [] }> { return { source: "youtube-data-api-v3", videos: [] }; },
       },
       docling: { async extractMarkdown(): Promise<{ markdown: string; title: string }> { return { markdown: "# Page\nBody", title: "Page" }; } },
-      embeddingReindexer: { async reindex(): Promise<{ chunk_count: number; model: string }> { return { chunk_count: 1, model: "test-embedding" }; } },
+      embeddingReindexer: { async reindex(_content: ContentMetadata, text?: string): Promise<{ chunk_count: number; model: string }> { reindexTexts.push(text ?? "<missing>"); return { chunk_count: 1, model: "test-embedding" }; } },
       readiness: { async postgres(): Promise<void> {}, async s3(): Promise<void> {}, async ollama(): Promise<void> {} },
     };
     const vault = await createVaultService(vaultConfig(keysPath), overrides);
@@ -266,7 +273,22 @@ describe("vault routes", () => {
   it("serves signed Menos routes and leaves dropped routes unregistered", async () => {
     await expect((await request("/api/v1/content?exclude_tags=")).json()).resolves.toMatchObject({ total: 1, items: [{ id: "video-1", tags: ["test", "typescript"], chunk_count: 1 }] });
     expect((await request("/api/v1/content/missing")).status).toBe(404);
+    const legacyDetail = await (await request("/api/v1/content/video-1")).json() as Record<string, unknown>;
+    expect(legacyDetail).toMatchObject({
+      summary: "Historical summary",
+      summary_coverage: { status: "legacy", source_variant: "unknown", generation_method: "legacy" },
+      filtering: { outcome: "not_attempted", reason: "legacy_unknown", lookup_state: "not_attempted", timing: "unavailable", retained_segment_count: null, excluded_segment_count: null },
+    });
+    expect(sponsorblockCalls).toBe(0);
     await expect((await request("/api/v1/content/video-1/download")).text()).resolves.toBe("existing transcript");
+    const analysisDownload = await request("/api/v1/content/video-1/download?variant=analysis");
+    expect(analysisDownload.headers.get("x-transcript-variant")).toBe("analysis");
+    expect(analysisDownload.headers.get("x-transcript-object-key")).toBe("youtube/video-1/transcript.analysis.json");
+    expect(analysisDownload.headers.get("x-transcript-filtering")).toBe(JSON.stringify({ outcome: "not_attempted", reason: "not_attempted", lookup_state: "not_attempted", timing: "unavailable", retained_segment_count: 1, excluded_segment_count: 0 }));
+    await expect(analysisDownload.text()).resolves.toBe("existing transcript");
+    const cachedAnalysisDownload = await request("/api/v1/content/video-1/download?variant=analysis");
+    expect(cachedAnalysisDownload.headers.get("x-transcript-object-key")).toBe("youtube/video-1/transcript.analysis.json");
+    await expect(cachedAnalysisDownload.text()).resolves.toBe("existing transcript");
     await expect((await request("/api/v1/content/video-1/annotations", "POST", { text: "note", tags: ["note"] })).json()).resolves.toMatchObject({ title: "Annotation for Existing video", tags: ["note"] });
     const ingest = await (await request("/api/v1/ingest?tags=test", "POST", { url: "https://youtube.com/watch?v=dQw4w9WgXcQ" })).json() as Record<string, unknown>;
     expect(ingest).toMatchObject({ title: "YouTube: dQw4w9WgXcQ", content_type: "youtube" });
@@ -278,7 +300,7 @@ describe("vault routes", () => {
       stages: { context_fetch: { status: "completed" }, llm_call: { status: "completed" }, parse: { status: "completed" }, chunking: { status: "completed" }, embedding: { status: "completed" }, persist: { status: "completed" } },
     });
     await expect((await request(`/api/v1/content/${ingest.content_id}`)).json()).resolves.toMatchObject({
-      summary: "A concise summary.",
+      summary: "A concise overview.\n\n- Point one\n\n- Point two",
       structured_summary: { version: 1, overview: "A concise overview.", key_points: ["Point one", "Point two"] },
       topics: ["TypeScript"],
       entities: ["Vitest"],
@@ -294,12 +316,27 @@ describe("vault routes", () => {
     await expect((await request("/api/v1/content/video-1/reindex-embeddings", "POST")).json()).resolves.toEqual({
       content_id: "video-1", status: "completed", chunk_count: 1, model: "test-embedding",
     });
+    expect(reindexTexts).toEqual(["existing transcript"]);
+    const sponsorblockCallsBeforeSearch = sponsorblockCalls;
     await expect((await request("/api/v1/search", "POST", { query: "existing", limit: 1 })).json()).resolves.toMatchObject({ total: 1, results: [{ snippet: "existing transcript" }] });
+    expect(sponsorblockCalls).toBe(sponsorblockCallsBeforeSearch);
     await expect((await request("/api/v1/youtube/channel?channel=@example")).json()).resolves.toEqual({ source: "youtube-data-api-v3", videos: [] });
     await expect((await request("/api/v1/auth/whoami")).json()).resolves.toEqual({ key_id: key.keyId });
     expect((await fetch(`${baseUrl}/api/v1/content`)).status).toBe(401);
     expect((await request("/api/v1/graph")).status).toBe(404);
     await expect((await fetch(`${baseUrl}/health`)).json()).resolves.toMatchObject({ status: "ok", git_sha: "test", broker: { connected: false } });
     await expect((await fetch(`${baseUrl}/ready`)).json()).resolves.toEqual({ status: "ready", checks: { postgres: "ok", s3: "ok", ollama: "ok" } });
+    if (typeof ingest.content_id !== "string") throw new Error("ingest did not return a content ID");
+    await expect((await request(`/api/v1/content/${ingest.content_id}`, "DELETE")).json()).resolves.toEqual({ status: "deleted", id: ingest.content_id });
+    expect(bytes.has("youtube/dQw4w9WgXcQ/transcript.txt")).toBe(false);
+    expect(bytes.has("youtube/dQw4w9WgXcQ/transcript.timed.json")).toBe(false);
+    expect(bytes.has("youtube/dQw4w9WgXcQ/transcript.analysis.json")).toBe(false);
+    bytes.delete("youtube/video-1/transcript.analysis.json");
+    expect((await request("/api/v1/content/video-1/download?variant=analysis")).status).toBe(404);
+    bytes.delete("youtube/video-1/transcript.txt");
+    expect((await request("/api/v1/content/video-1/download")).status).toBe(404);
+    await expect((await request("/api/v1/content/video-1", "DELETE")).json()).resolves.toEqual({ status: "deleted", id: "video-1" });
+    expect(bytes.has("youtube/video-1/transcript.txt")).toBe(false);
+    expect(bytes.has("youtube/video-1/transcript.analysis.json")).toBe(false);
   });
 });
