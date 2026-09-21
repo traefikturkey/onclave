@@ -10,7 +10,7 @@ export type EmbeddingReindexRepository = {
 };
 
 export type VaultEmbeddingReindexer = {
-  reindex(content: ContentMetadata): Promise<{ chunk_count: number; model: string }>;
+  reindex(content: ContentMetadata, text?: string): Promise<{ chunk_count: number; model: string }>;
 };
 
 export class EmbeddingReindexService implements VaultEmbeddingReindexer {
@@ -22,13 +22,15 @@ export class EmbeddingReindexService implements VaultEmbeddingReindexer {
     private readonly chunkText: (text: string) => string[],
   ) {}
 
-  async reindex(content: ContentMetadata): Promise<{ chunk_count: number; model: string }> {
+  async reindex(content: ContentMetadata, suppliedText?: string): Promise<{ chunk_count: number; model: string }> {
     const contentId = content.id;
     if (contentId === undefined || contentId === "") throw new Error("cannot reindex content without an ID");
-    const text = (await this.storage.download(content.file_path)).toString("utf8");
+    const text = suppliedText ?? (await this.storage.download(content.file_path)).toString("utf8");
     const chunkTexts = this.chunkText(text);
-    if (chunkTexts.length === 0) throw new Error(`content produced no chunks: ${contentId}`);
-    const vectors = await this.embeddings.embedBatch(chunkTexts);
+    // Empty is a valid prepared source when SponsorBlock excluded every
+    // segment. Replacing with no chunks is intentional and removes stale
+    // embeddings without embedding the original transcript.
+    const vectors = chunkTexts.length === 0 ? [] : await this.embeddings.embedBatch(chunkTexts);
     if (vectors.length !== chunkTexts.length || vectors.some((vector) => vector.length !== 1024)) {
       throw new Error(`embedding output did not match content chunks: ${contentId}`);
     }

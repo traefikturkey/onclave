@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { HttpError } from "./errors";
+import type { AnalysisSourceSegment } from "./analysis-budget";
 import type { VaultEmbeddingReindexer } from "./embedding-reindex";
 import type { KeyStore } from "./keys";
 import { EntityType, JobStatus, type ChunkModel, type ContentEntityEdge, type ContentMetadata, type EntityModel, type JsonObject, type JsonValue } from "./models";
@@ -14,6 +15,22 @@ import type { YouTubeTranscript } from "./youtube-transcript";
 import { TranscriptUpstreamUnavailable } from "./youtube-transcript";
 import { UrlDetector } from "./url-detector";
 import { jsonResponse, rawResponse, type VaultHandlers } from "./http";
+import {
+  TRANSCRIPT_DOWNLOAD_MIME_TYPE,
+  storeTranscriptArtifacts,
+  transcriptMetadataForIngest,
+  transcriptResponseText,
+} from "./transcript-artifacts";
+import {
+  normalizeOriginalTranscript,
+  normalizeStoredSummary,
+  normalizeTranscriptAnalysisMetadata,
+  normalizeTranscriptFiltering,
+  type CurrentTranscriptProvenance,
+  type TranscriptDownloadVariant,
+  type TranscriptFilteringSummary,
+  type WholeTranscriptResolver,
+} from "./transcript-analysis";
 
 export type VaultObjectStorage = {
   upload(filePath: string, data: Readable, contentType: string): Promise<number>;
@@ -72,6 +89,7 @@ export type VaultRouteDependencies = {
   youtube: VaultYouTubeMetadataService;
   docling: VaultDoclingClient;
   embeddingReindexer: VaultEmbeddingReindexer;
+  transcriptResolver: WholeTranscriptResolver;
   health: () => Record<string, unknown> | Promise<Record<string, unknown>>;
   ready: () => Promise<Record<string, unknown>>;
   authorizeNotificationAgent?: (agentId: string, keyId: string | undefined) => void;
@@ -174,18 +192,45 @@ function submittedJobId(job: { id?: string }): string {
   return job.id;
 }
 
+type PreparedContentText = {
+  text: string;
+  analysisSegments?: AnalysisSourceSegment[];
+};
+
+async function prepareContentText(
+  deps: VaultRouteDependencies,
+  content: ContentMetadata,
+  access: "ingest" | "reprocess" | "embedding_reindex",
+): Promise<PreparedContentText> {
+  const id = contentId(content);
+  if (content.content_type === "youtube") {
+    const resolved = await deps.transcriptResolver.resolve({ content_id: id, variant: "analysis", access });
+    const analysisSegments = resolved.transcript.representation === "analysis"
+      ? resolved.transcript.segments.map((segment) => ({
+        source_segment_id: segment.source_segment_id,
+        text: segment.text,
+        ...(segment.start_seconds === undefined ? {} : { start_seconds: segment.start_seconds }),
+        ...(segment.duration_seconds === undefined ? {} : { duration_seconds: segment.duration_seconds }),
+      }))
+      : undefined;
+    return { text: transcriptResponseText(resolved), ...(analysisSegments === undefined ? {} : { analysisSegments }) };
+  }
+  return { text: (await deps.storage.download(content.file_path)).toString("utf8") };
+}
+
 async function resubmitExistingIngest(deps: VaultRouteDependencies, content: ContentMetadata, resourceKey: string, fallbackTitle: string, notifyAgentId?: string): Promise<string> {
   const id = contentId(content);
   if (id === "") throw new Error("Existing content does not have an ID");
-  let contentText: string;
+  let prepared: PreparedContentText;
   try {
-    contentText = (await deps.storage.download(content.file_path)).toString("utf8");
+    prepared = await prepareContentText(deps, content, "ingest");
   } catch (error) {
-    throw new HttpError(500, `Failed to download content: ${error instanceof Error ? error.message : String(error)}`);
+    throw new HttpError(500, `Failed to prepare content: ${error instanceof Error ? error.message : String(error)}`);
   }
   const job = await deps.jobs.submit({
     contentId: id,
-    contentText,
+    contentText: prepared.text,
+    ...(prepared.analysisSegments === undefined ? {} : { analysisSegments: prepared.analysisSegments }),
     contentType: content.content_type,
     title: content.title ?? fallbackTitle,
     resourceKey,
@@ -228,9 +273,51 @@ function pipelineFields(content: ContentMetadata, persistedEntities: readonly En
   };
 }
 
+function conciseFiltering(value: unknown): TranscriptFilteringSummary | undefined {
+  const filtering = normalizeTranscriptFiltering(value);
+  if (filtering === undefined) return undefined;
+  return {
+    outcome: filtering.outcome,
+    reason: filtering.reason,
+    lookup_state: filtering.lookup_state,
+    timing: filtering.timing,
+    retained_segment_count: filtering.retained_segment_count,
+    excluded_segment_count: filtering.excluded_segment_count,
+  };
+}
+
+function legacyFiltering(): TranscriptFilteringSummary {
+  return {
+    outcome: "not_attempted",
+    reason: "legacy_unknown",
+    lookup_state: "not_attempted",
+    timing: "unavailable",
+    retained_segment_count: null,
+    excluded_segment_count: null,
+  };
+}
+
+function summaryCoverage(summary: ReturnType<typeof normalizeStoredSummary>, scalarSummary: string | null): unknown {
+  if (summary?.summary_coverage !== undefined) return summary.summary_coverage;
+  if (scalarSummary === null) return undefined;
+  if (summary?.structured_summary === undefined) {
+    return { status: "legacy", source_variant: "unknown", generation_method: "legacy" };
+  }
+  return { status: "unknown", source_variant: "unknown", generation_method: "unknown" };
+}
+
 function contentDetail(content: ContentMetadata, processingStatus: string | undefined, persistedEntities: readonly EntityModel[]): Record<string, unknown> {
   const fields = pipelineFields(content, persistedEntities);
-  const unified = record(metadataValue(content).unified_result);
+  const metadata = metadataValue(content);
+  const unified = record(metadata.unified_result);
+  const storedSummary = normalizeStoredSummary(unified);
+  const transcriptMetadata = normalizeTranscriptAnalysisMetadata(metadata.transcript_analysis);
+  const filtering = content.content_type === "youtube"
+    ? conciseFiltering(transcriptMetadata?.filtering) ?? legacyFiltering()
+    : undefined;
+  // Keep the historical scalar untouched. Canonical summary data is additive;
+  // normalizing it must not rewrite clients that already consume `summary`.
+  const detailSummary = fields.summary;
   return {
     id: contentId(content),
     content_type: content.content_type,
@@ -243,8 +330,11 @@ function contentDetail(content: ContentMetadata, processingStatus: string | unde
     created_at: date(content.created_at),
     updated_at: date(content.updated_at),
     processing_status: processingStatus ?? null,
-    summary: fields.summary,
-    structured_summary: unified.structured_summary,
+    summary: detailSummary,
+    structured_summary: storedSummary?.structured_summary,
+    outline: storedSummary?.outline,
+    summary_coverage: summaryCoverage(storedSummary, detailSummary),
+    filtering,
     quality_tier: typeof unified.tier === "string" && unified.tier !== "" ? unified.tier : null,
     quality_score: typeof unified.quality_score === "number" ? unified.quality_score : null,
     pipeline_tags: fields.pipelineTags,
@@ -293,6 +383,34 @@ function youtubeMetadataJson(videoId: string, resourceKey: string, metadata: You
 
 function contentFilename(path: string): string {
   return path.split("/").at(-1) ?? "download";
+}
+
+function transcriptVariant(value: string | undefined): TranscriptDownloadVariant {
+  if (value === undefined || value === "original") return "original";
+  if (value === "analysis") return "analysis";
+  throw validationError("variant", "Input should be 'original' or 'analysis'", "literal_error");
+}
+
+function ownedArtifactKeys(content: ContentMetadata): string[] {
+  const keys = new Set<string>([content.file_path]);
+  const metadata = normalizeTranscriptAnalysisMetadata(metadataValue(content).transcript_analysis);
+  if (metadata !== undefined) {
+    keys.add(metadata.artifacts.original.object_key);
+    if (metadata.artifacts.timed !== undefined) keys.add(metadata.artifacts.timed.object_key);
+    if (metadata.artifacts.analysis !== undefined) keys.add(metadata.artifacts.analysis.object_key);
+  }
+  return [...keys].filter((key) => key !== "");
+}
+
+function transcriptDownloadHeaders(resolved: Awaited<ReturnType<WholeTranscriptResolver["resolve"]>>): Record<string, string> {
+  const filtering = conciseFiltering(resolved.filtering);
+  return {
+    "content-disposition": `attachment; filename="${contentFilename(resolved.artifact.object_key).replace(/\.json$/, ".txt")}"`,
+    "x-transcript-variant": resolved.variant,
+    "x-transcript-object-key": resolved.artifact.object_key,
+    ...(resolved.artifact.sha256 === undefined || resolved.artifact.sha256 === null ? {} : { "x-transcript-object-sha256": resolved.artifact.sha256 }),
+    ...(filtering === undefined ? {} : { "x-transcript-filtering": JSON.stringify(filtering) }),
+  };
 }
 
 function statusFromQuery(value: string | undefined): JobStatus | undefined {
@@ -389,7 +507,7 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
       const id = request.params.content_id ?? "";
       const content = await deps.repository.get_content(id);
       if (content === undefined) throw new HttpError(404, "Content not found");
-      await deps.storage.delete(content.file_path);
+      for (const objectKey of ownedArtifactKeys(content)) await deps.storage.delete(objectKey);
       await deps.repository.delete_chunks(id);
       await deps.repository.delete_links_by_source(id);
       await deps.repository.delete_content(id);
@@ -449,11 +567,17 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
       const id = request.params.content_id ?? "";
       const content = await deps.repository.get_content(id);
       if (content === undefined) throw new HttpError(404, "Content not found");
+      const variant = transcriptVariant(request.query.variant);
       try {
+        if (content.content_type === "youtube") {
+          const resolved = await deps.transcriptResolver.resolve({ content_id: id, variant, access: "download" });
+          return rawResponse(transcriptResponseText(resolved), TRANSCRIPT_DOWNLOAD_MIME_TYPE, 200, transcriptDownloadHeaders(resolved));
+        }
         return rawResponse(await deps.storage.download(content.file_path), content.mime_type, 200, {
           "content-disposition": `attachment; filename="${contentFilename(content.file_path)}"`,
         });
-      } catch {
+      } catch (error) {
+        if (error instanceof HttpError) throw error;
         throw new HttpError(404, "File not found in storage");
       }
     },
@@ -470,13 +594,13 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
       if (!force && await deps.repository.get_content_processing_status(id) === "completed") {
         return jsonResponse({ content_id: id, status: "already_completed", job_id: null });
       }
-      let contentText: string;
+      let prepared: PreparedContentText;
       try {
-        contentText = (await deps.storage.download(content.file_path)).toString("utf8");
+        prepared = await prepareContentText(deps, content, "reprocess");
       } catch (error) {
-        throw new HttpError(500, `Failed to download content: ${error instanceof Error ? error.message : String(error)}`);
+        throw new HttpError(500, `Failed to prepare content: ${error instanceof Error ? error.message : String(error)}`);
       }
-      const job = await deps.jobs.reprocess({ contentId: id, contentText, notifyAgentId });
+      const job = await deps.jobs.reprocess({ contentId: id, contentText: prepared.text, ...(prepared.analysisSegments === undefined ? {} : { analysisSegments: prepared.analysisSegments }), notifyAgentId });
       return jsonResponse({ content_id: id, status: "submitted", job_id: job?.id ?? null });
     },
     contentEmbeddingsReindex: async (request) => {
@@ -484,7 +608,8 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
       const content = await deps.repository.get_content(id);
       if (content === undefined) throw new HttpError(404, "Content not found");
       try {
-        const result = await deps.embeddingReindexer.reindex(content);
+        const prepared = await prepareContentText(deps, content, "embedding_reindex");
+        const result = await deps.embeddingReindexer.reindex(content, prepared.text);
         return jsonResponse({ content_id: id, status: "completed", ...result });
       } catch (error) {
         throw new HttpError(500, `Embedding reindex failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -527,21 +652,32 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
           return jsonResponse({ content_id: contentId(existing), content_type: existing.content_type, title, job_id: jobId });
         }
         let transcript: YouTubeTranscript | undefined;
-        let processingText = transcriptText;
-        let storedText = transcriptText;
-        if (processingText === undefined) {
+        if (transcriptText === undefined) {
           try {
             transcript = await deps.transcript.fetchTranscript(videoId);
           } catch (error) {
             if (error instanceof TranscriptUpstreamUnavailable) throw new HttpError(503, "YouTube transcript service is temporarily unavailable");
             throw error;
           }
-          processingText = transcript.fullText;
-          storedText = transcript.timestampedText;
         }
-        const text = processingText ?? "";
+        const sourceText = transcript?.fullText ?? transcriptText ?? "";
+        const sourceSegments = transcript === undefined
+          ? [{ text: sourceText }]
+          : transcript.segments.map((segment, index) => ({ id: `${videoId}-${index + 1}`, text: segment.text, start: segment.start, duration: segment.duration }));
+        const normalizedOriginal = normalizeOriginalTranscript({ text: sourceText, segments: sourceSegments });
+        if (normalizedOriginal === undefined) throw new HttpError(422, "Transcript did not contain usable text");
+        const capturedAt = new Date().toISOString();
+        const currentTranscript: CurrentTranscriptProvenance = {
+          source_kind: transcript === undefined ? "user_supplied" : "youtube_captions",
+          video_id: videoId,
+          ...(transcript === undefined ? {} : { language: transcript.language }),
+          captured_at: capturedAt,
+          timing: normalizedOriginal.timing,
+        };
+        const original = { ...normalizedOriginal, provenance: currentTranscript };
         const filePath = `youtube/${videoId}/transcript.txt`;
-        const fileSize = await deps.storage.upload(filePath, Readable.from(Buffer.from(storedText ?? text, "utf8")), "text/plain");
+        const artifacts = await storeTranscriptArtifacts(deps.storage, filePath, original);
+        const originalArtifact = artifacts.original;
         let metadata: YouTubeMetadata | null = null;
         try {
           metadata = await deps.youtube.fetchMetadata(videoId);
@@ -551,12 +687,24 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
         const title = suppliedTitle ?? metadata?.title ?? `YouTube: ${videoId}`;
         const combinedTags = [...new Set([...(metadata?.tags ?? []), ...tags])];
         const created = await deps.repository.create_content({
-          content_type: "youtube", title, mime_type: "text/plain", file_size: fileSize, file_path: filePath,
+          content_type: "youtube", title, mime_type: "text/plain", file_size: originalArtifact.byte_length, file_path: filePath,
           author: request.keyId ?? null, tags: combinedTags,
-          metadata: youtubeMetadataJson(videoId, resourceKey, metadata, clientMetadata),
+          metadata: {
+            ...youtubeMetadataJson(videoId, resourceKey, metadata, clientMetadata),
+            transcript_analysis: transcriptMetadataForIngest(originalArtifact, currentTranscript, original, artifacts.timed),
+          },
         });
         const id = contentId(created) || videoId;
-        const job = await deps.jobs.submit({ contentId: id, contentText: text, contentType: "youtube", title, resourceKey, notifyAgentId });
+        const analysis = await deps.transcriptResolver.resolve({ content_id: id, variant: "analysis", access: "ingest" });
+        const analysisSegments = analysis.transcript.representation === "analysis"
+          ? analysis.transcript.segments.map((segment) => ({
+            source_segment_id: segment.source_segment_id,
+            text: segment.text,
+            ...(segment.start_seconds === undefined ? {} : { start_seconds: segment.start_seconds }),
+            ...(segment.duration_seconds === undefined ? {} : { duration_seconds: segment.duration_seconds }),
+          }))
+          : undefined;
+        const job = await deps.jobs.submit({ contentId: id, contentText: transcriptResponseText(analysis), ...(analysisSegments === undefined ? {} : { analysisSegments }), contentType: "youtube", title, resourceKey, notifyAgentId });
         return jsonResponse({ title, content_id: id, content_type: "youtube", job_id: submittedJobId(job) });
       }
       const canonicalUrl = canonicalWebUrl(url);

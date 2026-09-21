@@ -17,6 +17,7 @@ function textComponent(text: string, theme: Theme, outputPad = 0): Component {
 
 const TERMINAL_SCHEMA = "onclave.job.terminal.v1";
 const MAX_SUMMARY_LENGTH = 240;
+const MAX_TITLE_LENGTH = 160;
 const MAX_IDENTIFIER_LENGTH = 80;
 
 function boundedText(value: unknown, maxLength: number): string | undefined {
@@ -38,12 +39,29 @@ function terminalSummary(body: string): string | undefined {
 
   const status = boundedText(item.status, MAX_IDENTIFIER_LENGTH);
   if (status === undefined) return undefined;
+  const title = boundedText(item.title, MAX_TITLE_LENGTH);
   const jobId = boundedText(item.job_id, MAX_IDENTIFIER_LENGTH);
   const contentId = boundedText(item.content_id, MAX_IDENTIFIER_LENGTH);
   const summary = boundedText(item.summary, MAX_SUMMARY_LENGTH);
-  const identifiers = [jobId === undefined ? undefined : `job ${jobId}`, contentId === undefined ? undefined : `content ${contentId}`]
+  const coverage = record(item.summary_coverage);
+  const coverageStatus = coverage?.status === "full" || coverage?.status === "partial" || coverage?.status === "legacy" || coverage?.status === "unknown"
+    ? coverage.status
+    : undefined;
+  const filtering = record(item.filtering);
+  const filteringOutcome = filtering?.outcome === "filtered" || filtering?.outcome === "unchanged" || filtering?.outcome === "incompatible_intervals" || filtering?.outcome === "timing_unavailable" || filtering?.outcome === "not_attempted"
+    ? filtering.outcome
+    : undefined;
+  const removed = typeof filtering?.excluded_segment_count === "number" && Number.isInteger(filtering.excluded_segment_count) && filtering.excluded_segment_count >= 0
+    ? filtering.excluded_segment_count
+    : undefined;
+  const state = [
+    coverageStatus === undefined ? undefined : `coverage ${coverageStatus}`,
+    filteringOutcome === undefined ? undefined : `filtering ${filteringOutcome}${removed === undefined ? "" : ` (${removed} removed)`}`,
+  ].filter((value): value is string => value !== undefined);
+  const identifiers = [title === undefined ? undefined : title, jobId === undefined ? undefined : `job ${jobId}`, contentId === undefined ? undefined : `content ${contentId}`]
     .filter((value): value is string => value !== undefined);
-  return `Job terminal: ${status}${identifiers.length === 0 ? "" : ` · ${identifiers.join(" · ")}`}${summary === undefined ? "" : ` · ${summary}`}`;
+  const details = [...identifiers, ...state];
+  return `Job terminal: ${status}${details.length === 0 ? "" : ` · ${details.join(" · ")}`}${summary === undefined ? "" : ` · ${summary}`}`;
 }
 
 /** Extract the peer-facing portion of the protocol-framed message for TUI-only display. */

@@ -1,5 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
+import { DEFAULT_ANALYSIS_INPUT_BUDGET_TOKENS, DEFAULT_ANALYSIS_OUTPUT_RESERVATION_TOKENS, estimateAnalysisTokens, planAdjacentReduction, planAnalysisChunks, type AnalysisNote, type AnalysisSourceSegment } from "./analysis-budget";
 import type { VaultConfig } from "./config";
+import { legacySummaryFromCanonical, type CanonicalSummary, type VersionedOutline } from "./transcript-analysis";
 import type {
   ChunkModel,
   ContentEntityEdge,
@@ -20,6 +22,7 @@ import type { LlmProvider } from "./llm-providers";
 const VALID_TIERS = new Set(["S", "A", "B", "C", "D"]);
 const LABEL_PATTERN = /^[a-z][a-z0-9-]*$/;
 const CALLBACK_NAMESPACE = "a1b2c3d4e5f67890abcdef1234567890";
+const INTERMEDIATE_ANALYSIS_OUTPUT_TOKENS = 1_000;
 
 export const UNIFIED_PROMPT_TEMPLATE = `You are a content analyst. Evaluate the content and provide classification ratings, tags, and entity extraction in a single response.
 
@@ -123,7 +126,10 @@ export type PipelineConfig = Pick<
   | "entityMinConfidence"
   | "callbackUrl"
   | "callbackSecret"
->;
+> & {
+  /** Optional for direct/test callers; production config supplies the tuned value. */
+  unifiedPipelineInputBudget?: VaultConfig["unifiedPipelineInputBudget"];
+};
 
 export type PreDetectedEntity = {
   id?: string;
@@ -141,6 +147,8 @@ export type PipelineRequest = {
   preDetected?: readonly PreDetectedEntity[];
   existingTopics?: readonly string[];
   pipelineVersion: string;
+  /** Optional for callers that predate whole-video analysis budgeting. */
+  analysisSegments?: readonly AnalysisSourceSegment[];
 };
 
 export type PipelineStorage = {
@@ -306,6 +314,188 @@ function extractJson(response: string): JsonObject | undefined {
   return undefined;
 }
 
+const YOUTUBE_SINGLE_PROMPT_TEMPLATE = `You are a content analyst. Analyze the complete retained transcript below. Do not infer facts from omitted material. Return classification, entity extraction, one canonical structured summary, and an ordered grounded outline.
+
+CONTENT TYPE: youtube
+CONTENT TITLE: {title}
+
+## EXISTING TAGS (prefer these over creating new ones)
+{existing_tags}
+
+## PRE-DETECTED ENTITIES (already found via URL/keyword matching)
+{pre_detected_entities_json}
+
+## EXISTING TOPICS (strongly prefer these)
+{existing_topics}
+
+## TAG CO-OCCURRENCE PATTERNS
+{tag_cooccurrence}
+
+## QUALITY DISTRIBUTION (calibrate your ratings)
+Current distribution: {tier_distribution}
+Aim for a balanced distribution. Most content should be B or C tier.
+
+## KNOWN ALIASES
+{known_aliases}
+
+## RULES
+- Assign up to 10 tags from existing tags above.
+- You may create up to {max_new_tags} NEW lowercase hyphenated tags if needed.
+- Assign a quality tier and score with brief explanations.
+- Extract 3-7 hierarchical topics and validate pre-detected entities.
+- Extract additional repos/tools/papers only when substantively discussed.
+- The structured_summary is the only authored summary. It must use version 1, a concise overview, and non-empty key_points.
+- The outline must use version 1. Each section needs a heading and description. Ground sections with source segment IDs from the source index when possible. Do not invent source IDs or timestamps.
+- Distinguish claims from demonstrated evidence, and include mechanisms, results, and limitations when present.
+
+## SOURCE INDEX
+{source_index}
+
+<RETAINED TRANSCRIPT>
+{content_text}
+</RETAINED TRANSCRIPT>
+
+Respond ONLY with valid JSON (no markdown or explanation):
+{
+  "tags": ["existing-tag-1"],
+  "new_tags": ["genuinely-new-tag"],
+  "tier": "B",
+  "tier_explanation": ["Reason"],
+  "quality_score": 55,
+  "score_explanation": ["Reason"],
+  "structured_summary": {"version": 1, "overview": "2-3 sentence overview.", "key_points": ["Mechanism", "Result", "Limitation"]},
+  "outline": {"version": 1, "sections": [{"heading": "Section", "description": "What happens.", "source": {"segment_ids": ["segment-1"]}}]},
+  "topics": [{"name": "AI > LLMs", "confidence": "high", "edge_type": "discusses"}],
+  "pre_detected_validations": [{"entity_id": "entity:langchain", "edge_type": "uses", "confirmed": true}],
+  "additional_entities": [{"type": "tool", "name": "Tool", "confidence": "medium", "edge_type": "mentions"}]
+}`;
+
+const YOUTUBE_MAP_PROMPT = `Analyze this retained transcript unit in its source order. Return only JSON. Record concrete mechanisms, demonstrations, reported results, limitations, and relevant entities. Do not infer facts outside this unit. Preserve the supplied source segment IDs in the note.
+
+UNIT SOURCE INDEX:
+{source_index}
+
+<RETAINED UNIT>
+{content_text}
+</RETAINED UNIT>
+
+{"note":{"text":"ordered factual analysis of this unit","source_segment_ids":["segment-1"]}}`;
+
+const YOUTUBE_REDUCTION_PROMPT = `Combine these adjacent ordered analysis notes into one faithful ordered note. Do not add facts, discard later notes, or change source IDs. Return only JSON with a note object containing concise factual text and the union of source_segment_ids.
+
+{notes}
+
+{"note":{"text":"combined ordered analysis","source_segment_ids":["segment-1","segment-2"]}}`;
+
+const YOUTUBE_SYNTHESIS_PROMPT = `Synthesize the complete ordered analysis notes below into the canonical JSON schema. Every retained source unit is represented by at least one source ID. Use only those notes and source IDs. Return one canonical structured_summary (version 1) and an ordered version 1 outline grounded in the source index. Do not return an independently authored scalar summary. Do not invent timestamps or source IDs. Also preserve classification, tags, topics, validations, and additional entities.
+
+CONTENT TITLE: {title}
+
+## EXISTING TAGS
+{existing_tags}
+## EXISTING TOPICS
+{existing_topics}
+## PRE-DETECTED ENTITIES
+{pre_detected_entities_json}
+## TAG CO-OCCURRENCE PATTERNS
+{tag_cooccurrence}
+## QUALITY DISTRIBUTION
+{tier_distribution}
+## KNOWN ALIASES
+{known_aliases}
+## SOURCE INDEX
+{source_index}
+
+## ORDERED ANALYSIS NOTES
+{notes}
+
+Respond ONLY with valid JSON (no markdown or explanation):
+{
+  "tags": [], "new_tags": [], "tier": "B", "tier_explanation": [], "quality_score": 50, "score_explanation": [],
+  "structured_summary": {"version": 1, "overview": "overview", "key_points": ["mechanism", "result", "limitation"]},
+  "outline": {"version": 1, "sections": [{"heading": "Section", "description": "Description", "source": {"segment_ids": ["segment-1"]}}]},
+  "topics": [{"name": "Topic", "confidence": "high", "edge_type": "discusses"}],
+  "pre_detected_validations": [], "additional_entities": []
+}`;
+
+type YouTubeAnalysisContext = {
+  segments: AnalysisSourceSegment[];
+  sourceIndex: string;
+  sourceRangeCount: number;
+  sourceChunkCount: number;
+  generationMethod: "single_call" | "map_reduce";
+};
+
+type ParsedAnalysisNote = AnalysisNote;
+
+function sourceText(segments: readonly AnalysisSourceSegment[]): string {
+  return segments.map((segment) => segment.text).join("\n\n");
+}
+
+function sourceIndex(segments: readonly AnalysisSourceSegment[]): string {
+  return segments.map((segment) => {
+    const timing = segment.start_seconds === undefined || segment.duration_seconds === undefined
+      ? "timing unavailable"
+      : `start=${segment.start_seconds}s end=${segment.start_seconds + segment.duration_seconds}s`;
+    return `- ${segment.source_segment_id}: ${timing}`;
+  }).join("\n");
+}
+
+function sourceRangeCount(segments: readonly AnalysisSourceSegment[]): number {
+  let count = 0;
+  let previousEnd: number | undefined;
+  for (const segment of segments) {
+    if (segment.start_seconds === undefined || segment.duration_seconds === undefined) continue;
+    const end = segment.start_seconds + segment.duration_seconds;
+    if (previousEnd === undefined || segment.start_seconds > previousEnd + 1) count += 1;
+    previousEnd = Math.max(previousEnd ?? end, end);
+  }
+  return count;
+}
+
+function analysisSegments(request: PipelineRequest): AnalysisSourceSegment[] {
+  if (request.analysisSegments !== undefined) return request.analysisSegments.filter((segment) => segment.text.trim() !== "").map((segment) => ({ ...segment }));
+  if (request.contentText.trim() === "") return [];
+  return [{ source_segment_id: "analysis-1", text: request.contentText }];
+}
+
+function parseAnalysisNote(data: JsonObject | undefined, sourceSegmentIds: readonly string[]): ParsedAnalysisNote | undefined {
+  const item = data?.note !== undefined ? record(data.note) : data;
+  if (item === undefined) return undefined;
+  const text = typeof item.text === "string" ? item.text.trim() : typeof item.analysis === "string" ? item.analysis.trim() : typeof item.summary === "string" ? item.summary.trim() : "";
+  if (text === "") return undefined;
+  return { text, source_segment_ids: [...sourceSegmentIds] };
+}
+
+function sourceEnd(segment: AnalysisSourceSegment): number | undefined {
+  return segment.start_seconds === undefined || segment.duration_seconds === undefined ? undefined : segment.start_seconds + segment.duration_seconds;
+}
+
+function parseGroundedOutline(value: unknown, segments: readonly AnalysisSourceSegment[]): VersionedOutline | undefined {
+  const item = record(value);
+  if (item === undefined || (item.version !== 1 && item.version !== "1") || !Array.isArray(item.sections)) return undefined;
+  const byId = new Map(segments.map((segment, index) => [segment.source_segment_id, { segment, index }]));
+  const sections = item.sections.flatMap((rawSection) => {
+    const section = record(rawSection);
+    const heading = typeof section?.heading === "string" ? section.heading.trim() : "";
+    const description = typeof section?.description === "string" ? section.description.trim() : "";
+    if (heading === "" || description === "") return [];
+    const rawSource = record(section?.source);
+    const ids = (Array.isArray(rawSource?.segment_ids) ? rawSource.segment_ids : Array.isArray(rawSource?.source_segment_ids) ? rawSource.source_segment_ids : [])
+      .filter((id): id is string => typeof id === "string" && byId.has(id));
+    const orderedIds = [...new Set(ids)].sort((left, right) => (byId.get(left)?.index ?? 0) - (byId.get(right)?.index ?? 0));
+    if (orderedIds.length === 0) return [];
+    const timed = orderedIds.map((id) => byId.get(id)?.segment).filter((segment): segment is AnalysisSourceSegment => segment !== undefined && segment.start_seconds !== undefined && segment.duration_seconds !== undefined);
+    const start = timed.length === orderedIds.length ? Math.min(...timed.map((segment) => segment.start_seconds as number)) : undefined;
+    const end = timed.length === orderedIds.length ? Math.max(...timed.map((segment) => sourceEnd(segment) as number)) : undefined;
+    return [{ heading, description, source: {
+      segment_ids: orderedIds,
+      ...(start === undefined || end === undefined ? {} : { start_seconds: start, end_seconds: end }),
+    } }];
+  });
+  return { version: 1, sections };
+}
+
 function uuidFromBytes(bytes: Buffer): string {
   const hex = bytes.toString("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
@@ -438,15 +628,36 @@ export class UnifiedPipeline {
   private async process(request: PipelineRequest): Promise<PipelineRunResult> {
     const context = await this.runStage(request, "context_fetch", () => this.fetchContext(request.existingTopics));
     const provider = request.jobId === undefined || this.llm.withContext === undefined ? this.llm : this.llm.withContext(`pipeline:${request.jobId}`);
-    const prompt = this.buildPrompt(request, context);
-    const response = await this.runStage(request, "llm_call", async () => {
-      try {
-        return await provider.generate(prompt, { temperature: 0.3, maxTokens: 3000, timeout: 120 });
-      } catch (error: unknown) {
-        throw new PipelineStageError("llm_call", "LLM_CALL_ERROR", errorMessage(error).slice(0, 500));
-      }
-    });
-    const parsed = await this.runStage(request, "parse", () => this.parseResponse(provider, response, context.existingTags));
+    const youtube = request.contentType === "youtube";
+    const retained = youtube ? analysisSegments(request) : [];
+    let parsed: { result: UnifiedResult; aliasMappings: [string, string][] };
+    if (youtube && retained.length === 0) {
+      // An empty analysis view is an intentional result of filtering. It must
+      // never be filled with the original transcript merely to satisfy a
+      // model or embedding call.
+      await this.updateStage(request, "llm_call", "skipped", [undefined, new Date()]);
+      parsed = await this.runStage(request, "parse", async () => ({ result: this.noRetainedContentResult(), aliasMappings: [] }));
+    } else if (youtube) {
+      const analysis = await this.runStage(request, "llm_call", async () => {
+        try {
+          return await this.analyzeYouTube(provider, request, context, retained);
+        } catch (error: unknown) {
+          if (error instanceof PipelineStageError) throw error;
+          throw new PipelineStageError("llm_call", "LLM_CALL_ERROR", errorMessage(error).slice(0, 500));
+        }
+      });
+      parsed = await this.runStage(request, "parse", () => this.parseResponse(provider, analysis.response, context.existingTags, { youtube: true, segments: retained, coverage: analysis.coverage }));
+    } else {
+      const prompt = this.buildPrompt(request, context);
+      const response = await this.runStage(request, "llm_call", async () => {
+        try {
+          return await provider.generate(prompt, { temperature: 0.3, maxTokens: 3000, timeout: 120 });
+        } catch (error: unknown) {
+          throw new PipelineStageError("llm_call", "LLM_CALL_ERROR", errorMessage(error).slice(0, 500));
+        }
+      });
+      parsed = await this.runStage(request, "parse", () => this.parseResponse(provider, response, context.existingTags));
+    }
     const result = parsed.result;
     result.model = provider.model;
     result.processed_at = new Date().toISOString();
@@ -456,6 +667,156 @@ export class UnifiedPipeline {
       await Promise.all(aliases.map(([variant, canonical]) => this.storage.record_tag_alias(variant, canonical)));
     }
     return { result, resultJson: this.resultJson(result) };
+  }
+
+  private noRetainedContentResult(): UnifiedResult {
+    const structured: CanonicalSummary = {
+      version: 1,
+      overview: "No retained transcript content was available for analysis.",
+      key_points: ["No retained content was available."],
+    };
+    return {
+      tags: [],
+      new_tags: [],
+      tier: "C",
+      tier_explanation: ["No retained transcript content was available for evaluation."],
+      quality_score: 1,
+      score_explanation: ["No retained transcript content was available for evaluation."],
+      summary: legacySummaryFromCanonical(structured),
+      structured_summary: structured,
+      outline: { version: 1, sections: [] },
+      summary_coverage: {
+        status: "full",
+        source_variant: "analysis",
+        generation_method: "no_retained_content",
+        source_segment_count: 0,
+        source_range_count: 0,
+        analyzed_segment_count: 0,
+        analyzed_range_count: 0,
+        analyzed_chunk_count: 0,
+      },
+      topics: [],
+      pre_detected_validations: [],
+      additional_entities: [],
+    };
+  }
+
+  private analysisBudget(): number {
+    return this.config.unifiedPipelineInputBudget ?? DEFAULT_ANALYSIS_INPUT_BUDGET_TOKENS;
+  }
+
+  private detectedEntities(request: PipelineRequest): string {
+    return asciiJson(JSON.stringify((request.preDetected ?? []).map((entity) => ({
+      entity_id: entity.id === undefined ? `entity:${entity.normalized_name}` : `entity:${entity.id}`,
+      type: entity.entity_type,
+      name: entity.name,
+    })), undefined, 2));
+  }
+
+  private youtubeReplacements(request: PipelineRequest, context: PromptContext, source: string, index: string): Record<string, string> {
+    return {
+      title: request.title,
+      existing_tags: context.existingTags.length === 0 ? "None yet" : context.existingTags.slice(0, 50).join(", "),
+      pre_detected_entities_json: this.detectedEntities(request),
+      existing_topics: context.promptTopics.length === 0 ? "None yet" : context.promptTopics.slice(0, 20).join(", "),
+      tag_cooccurrence: this.formatCooccurrence(context.tagCooccurrence),
+      tier_distribution: this.formatDistribution(context.tierDistribution),
+      known_aliases: Object.keys(context.knownAliases).length === 0 ? "None yet" : Object.entries(context.knownAliases).map(([variant, canonical]) => `${variant} -> ${canonical}`).join(", "),
+      max_new_tags: String(this.config.unifiedPipelineMaxNewTags),
+      content_text: source,
+      source_index: index,
+    };
+  }
+
+  private replaceYouTubePrompt(template: string, replacements: Record<string, string>): string {
+    return template.replace(/\{([a-z_]+)\}/g, (match, key: string) => replacements[key] ?? match);
+  }
+
+  private formatAnalysisSegments(segments: readonly AnalysisSourceSegment[]): string {
+    return segments.map((segment) => {
+      const timing = segment.start_seconds === undefined || segment.duration_seconds === undefined
+        ? "timing unavailable"
+        : `start=${segment.start_seconds}s duration=${segment.duration_seconds}s`;
+      return `[${segment.source_segment_id}; ${timing}]\n${segment.text}`;
+    }).join("\n\n");
+  }
+
+  private async analyzeYouTube(provider: LlmProvider, request: PipelineRequest, context: PromptContext, segments: AnalysisSourceSegment[]): Promise<{ response: string; coverage: YouTubeAnalysisContext }> {
+    const sourceIndexText = sourceIndex(segments);
+    const sourceRange = sourceRangeCount(segments);
+    const singleReplacements = this.youtubeReplacements(request, context, "", sourceIndexText);
+    const singleOverhead = estimateAnalysisTokens(this.replaceYouTubePrompt(YOUTUBE_SINGLE_PROMPT_TEMPLATE, singleReplacements));
+    const plan = planAnalysisChunks(segments, {
+      budgetTokens: this.analysisBudget(),
+      outputReservationTokens: DEFAULT_ANALYSIS_OUTPUT_RESERVATION_TOKENS,
+      promptOverheadTokens: singleOverhead,
+    });
+    const coverage: YouTubeAnalysisContext = {
+      segments,
+      sourceIndex: sourceIndexText,
+      sourceRangeCount: sourceRange,
+      sourceChunkCount: plan.chunks.length,
+      generationMethod: plan.chunks.length === 1 ? "single_call" : "map_reduce",
+    };
+    if (plan.chunks.length === 1) {
+      const prompt = this.replaceYouTubePrompt(YOUTUBE_SINGLE_PROMPT_TEMPLATE, this.youtubeReplacements(request, context, plan.chunks[0]?.text ?? "", sourceIndexText));
+      return { response: await provider.generate(prompt, { temperature: 0.3, maxTokens: DEFAULT_ANALYSIS_OUTPUT_RESERVATION_TOKENS, timeout: 120 }), coverage };
+    }
+
+    const notes: ParsedAnalysisNote[] = [];
+    for (const chunk of plan.chunks) {
+      const chunkIndex = sourceIndex(chunk.segments);
+      const prompt = this.replaceYouTubePrompt(YOUTUBE_MAP_PROMPT, { content_text: this.formatAnalysisSegments(chunk.segments), source_index: chunkIndex });
+      const response = await provider.generate(prompt, { temperature: 0.2, maxTokens: INTERMEDIATE_ANALYSIS_OUTPUT_TOKENS, timeout: 120 });
+      const note = parseAnalysisNote(extractJson(response), chunk.segments.map((segment) => segment.source_segment_id));
+      if (note === undefined) throw new PipelineStageError("llm_call", "ANALYSIS_MAP_FAILED", `Analysis unit ${chunk.index + 1} returned an invalid note`);
+      notes.push(note);
+    }
+
+    let current: ParsedAnalysisNote[] = notes;
+    const synthesisOverhead = this.replaceYouTubePrompt(YOUTUBE_SYNTHESIS_PROMPT, {
+      title: request.title,
+      existing_tags: context.existingTags.length === 0 ? "None yet" : context.existingTags.slice(0, 50).join(", "),
+      existing_topics: context.promptTopics.length === 0 ? "None yet" : context.promptTopics.slice(0, 20).join(", "),
+      pre_detected_entities_json: this.detectedEntities(request),
+      tag_cooccurrence: this.formatCooccurrence(context.tagCooccurrence),
+      tier_distribution: this.formatDistribution(context.tierDistribution),
+      known_aliases: Object.keys(context.knownAliases).length === 0 ? "None yet" : Object.entries(context.knownAliases).map(([variant, canonical]) => `${variant} -> ${canonical}`).join(", "),
+      source_index: sourceIndexText,
+      notes: "",
+    });
+    const reductionPlan = planAdjacentReduction(current, {
+      budgetTokens: this.analysisBudget(),
+      outputReservationTokens: DEFAULT_ANALYSIS_OUTPUT_RESERVATION_TOKENS,
+      promptOverheadTokens: estimateAnalysisTokens(synthesisOverhead),
+      intermediateOutputReservationTokens: INTERMEDIATE_ANALYSIS_OUTPUT_TOKENS,
+    });
+    for (const level of reductionPlan.levels) {
+      const next: ParsedAnalysisNote[] = [];
+      for (const batch of level.batches) {
+        const batchNotes = batch.note_indexes.map((index) => current[index]).filter((note): note is ParsedAnalysisNote => note !== undefined);
+        const notesText = batchNotes.map((note, index) => `NOTE ${index + 1} [${note.source_segment_ids.join(", ")}]:\n${note.text}`).join("\n\n");
+        const prompt = YOUTUBE_REDUCTION_PROMPT.replace("{notes}", notesText);
+        const response = await provider.generate(prompt, { temperature: 0.2, maxTokens: INTERMEDIATE_ANALYSIS_OUTPUT_TOKENS, timeout: 120 });
+        const note = parseAnalysisNote(extractJson(response), batch.source_segment_ids);
+        if (note === undefined) throw new PipelineStageError("llm_call", "ANALYSIS_REDUCTION_FAILED", `Analysis reduction ${batch.index + 1} returned an invalid note`);
+        next.push(note);
+      }
+      current = next;
+    }
+    const notesText = current.map((note, index) => `NOTE ${index + 1} [${note.source_segment_ids.join(", ")}]:\n${note.text}`).join("\n\n");
+    const synthesis = this.replaceYouTubePrompt(YOUTUBE_SYNTHESIS_PROMPT, {
+      title: request.title,
+      existing_tags: context.existingTags.length === 0 ? "None yet" : context.existingTags.slice(0, 50).join(", "),
+      existing_topics: context.promptTopics.length === 0 ? "None yet" : context.promptTopics.slice(0, 20).join(", "),
+      pre_detected_entities_json: this.detectedEntities(request),
+      tag_cooccurrence: this.formatCooccurrence(context.tagCooccurrence),
+      tier_distribution: this.formatDistribution(context.tierDistribution),
+      known_aliases: Object.keys(context.knownAliases).length === 0 ? "None yet" : Object.entries(context.knownAliases).map(([variant, canonical]) => `${variant} -> ${canonical}`).join(", "),
+      source_index: sourceIndexText,
+      notes: notesText,
+    });
+    return { response: await provider.generate(synthesis, { temperature: 0.3, maxTokens: DEFAULT_ANALYSIS_OUTPUT_RESERVATION_TOKENS, timeout: 120 }), coverage };
   }
 
   private async fetchContext(existingTopics: readonly string[] | undefined): Promise<PromptContext> {
@@ -511,26 +872,38 @@ export class UnifiedPipeline {
     return total <= 0 ? "No data" : ["S", "A", "B", "C", "D"].map((tier) => `${tier}=${Math.round((Math.max(value[tier] ?? 0, 0) / total) * 100)}%`).join(", ");
   }
 
-  private async parseResponse(provider: LlmProvider, response: string, existingTags: string[]): Promise<{ result: UnifiedResult; aliasMappings: [string, string][] }> {
-    const initial = this.parseUnifiedResponse(extractJson(response), existingTags);
-    if (initial !== undefined && (initial.result.topics?.length ?? 0) > 0) return initial;
+  private async parseResponse(
+    provider: LlmProvider,
+    response: string,
+    existingTags: string[],
+    options: { youtube?: boolean; segments?: readonly AnalysisSourceSegment[]; coverage?: YouTubeAnalysisContext } = {},
+  ): Promise<{ result: UnifiedResult; aliasMappings: [string, string][] }> {
+    const initial = this.parseUnifiedResponse(extractJson(response), existingTags, options);
+    if (initial !== undefined && (initial.result.topics?.length ?? 0) > 0 && (!options.youtube || initial.result.structured_summary !== undefined)) return initial;
 
     let corrected: { result: UnifiedResult; aliasMappings: [string, string][] } | undefined;
     try {
-      const correction = `Repair the previous response into the complete canonical JSON schema below. Preserve all correct fields from the previous response. Respond ONLY with valid JSON, no markdown or explanation.\n{"tags":["tag"],"new_tags":["tag"],"tier":"B","tier_explanation":["reason"],"quality_score":50,"score_explanation":["reason"],"summary":"summary","structured_summary":{"version":1,"overview":"overview","key_points":["point 1","point 2","point 3"]},"topics":[{"name":"Parent > Child","confidence":"high","edge_type":"discusses"}],"pre_detected_validations":[{"entity_id":"entity:id","edge_type":"mentions","confirmed":true}],"additional_entities":[{"type":"tool","name":"name","confidence":"medium","edge_type":"mentions"}]}\n"structured_summary" is optional for legacy compatibility. When present, it must have version 1, an overview, and a key_points array. "topics" must contain 3-7 objects with name, confidence, and edge_type. "additional_entities" must be an array but may be empty.\n\nPrevious response:\n${response.slice(0, 3000)}`;
-      corrected = this.parseUnifiedResponse(extractJson(await provider.generate(correction, { temperature: 0.1, maxTokens: 3000, timeout: 60 })), existingTags);
+      const correctionSourceIndex = options.segments === undefined ? "None" : sourceIndex(options.segments);
+      const correction = options.youtube
+        ? `Repair the previous response into the complete canonical JSON schema below. Preserve correct classification and entity fields. The structured_summary is required, and the outline must be version 1. Use only source IDs from this source index. Do not add transcript text. Respond ONLY with valid JSON, no markdown or explanation.\nSOURCE INDEX:\n${correctionSourceIndex}\n{"tags":[],"new_tags":[],"tier":"B","tier_explanation":[],"quality_score":50,"score_explanation":[],"structured_summary":{"version":1,"overview":"overview","key_points":["point 1"]},"outline":{"version":1,"sections":[]},"topics":[{"name":"Parent > Child","confidence":"high","edge_type":"discusses"}],"pre_detected_validations":[],"additional_entities":[]}\n\nPrevious response:\n${response.slice(0, 3000)}`
+        : `Repair the previous response into the complete canonical JSON schema below. Preserve all correct fields from the previous response. Respond ONLY with valid JSON, no markdown or explanation.\n{"tags":["tag"],"new_tags":["tag"],"tier":"B","tier_explanation":["reason"],"quality_score":50,"score_explanation":["reason"],"summary":"summary","structured_summary":{"version":1,"overview":"overview","key_points":["point 1","point 2","point 3"]},"topics":[{"name":"Parent > Child","confidence":"high","edge_type":"discusses"}],"pre_detected_validations":[{"entity_id":"entity:id","edge_type":"mentions","confirmed":true}],"additional_entities":[{"type":"tool","name":"name","confidence":"medium","edge_type":"mentions"}]}\n"structured_summary" is optional for legacy compatibility. When present, it must have version 1, an overview, and a key_points array. "topics" must contain 3-7 objects with name, confidence, and edge_type. "additional_entities" must be an array but may be empty.\n\nPrevious response:\n${response.slice(0, 3000)}`;
+      corrected = this.parseUnifiedResponse(extractJson(await provider.generate(correction, { temperature: 0.1, maxTokens: 3000, timeout: 60 })), existingTags, options);
     } catch {
       corrected = undefined;
     }
-    if (corrected === undefined || (corrected.result.topics?.length ?? 0) === 0) {
+    if (corrected === undefined || (corrected.result.topics?.length ?? 0) === 0 || (options.youtube && corrected.result.structured_summary === undefined)) {
       throw new PipelineStageError("parse", "PARSE_FAILED", "Unified pipeline response was invalid or missing topics");
     }
     return corrected;
   }
 
-  private parseUnifiedResponse(data: JsonObject | undefined, existingTags: string[]): { result: UnifiedResult; aliasMappings: [string, string][] } | undefined {
+  private parseUnifiedResponse(
+    data: JsonObject | undefined,
+    existingTags: string[],
+    options: { youtube?: boolean; segments?: readonly AnalysisSourceSegment[]; coverage?: YouTubeAnalysisContext } = {},
+  ): { result: UnifiedResult; aliasMappings: [string, string][] } | undefined {
     if (data === undefined) return undefined;
-    const recognized = ["tags", "new_tags", "tier", "quality_score", "topics", "pre_detected_validations", "additional_entities", "summary", "structured_summary"];
+    const recognized = ["tags", "new_tags", "tier", "quality_score", "topics", "pre_detected_validations", "additional_entities", "summary", "structured_summary", "outline"];
     if (!recognized.some((field) => field in data)) return undefined;
     const aliases: [string, string][] = [];
     const tags = validLabels(data.tags);
@@ -549,6 +922,8 @@ export class UnifiedPipeline {
     const tier = typeof data.tier === "string" && VALID_TIERS.has(data.tier.toUpperCase()) ? data.tier.toUpperCase() : "C";
     const rawScore = typeof data.quality_score === "number" || typeof data.quality_score === "string" ? Number.parseInt(String(data.quality_score), 10) : 50;
     const score = Number.isNaN(rawScore) ? 50 : Math.min(100, Math.max(1, rawScore));
+    const parsedStructured = structuredSummary(data.structured_summary);
+    const canonicalYouTube = options.youtube && parsedStructured !== undefined;
     const result: UnifiedResult = {
       tags,
       new_tags: newTags,
@@ -556,8 +931,19 @@ export class UnifiedPipeline {
       tier_explanation: explanations(data.tier_explanation),
       quality_score: score,
       score_explanation: explanations(data.score_explanation),
-      summary: typeof data.summary === "string" ? data.summary : "",
-      structured_summary: structuredSummary(data.structured_summary),
+      summary: canonicalYouTube ? legacySummaryFromCanonical(parsedStructured) : typeof data.summary === "string" ? data.summary : "",
+      ...(parsedStructured === undefined ? {} : { structured_summary: parsedStructured }),
+      ...(canonicalYouTube ? { outline: parseGroundedOutline(data.outline, options.segments ?? []) ?? { version: 1, sections: [] } } : {}),
+      ...(canonicalYouTube && options.coverage !== undefined ? { summary_coverage: {
+        status: "full",
+        source_variant: "analysis",
+        generation_method: options.coverage.generationMethod,
+        source_segment_count: options.coverage.segments.length,
+        source_range_count: options.coverage.sourceRangeCount,
+        analyzed_segment_count: options.coverage.segments.length,
+        analyzed_range_count: options.coverage.sourceRangeCount,
+        analyzed_chunk_count: options.coverage.sourceChunkCount,
+      } as const } : {}),
       topics: this.parseTopics(data.topics),
       pre_detected_validations: this.parseValidations(data.pre_detected_validations),
       additional_entities: this.parseAdditionalEntities(data.additional_entities),
@@ -601,12 +987,13 @@ export class UnifiedPipeline {
   }
 
   private async persist(request: PipelineRequest, output: PipelineRunResult): Promise<void> {
-    const chunkTexts = await this.runStage(request, "chunking", async () => {
-      const chunks = this.chunking.chunkText(request.contentText);
-      if (chunks.length === 0) throw new PipelineStageError("chunking", "CHUNKING_EMPTY", "Content produced no chunks");
-      return chunks;
-    });
+    const embeddingSource = request.contentType === "youtube" ? sourceText(analysisSegments(request)) : request.contentText;
+    const chunkTexts = await this.runStage(request, "chunking", async () => this.chunking.chunkText(embeddingSource));
     const embeddings = await this.runStage(request, "embedding", async () => {
+      // An entirely filtered transcript is a valid empty source. Do not turn it
+      // into a placeholder chunk, and do not ask the embedding provider to
+      // embed the unfiltered original as a fallback.
+      if (chunkTexts.length === 0) return [];
       let result: number[][];
       try {
         result = await this.embeddings.embedBatch(chunkTexts);
@@ -656,6 +1043,24 @@ export class UnifiedPipeline {
           overview: result.structured_summary.overview,
           key_points: [...result.structured_summary.key_points],
         },
+      }),
+      ...(result.outline === undefined ? {} : {
+        outline: {
+          version: 1,
+          sections: result.outline.sections.map((section) => ({
+            heading: section.heading,
+            description: section.description,
+            ...(section.source === undefined ? {} : {
+              source: {
+                ...(section.source.segment_ids === undefined ? {} : { segment_ids: [...section.source.segment_ids] }),
+                ...(section.source.start_seconds === undefined || section.source.end_seconds === undefined ? {} : { start_seconds: section.source.start_seconds, end_seconds: section.source.end_seconds }),
+              },
+            }),
+          })),
+        },
+      }),
+      ...(result.summary_coverage === undefined ? {} : {
+        summary_coverage: { ...result.summary_coverage },
       }),
       topics: (result.topics ?? []).map((topic) => ({ entity_type: topic.entity_type, name: topic.name, confidence: topic.confidence, edge_type: topic.edge_type, hierarchy: topic.hierarchy ?? null })),
       pre_detected_validations: (result.pre_detected_validations ?? []).map((validation) => ({ entity_id: validation.entity_id, edge_type: validation.edge_type, confirmed: validation.confirmed })),

@@ -27,6 +27,7 @@ const response = JSON.stringify({
   quality_score: 82,
   score_explanation: ["Clear"],
   summary: "A concise summary.",
+  structured_summary: { version: 1, overview: "A concise summary.", key_points: ["The retained source was analyzed."] },
   topics: [{ name: "Engineering > TypeScript", confidence: "high", edge_type: "discusses" }],
   pre_detected_validations: [{ entity_id: "entity:known-tool", edge_type: "uses", confirmed: true }],
   additional_entities: [{ type: "tool", name: "Vitest", confidence: "medium", edge_type: "mentions" }],
@@ -315,6 +316,22 @@ describe("vault unified pipeline and jobs", () => {
 
   it("notifies every durable subscriber independently with terminal timing data", async () => {
     const storage = new FakeStorage();
+    storage.contents.set("content-notify", {
+      id: "content-notify",
+      content_type: "youtube",
+      title: "Stored video title",
+      mime_type: "text/plain",
+      file_size: 1,
+      file_path: "content-notify.txt",
+      metadata: {
+        unified_result: {
+          summary_coverage: { status: "full", source_variant: "analysis", generation_method: "single_call", source_segment_count: 2, source_range_count: 1, analyzed_segment_count: 2, analyzed_range_count: 1, analyzed_chunk_count: 1 },
+        },
+        transcript_analysis: {
+          filtering: { outcome: "filtered", reason: "sponsor_intervals_applied", lookup_state: "matched", timing: "available", boundary_policy: "exclude_wholly_contained_preserve_partial_overlap", original_segment_count: 3, retained_segment_count: 2, excluded_segment_count: 1, excluded_segment_ids: ["segment-2"], interval_ids: ["interval-1"] },
+        },
+      },
+    });
     const notifications: { agentId: string; delivery: JobNotificationDelivery }[] = [];
     const jobs = orchestrator(storage, staticProvider(), { notify: async (agentId, delivery) => {
       notifications.push({ agentId, delivery });
@@ -343,7 +360,10 @@ describe("vault unified pipeline and jobs", () => {
       job_id: expect.any(String),
       content_id: "content-notify",
       status: "completed",
-      summary: "A concise summary.",
+      title: "Stored video title",
+      summary: "A concise summary.\n\n- The retained source was analyzed.",
+      summary_coverage: { status: "full", generation_method: "single_call" },
+      filtering: { outcome: "filtered", reason: "sponsor_intervals_applied", lookup_state: "matched", timing: "available", retained_segment_count: 2, excluded_segment_count: 1 },
       trust: "untrusted_data",
     });
   });
@@ -395,6 +415,29 @@ describe("vault unified pipeline and jobs", () => {
     expect(storage.completions).toHaveLength(0);
   });
 
+  it("completes an empty prepared source without embedding a fallback", async () => {
+    const storage = new FakeStorage();
+    let embeddingCalls = 0;
+    const provider = staticProvider();
+    const pipeline = new UnifiedPipeline(provider, storage, config(), { chunkText: () => [] }, {
+      async embedBatch(): Promise<number[][]> {
+        embeddingCalls += 1;
+        return [];
+      },
+    });
+
+    await expect(pipeline.execute({
+      contentId: "content-all-excluded",
+      contentText: "",
+      contentType: "youtube",
+      title: "All excluded",
+      pipelineVersion: "1.0.0",
+    })).resolves.toBeDefined();
+
+    expect(embeddingCalls).toBe(0);
+    expect(storage.completions[0]?.chunks).toEqual([]);
+  });
+
   it("accepts an empty additional_entities array when valid topics exist", async () => {
     const storage = new FakeStorage();
     const provider = sequenceProvider([JSON.stringify({
@@ -426,6 +469,40 @@ describe("vault unified pipeline and jobs", () => {
     expect(storage.stageTransitions.map(({ stage, status }) => `${stage}:${status}`)).toEqual([
       "context_fetch:failed", "llm_call:skipped", "parse:skipped", "chunking:skipped", "embedding:skipped", "persist:skipped",
     ]);
+  });
+
+  it("meters failed map attempts and fails the job without partial persistence", async () => {
+    const storage = new FakeStorage();
+    const pricing = new LLMPricingService(storage);
+    await pricing.initialize();
+    let calls = 0;
+    let mapCalls = 0;
+    const provider: LlmProvider = {
+      model: "metered-youtube-model",
+      async generate(prompt): Promise<string> {
+        calls += 1;
+        if (prompt.includes("<RETAINED UNIT>")) {
+          mapCalls += 1;
+          if (mapCalls === 2) throw new Error("second analysis unit failed");
+        }
+        return JSON.stringify({ note: { text: "ordered note", source_segment_ids: [] } });
+      },
+      async close(): Promise<void> {},
+    };
+    const metered = new MeteringLLMProvider(provider, storage, "unused", "openai", "gpt-4o-mini", pricing);
+    const jobs = orchestrator(storage, metered, { pipeline: config({ unifiedPipelineInputBudget: 7_000 }) });
+    const segments = Array.from({ length: 8 }, (_, index) => ({ source_segment_id: `segment-${index + 1}`, text: "retained ".repeat(2_000) }));
+
+    const job = await jobs.submit({ contentId: "content-youtube-failure", contentText: "retained", contentType: "youtube", title: "Failure", resourceKey: "yt:failure", analysisSegments: segments });
+    await jobs.waitForIdle();
+
+    expect(calls).toBe(2);
+    expect(mapCalls).toBe(2);
+    expect(storage.usages).toHaveLength(2);
+    expect(storage.usages.map((usage) => usage.output_tokens)).toEqual([14, 0]);
+    expect(storage.completions).toHaveLength(0);
+    expect(storage.jobs.get(job.id ?? "")?.status).toBe(JobStatus.FAILED);
+    expect(storage.jobs.get(job.id ?? "")?.error_code).toBe("LLM_CALL_ERROR");
   });
 
   it("marks LLM failures with the pipeline error surface", async () => {
@@ -463,18 +540,23 @@ describe("vault unified pipeline and jobs", () => {
       },
       async close(): Promise<void> {},
     };
-    const jobs = orchestrator(storage, provider, { pipeline: config({ unifiedPipelineMaxConcurrency: 1 }) });
+    const notifications: { agentId: string; delivery: JobNotificationDelivery }[] = [];
+    const jobs = orchestrator(storage, provider, { pipeline: config({ unifiedPipelineMaxConcurrency: 1 }), notify: async (agentId, delivery) => { notifications.push({ agentId, delivery }); } });
 
     const first = await jobs.submit({ contentId: "content-3", contentText: "first", contentType: "markdown", title: "First", resourceKey: "cid:content-3" });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const second = await jobs.submit({ contentId: "content-4", contentText: "second", contentType: "markdown", title: "Second", resourceKey: "cid:content-4" });
-    await jobs.cancel(second?.id ?? "");
+    const second = await jobs.submit({ contentId: "content-4", contentText: "second", contentType: "markdown", title: "", resourceKey: "cid:content-4", notifyAgentId: "cancel-agent" });
+    const cancelled = await jobs.cancel(second?.id ?? "");
     releaseFirst?.();
     await jobs.waitForIdle();
 
     expect(first).toBeDefined();
     expect(storage.jobs.get(second?.id ?? "")?.status).toBe(JobStatus.CANCELLED);
+    expect(cancelled?.status).toBe(JobStatus.CANCELLED);
     expect(calls).toBe(1);
+    expect(notifications).toHaveLength(1);
+    expect(JSON.parse(notifications[0]?.delivery.body ?? "")).toMatchObject({ status: "cancelled", job_id: second?.id, content_id: "content-4", trust: "untrusted_data" });
+    expect(JSON.parse(notifications[0]?.delivery.body ?? "").title).toBeUndefined();
   });
 
   it("lets completion win over cancellation without loser side effects", async () => {
@@ -527,7 +609,7 @@ describe("vault unified pipeline and jobs", () => {
     expect(storage.statuses.map((item) => item.status)).toContain(JobStatus.FAILED);
     expect(notifications).toHaveLength(1);
     expect(notifications[0]).toMatchObject({ delivery: { kind: "notification", schema: "onclave.job.terminal.v1" } });
-    expect(JSON.parse(notifications[0]?.body ?? "")).toMatchObject({ schema: "onclave.job.terminal.v1", event: "job_terminal", status: "failed", trust: "untrusted_data" });
+    expect(JSON.parse(notifications[0]?.body ?? "")).toMatchObject({ schema: "onclave.job.terminal.v1", event: "job_terminal", status: "failed", title: "Race", trust: "untrusted_data" });
   });
 
   it("does not cancel after the processing CAS wins", async () => {

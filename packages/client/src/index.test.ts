@@ -16,10 +16,16 @@ describe("Onclave vault client", () => {
   it("maps finite vault operations to their server routes", async () => {
     const fetchFn = vi.fn(async (url: string) => response(url.includes("download") ? "transcript" : url.includes("reindex") ? { content_id: "c", status: "completed", chunk_count: 1, model: "m" } : []));
     const client = new OnclaveClient({ endpoint: "http://localhost/api/v1", signer, fetchFn });
-    await client.getTranscript("c"); await client.downloadContent("unsafe/id"); await client.reindexEmbeddings("c"); await client.cancelJob("j"); await client.channel("UC 1", 5); await client.reprocess("c", true, undefined, "pi-test");
+    await client.getTranscript("c"); await client.downloadContent("unsafe/id");
+    await client.getTranscript("c", { variant: "analysis" });
+    await client.downloadContent("unsafe/id", { variant: "analysis" });
+    await client.reindexEmbeddings("c"); await client.cancelJob("j"); await client.channel("UC 1", 5); await client.reprocess("c", true, undefined, "pi-test");
     expect(fetchFn.mock.calls.map(([url]) => url)).toEqual([
-      "http://localhost/api/v1/content/c/download", "http://localhost/api/v1/content/unsafe%2Fid/download", "http://localhost/api/v1/content/c/reindex-embeddings", "http://localhost/api/v1/jobs/j/cancel", "http://localhost/api/v1/youtube/channel?channel=UC+1&limit=5", "http://localhost/api/v1/content/c/reprocess?force=true&notify_agent_id=pi-test",
+      "http://localhost/api/v1/content/c/download", "http://localhost/api/v1/content/unsafe%2Fid/download",
+      "http://localhost/api/v1/content/c/download?variant=analysis", "http://localhost/api/v1/content/unsafe%2Fid/download?variant=analysis",
+      "http://localhost/api/v1/content/c/reindex-embeddings", "http://localhost/api/v1/jobs/j/cancel", "http://localhost/api/v1/youtube/channel?channel=UC+1&limit=5", "http://localhost/api/v1/content/c/reprocess?force=true&notify_agent_id=pi-test",
     ]);
+    expect(signer.signRequest).toHaveBeenCalledWith("GET", "/api/v1/content/unsafe%2Fid/download?variant=analysis", "localhost", undefined);
   });
 
   it("requires HTTPS for the workstation S3 endpoint while allowing HTTP for core", () => {

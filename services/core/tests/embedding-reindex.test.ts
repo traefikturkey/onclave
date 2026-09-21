@@ -42,6 +42,32 @@ describe("embedding reindex service", () => {
     ]);
   });
 
+  it("replaces stale chunks with none for an empty prepared source without embedding", async () => {
+    let embedCalls = 0;
+    let replacement: { contentId: string; chunks: ChunkModel[] } | undefined;
+    const service = new EmbeddingReindexService(
+      { download: async () => Buffer.from("original transcript") },
+      { replace_content_chunks: async (contentId, chunks) => { replacement = { contentId, chunks }; } },
+      {
+        ...embeddingClient([]),
+        embedBatch: async () => { embedCalls += 1; return []; },
+      },
+      "intfloat/e5-large-v2",
+      () => [],
+    );
+
+    await expect(service.reindex({
+      id: "content-all-excluded",
+      content_type: "youtube",
+      mime_type: "text/plain",
+      file_size: 18,
+      file_path: "youtube/content-all-excluded.txt",
+    }, "")).resolves.toEqual({ chunk_count: 0, model: "intfloat/e5-large-v2" });
+
+    expect(embedCalls).toBe(0);
+    expect(replacement).toEqual({ contentId: "content-all-excluded", chunks: [] });
+  });
+
   it("does not replace chunks when the provider returns the wrong dimensions", async () => {
     let replaced = false;
     const service = new EmbeddingReindexService(

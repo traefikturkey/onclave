@@ -27,16 +27,20 @@ describe("Onclave TUI presentation", () => {
       job_id: "job-1234567890",
       content_id: "content-abcdef",
       status: "failed",
+      title: "A video about OCR",
       started_at: "2026-01-02T03:04:05.000Z",
       finished_at: "2026-01-02T03:05:06.000Z",
       duration_seconds: 61,
       summary: "OCR completed for the uploaded document; the final indexing stage failed.",
+      summary_coverage: { status: "full", generation_method: "single_call" },
+      filtering: { outcome: "filtered", reason: "sponsor_intervals_applied", lookup_state: "matched", timing: "available", retained_segment_count: 8, excluded_segment_count: 2 },
       trust: "untrusted_data",
       output: "a large terminal payload that should not be dumped into the collapsed view",
     });
     const content = framed.replace("hello from Alice", envelope);
     const collapsed = inboundCollapsedText({ content });
-    expect(collapsed).toContain("Job terminal: failed · job job-1234567890 · content content-abcdef");
+    expect(collapsed).toContain("Job terminal: failed · A video about OCR · job job-1234567890 · content content-abcdef");
+    expect(collapsed).toContain("coverage full · filtering filtered (2 removed)");
     expect(collapsed).toContain("OCR completed for the uploaded document");
     expect(collapsed).not.toContain("onclave.job.terminal.v1");
     expect(collapsed).not.toContain("2026-01-02T03:04:05.000Z");

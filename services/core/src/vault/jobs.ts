@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { AnalysisSourceSegment } from "./analysis-budget";
 import type { ContentMetadata, JobErrors, JobTiming, JsonObject, PipelineJob } from "./models";
+import { normalizeStoredSummary, normalizeTranscriptFiltering, type TranscriptFilteringSummary, type WholeTranscriptResolver } from "./transcript-analysis";
 import { DataTier, JobStatus } from "./models";
 import { initialPipelineStages, pipelineStages, stagesMetadata, PIPELINE_STAGES, type PipelineStage, type PipelineStageStatus, type PipelineStages } from "./job-stages";
 import { PipelineStageError, type PipelineRequest, type UnifiedPipeline } from "./pipeline";
@@ -8,6 +10,8 @@ import {
   JOB_TERMINAL_NOTIFICATION_VERSION,
   type JobTerminalNotification,
   type TerminalJobStatus,
+  type TerminalFilteringState,
+  type TerminalSummaryCoverage,
 } from "./terminal-notification-contract";
 export { JOB_TERMINAL_NOTIFICATION_SCHEMA, JOB_TERMINAL_NOTIFICATION_VERSION } from "./terminal-notification-contract";
 
@@ -40,6 +44,8 @@ export type JobNotificationDelivery = {
 export type JobOrchestratorConfig = {
   pipelineVersion: string;
   notify?: (agentId: string, delivery: JobNotificationDelivery) => Promise<void>;
+  /** Reprocess requests without supplied text resolve the current analysis view. */
+  transcriptResolver?: WholeTranscriptResolver;
 };
 
 export type JobSubmission = Omit<PipelineRequest, "jobId" | "pipelineVersion"> & {
@@ -49,10 +55,11 @@ export type JobSubmission = Omit<PipelineRequest, "jobId" | "pipelineVersion"> &
 
 export type ReprocessSubmission = {
   contentId: string;
-  contentText: string;
+  contentText?: string;
   notifyAgentId?: string;
   preDetected?: PipelineRequest["preDetected"];
   existingTopics?: PipelineRequest["existingTopics"];
+  analysisSegments?: PipelineRequest["analysisSegments"];
 };
 
 export type JobStatusResponse = {
@@ -112,6 +119,44 @@ function dateValue(value: unknown): Date | undefined {
 
 function optionalText(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function nonEmptyText(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== "" ? value.trim() : undefined;
+}
+
+function terminalCoverage(value: unknown): TerminalSummaryCoverage | undefined {
+  const coverage = normalizeStoredSummary(value)?.summary_coverage;
+  if (coverage === undefined) return undefined;
+  return { status: coverage.status, generation_method: coverage.generation_method } satisfies TerminalSummaryCoverage;
+}
+
+function terminalFiltering(value: unknown): TerminalFilteringState | undefined {
+  const filtering = normalizeTranscriptFiltering(value);
+  if (filtering === undefined) return undefined;
+  const state: TranscriptFilteringSummary = {
+    outcome: filtering.outcome,
+    reason: filtering.reason,
+    lookup_state: filtering.lookup_state,
+    timing: filtering.timing,
+    retained_segment_count: filtering.retained_segment_count,
+    excluded_segment_count: filtering.excluded_segment_count,
+  };
+  return state;
+}
+
+function notificationMetadata(content: ContentMetadata | undefined): { title?: string; coverage?: TerminalSummaryCoverage; filtering?: TerminalFilteringState } {
+  const metadata = valueRecord(content?.metadata);
+  const transcriptAnalysis = valueRecord(metadata?.transcript_analysis);
+  const storedResult = valueRecord(metadata?.unified_result);
+  const storedSummary = storedResult === undefined ? undefined : terminalCoverage(storedResult);
+  const filtering = terminalFiltering(transcriptAnalysis?.filtering ?? metadata?.filtering ?? storedResult?.filtering);
+  const title = nonEmptyText(content?.title);
+  return {
+    ...(title === undefined ? {} : { title }),
+    ...(storedSummary === undefined ? {} : { coverage: storedSummary }),
+    ...(filtering === undefined ? {} : { filtering }),
+  };
 }
 
 function pipelineJob(value: unknown, fallback: PipelineJob | undefined = undefined): PipelineJob | undefined {
@@ -195,7 +240,10 @@ export class PipelineOrchestrator {
       status: JobStatus.PENDING,
       pipeline_version: this.config.pipelineVersion,
       data_tier: DataTier.COMPACT,
-      metadata: stagesMetadata(submission.notifyAgentId === undefined ? {} : { notify_agent_ids: [submission.notifyAgentId] }, initialPipelineStages()),
+      metadata: stagesMetadata({
+        ...(submission.notifyAgentId === undefined ? {} : { notify_agent_ids: [submission.notifyAgentId] }),
+        ...(submission.notifyAgentId === undefined || nonEmptyText(submission.title) === undefined ? {} : { notify_title: nonEmptyText(submission.title) }),
+      }, initialPipelineStages()),
       stages: initialPipelineStages(),
       created_at: new Date(),
     };
@@ -209,14 +257,30 @@ export class PipelineOrchestrator {
     if (this.storage.get_content === undefined) throw new Error("content lookup is not configured");
     const content = await this.storage.get_content(submission.contentId);
     if (content === undefined) return undefined;
+    let contentText = submission.contentText;
+    let analysisSegments: readonly AnalysisSourceSegment[] | undefined = submission.analysisSegments;
+    if (contentText === undefined) {
+      if (this.config.transcriptResolver === undefined) throw new Error("content text or transcript resolver is required");
+      const resolved = await this.config.transcriptResolver.resolve({ content_id: submission.contentId, variant: "analysis", access: "reprocess" });
+      contentText = resolved.transcript.text;
+      if (resolved.transcript.representation === "analysis") {
+        analysisSegments = resolved.transcript.segments.map((segment) => ({
+          source_segment_id: segment.source_segment_id,
+          text: segment.text,
+          ...(segment.start_seconds === undefined ? {} : { start_seconds: segment.start_seconds }),
+          ...(segment.duration_seconds === undefined ? {} : { duration_seconds: segment.duration_seconds }),
+        }));
+      }
+    }
     return this.submit({
       contentId: submission.contentId,
-      contentText: submission.contentText,
+      contentText,
       contentType: content.content_type,
       title: content.title ?? "Untitled",
       resourceKey: resourceKey(content, submission.contentId),
       preDetected: submission.preDetected,
       existingTopics: submission.existingTopics,
+      analysisSegments,
       notifyAgentId: submission.notifyAgentId,
     });
   }
@@ -287,6 +351,7 @@ export class PipelineOrchestrator {
         jobId,
         preDetected: submission.preDetected,
         existingTopics: submission.existingTopics,
+        analysisSegments: submission.analysisSegments,
         pipelineVersion: this.config.pipelineVersion,
       }, async () => {
         const processing = pipelineJob(await this.storage.transition_pipeline_job_terminal(jobId, JobStatus.PROCESSING, [new Date(), undefined], [undefined, undefined, undefined], [JobStatus.PENDING]));
@@ -303,23 +368,23 @@ export class PipelineOrchestrator {
           for (const stage of PIPELINE_STAGES.slice(1)) await this.storage.transition_pipeline_job_stage(jobId, stage, "skipped", [undefined, new Date()], [undefined, undefined], ["pending"]);
         }
         await this.storage.update_content_processing_status(job.content_id, JobStatus.FAILED);
-        await this.notifyTerminal(failed, JobStatus.FAILED);
+        await this.notifyTerminal(failed, JobStatus.FAILED, undefined, submission.title);
         return;
       }
       const completedJob = pipelineJob(await this.storage.transition_pipeline_job_terminal(jobId, JobStatus.COMPLETED, [undefined, new Date()], [undefined, undefined, undefined], [JobStatus.PROCESSING]));
       if (completedJob === undefined) return;
       await this.pipeline.deliverCallback(completedJob, output.resultJson);
-      await this.notifyTerminal(completedJob, JobStatus.COMPLETED, output.resultJson);
+      await this.notifyTerminal(completedJob, JobStatus.COMPLETED, output.resultJson, submission.title);
     } catch (error: unknown) {
       const failure = this.failure(error);
       const failed = pipelineJob(await this.storage.transition_pipeline_job_terminal(jobId, JobStatus.FAILED, [undefined, new Date()], [failure.code, failure.message, failure.stage], [JobStatus.PROCESSING]));
       if (failed === undefined) return;
       await this.storage.update_content_processing_status(job.content_id, JobStatus.FAILED);
-      await this.notifyTerminal(failed, JobStatus.FAILED);
+      await this.notifyTerminal(failed, JobStatus.FAILED, undefined, submission.title);
     }
   }
 
-  private async notifyTerminal(job: PipelineJob, status: JobStatus, result?: JsonObject): Promise<void> {
+  private async notifyTerminal(job: PipelineJob, status: JobStatus, result?: JsonObject, titleHint?: string): Promise<void> {
     if (this.config.notify === undefined) return;
     if (!isTerminalJobStatus(status)) return;
     const subscribers = new Set<string>();
@@ -330,6 +395,18 @@ export class PipelineOrchestrator {
     const legacySubscriber = job.metadata?.notify_agent_id;
     if (typeof legacySubscriber === "string" && legacySubscriber !== "") subscribers.add(legacySubscriber);
     if (subscribers.size === 0) return;
+    let content: ContentMetadata | undefined;
+    if (this.storage.get_content !== undefined) {
+      try {
+        content = await this.storage.get_content(job.content_id);
+      } catch {
+        // Metadata is best effort. It must not suppress a terminal notification.
+      }
+    }
+    const storedMetadata = notificationMetadata(content);
+    const resultCoverage = terminalCoverage(result);
+    const resultFiltering = terminalFiltering(result?.filtering);
+    const title = storedMetadata.title ?? nonEmptyText(titleHint) ?? nonEmptyText(job.metadata?.notify_title);
     const startedAt = timestamp(job.started_at);
     const finishedAt = timestamp(job.finished_at);
     const durationSeconds = job.started_at != null && job.finished_at != null
@@ -343,10 +420,13 @@ export class PipelineOrchestrator {
       job_id: job.id ?? "",
       content_id: job.content_id,
       status,
+      ...(title === undefined ? {} : { title }),
       ...(startedAt === undefined ? {} : { started_at: startedAt }),
       ...(finishedAt === undefined ? {} : { finished_at: finishedAt }),
       duration_seconds: durationSeconds,
       ...(summary === undefined ? {} : { summary }),
+      ...(resultCoverage === undefined && storedMetadata.coverage === undefined ? {} : { summary_coverage: resultCoverage ?? storedMetadata.coverage }),
+      ...(resultFiltering === undefined && storedMetadata.filtering === undefined ? {} : { filtering: resultFiltering ?? storedMetadata.filtering }),
       trust: "untrusted_data",
     };
     const body = JSON.stringify(notification);

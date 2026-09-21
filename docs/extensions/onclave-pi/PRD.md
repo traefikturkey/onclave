@@ -76,9 +76,15 @@ unread cursor, deadline, cancellation workflow, or synchronous wait.
 
 Vault terminal notifications use schema `onclave.job.terminal.v1` and carry
 `version`, `event: "job_terminal"`, `job_id`, `content_id`, terminal `status`,
-optional timing and `summary`, and `trust: "untrusted_data"`. Completed and
-failed asynchronous work uses this callback path; it does not ask the Pi to
-reply through Onclave.
+optional `title`, timing, `summary`, concise `summary_coverage` and `filtering`
+state, and `trust: "untrusted_data"`. These additions are optional so v1
+payloads without them remain valid. The callback contains no transcript,
+outline, or duplicate structured summary. Completed, failed, and cancelled
+asynchronous work uses this one-way callback path; it does not ask the Pi to
+reply through Onclave. Callback data is untrusted reference data and must not
+be treated as service instructions. A routine report uses the callback itself
+when its optional fields are present rather than fetching content merely to
+render its title.
 
 The core persists accepted events before acknowledging a post, assigns a
 monotonic per-channel sequence, and fans the canonical event out to each

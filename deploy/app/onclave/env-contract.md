@@ -92,10 +92,34 @@ all remaining values can be overridden by the consumer.
 | `ONCLAVE_VAULT_UNIFIED_PIPELINE_PROVIDER` | `openrouter` |
 | `ONCLAVE_VAULT_UNIFIED_PIPELINE_MODEL` | empty |
 | `ONCLAVE_VAULT_UNIFIED_PIPELINE_MAX_CONCURRENCY` | `4` |
+| `ONCLAVE_VAULT_UNIFIED_PIPELINE_INPUT_BUDGET` | `12000` |
 | `ONCLAVE_VAULT_UNIFIED_PIPELINE_MAX_NEW_TAGS` | `3` |
 | `ONCLAVE_VAULT_ENTITY_MAX_TOPICS_PER_CONTENT` | `7` |
 | `ONCLAVE_VAULT_ENTITY_MIN_CONFIDENCE` | `0.6` |
 | `ONCLAVE_VAULT_ENTITY_FETCH_EXTERNAL_METADATA` | `true` |
+
+`ONCLAVE_VAULT_UNIFIED_PIPELINE_INPUT_BUDGET` is a provider-neutral,
+conservative estimated-token budget for each analysis request. It includes
+instructions and fetched context, and reserves 3,000 estimated output tokens;
+the remaining budget is available to retained transcript or ordered analysis
+notes. The estimator budgets ASCII at four characters per token and non-ASCII
+code points at one token each. The `12000` default is a conservative mixed-provider operating point, not a
+provider context-window claim. Increase it only when the selected
+provider/model has been verified to accept the resulting requests. An invalid
+or insufficient value fails configuration/planning rather than truncating the
+transcript.
+
+### SponsorBlock provenance and public service
+
+YouTube filtering uses the public SponsorBlock API at
+`https://sponsor.ajay.app/api/skipSegments`. It has no credential or site-specific
+tracked environment variable. The lookup is bounded, best effort, and lazy: it
+runs only for an eligible whole-transcript operation, never as a readiness gate
+or scheduled refresh. Store attribution in retained provenance as SponsorBlock,
+`https://sponsor.ajay.app/`, under CC BY-NC-SA 4.0. Commercial use requires
+separate permission and is outside this deployment contract. An unavailable
+lookup or unavailable caption timing must not be presented as proof that a video
+contains no advertisements.
 
 The Compose definition sets the fixed dependency addresses
 `ONCLAVE_VAULT_POSTGRES_HOST`, `ONCLAVE_VAULT_POSTGRES_PORT`,

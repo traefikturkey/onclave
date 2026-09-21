@@ -6,6 +6,7 @@ import { Type } from "typebox";
 import { createOnclaveClient, resolveEndpoint, type AuthenticatedS3Client, type JsonObject, type OnclaveClient } from "@onclave/client";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { renderVaultResult } from "./presentation";
+import { projectVaultContent } from "./vault-projection";
 
 export const VAULT_TOOL_NAMES = ["onclave_vault_search", "onclave_vault_content", "onclave_vault_ingest", "onclave_vault_jobs"] as const;
 const MAX_TEXT = 100_000;
@@ -44,6 +45,32 @@ type ByteReader = {
   read: () => Promise<{ done: boolean; value?: Uint8Array }>;
   cancel: (reason?: unknown) => Promise<void>;
 };
+
+type TranscriptVariant = "original" | "analysis";
+
+type TranscriptSelection = {
+  objectKey: string;
+  filtering?: unknown;
+};
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function transcriptSelection(content: Record<string, unknown>, variant: TranscriptVariant): TranscriptSelection {
+  const metadata = record(content.metadata);
+  const analysis = record(metadata?.transcript_analysis);
+  const artifacts = record(analysis?.artifacts);
+  const artifact = record(artifacts?.[variant]);
+  const objectKey = artifact?.object_key;
+  if (typeof objectKey !== "string" || objectKey === "") {
+    if (variant === "original" && typeof content.file_path === "string" && content.file_path !== "") {
+      return { objectKey: content.file_path, filtering: content.filtering };
+    }
+    throw new Error(`Onclave ${variant} transcript artifact is unavailable`);
+  }
+  return { objectKey, filtering: content.filtering };
+}
 
 async function bestEffortChmod(path: string, mode: number): Promise<void> {
   try { await chmod(path, mode); } catch { /* Some platforms do not support Unix modes. */ }
@@ -126,9 +153,11 @@ export function createVaultToolDefinitions(options: VaultToolOptions = {}): Arra
       },
       parameters: Type.Object({
         operation: Type.Optional(Type.String({ enum: ["get", "transcript", "list", "find_video_id", "channel", "list_annotations", "create_annotation"] })),
+        variant: Type.Optional(Type.String({ enum: ["original", "analysis"] })),
         content_id: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })), video_id: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })), channel: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })), transcript: Type.Optional(Type.Boolean()),
         limit: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_LIMIT })), offset: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_OFFSET })), content_type: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
         tags: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 20 })), exclude_tags: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 20 })),
+        fields: Type.Optional(Type.Union([Type.String({ minLength: 1, maxLength: 256 }), Type.Array(Type.String({ minLength: 1, maxLength: 256 }), { minItems: 1, maxItems: 32 })])), full: Type.Optional(Type.Boolean()),
         text: Type.Optional(Type.String({ minLength: 1, maxLength: MAX_TEXT })), title: Type.Optional(Type.String({ maxLength: 1_000 })), source_type: Type.Optional(Type.String({ maxLength: 128 })), annotation_tags: Type.Optional(Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 20 })),
       }),
       prepareArguments(args: unknown) {
@@ -138,7 +167,7 @@ export function createVaultToolDefinitions(options: VaultToolOptions = {}): Arra
         // one local-file operation now.
         return input.operation === "download" ? { ...args, operation: "transcript" } : args;
       },
-      async execute(_id: unknown, params: { operation?: string; content_id?: string; video_id?: string; channel?: string; transcript?: boolean; limit?: number; offset?: number; content_type?: string; tags?: string[]; exclude_tags?: string[]; text?: string; title?: string; source_type?: string; annotation_tags?: string[] }, signal?: AbortSignal) {
+      async execute(_id: unknown, params: { operation?: string; variant?: string; content_id?: string; video_id?: string; channel?: string; transcript?: boolean; limit?: number; offset?: number; content_type?: string; tags?: string[]; exclude_tags?: string[]; fields?: string | string[]; full?: boolean; text?: string; title?: string; source_type?: string; annotation_tags?: string[] }, signal?: AbortSignal) {
         const operation = params.operation === "download" ? "transcript" : params.operation ?? (params.transcript === true ? "transcript" : "get");
         const operations = ["get", "transcript", "list", "find_video_id", "channel", "list_annotations", "create_annotation"];
         if (!operations.includes(operation)) throw new Error("operation must be get, transcript, list, find_video_id, channel, list_annotations, or create_annotation");
@@ -150,22 +179,20 @@ export function createVaultToolDefinitions(options: VaultToolOptions = {}): Arra
         if (operation === "create_annotation") { if (id === undefined) throw new Error("create_annotation requires content_id"); const text = required(params.text, "text", MAX_TEXT); return output(await client.createAnnotation(id, { text, ...(params.title === undefined ? {} : { title: params.title }), ...(params.source_type === undefined ? {} : { source_type: params.source_type }), ...(params.annotation_tags === undefined ? {} : { tags: params.annotation_tags }) }, signal)); }
         if (id === undefined) throw new Error(`${operation} requires content_id`);
         if (operation === "transcript") {
-          const content = await client.getContent(id, signal);
-          const objectKey = content.file_path;
-          if (typeof objectKey !== "string" || objectKey === "") throw new Error("Onclave content metadata does not contain an object key");
+          const variant: TranscriptVariant = params.variant === undefined ? "analysis" : params.variant === "original" || params.variant === "analysis" ? params.variant : (() => { throw new Error("variant must be original or analysis"); })();
+          const content = record(await client.getContent(id, signal));
+          if (content === undefined) throw new Error("Onclave content metadata is invalid");
           const s3 = options.s3 === undefined ? undefined : await options.s3();
+          const selection = s3 === undefined ? undefined : transcriptSelection(content, variant);
           const getResponse = s3 === undefined
-            ? (receivedSignal?: AbortSignal) => client.downloadContent(id, receivedSignal)
-            : (receivedSignal?: AbortSignal) => s3.getObject(objectKey, receivedSignal);
-          return output(await downloadToPrivateFile(getResponse, id, signal), "transcript response");
+            ? (receivedSignal?: AbortSignal) => client.downloadContent(id, { variant, signal: receivedSignal })
+            : (receivedSignal?: AbortSignal) => s3.getObject(selection!.objectKey, receivedSignal);
+          const downloaded = await downloadToPrivateFile(getResponse, id, signal);
+          return output({ ...downloaded, selected_variant: variant, ...(selection?.filtering === undefined ? {} : { filtering: selection.filtering }) }, "transcript response");
         }
         const content = await client.getContent(id, signal);
         const { file_path: _filePath, ...safeContent } = content;
-        if (options.s3 !== undefined && typeof content.file_path === "string" && content.file_path !== "") {
-          const s3 = await options.s3();
-          if (s3 !== undefined) return output({ ...safeContent, object_url: s3.objectUrl(content.file_path) });
-        }
-        return output(safeContent);
+        return output(projectVaultContent(safeContent, { fields: params.fields, full: params.full }));
       },
     },
     {
