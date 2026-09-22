@@ -16,7 +16,7 @@ import { loadDefaultRequestSigner } from "./lib/http-signer";
 import { resolveProjectLabel } from "./lib/project-label";
 import { isPiSubagent } from "./lib/subagent-eligibility";
 import { createAuthenticatedS3Client } from "@onclave/client";
-import { registerVaultTools, type NotificationAgentProvider } from "./lib/vault-tools";
+import { registerVaultTools, type NotificationAgentProvider, type VaultToolOptions } from "./lib/vault-tools";
 import { registerPresentation } from "./lib/presentation";
 
 export { isPiSubagent, resolveApiBase };
@@ -67,6 +67,7 @@ type OnclavePiOptions = {
   recordStartup?: (measurement: OnclaveStartupMeasurement) => void;
   nowMs?: () => number;
   startAdapter?: typeof startAdapter;
+  vaultClient?: VaultToolOptions["client"];
   bootstrap?: Omit<BootstrapRecoveryOptions, "signal" | "isCurrent" | "onStateChange" | "onWarning">;
 };
 
@@ -185,6 +186,7 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
     return runtime.card.agent_id;
   };
   registerVaultTools(pi, {
+    ...(options.vaultClient === undefined ? {} : { client: options.vaultClient }),
     endpoint: () => {
       if (runtime === null) throw new Error("Onclave adapter is not connected");
       return runtime.apiBase;

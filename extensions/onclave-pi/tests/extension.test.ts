@@ -100,6 +100,7 @@ describe("Onclave Pi T2 adapter", () => {
       recordStartup,
       nowMs: () => now,
       startAdapter: () => new Promise((resolve) => { resolveStart = resolve; }),
+      vaultClient: () => runtime.client,
     } as never);
 
     const returned = sessionStart?.({ reason: "reload" }, { ui: { notify: vi.fn() } } as never);
@@ -110,13 +111,12 @@ describe("Onclave Pi T2 adapter", () => {
     resolveStart?.(runtime);
     await vi.waitFor(() => expect(recordStartup).toHaveBeenCalledWith({ reason: "reload", durationMs: 25, status: "ok" }));
 
-    const fetchMock = vi.fn(async (..._args: unknown[]) => new Response(JSON.stringify({ content_id: "content-1", job_id: "job-1" }), { status: 202, headers: { "content-type": "application/json" } }));
-    vi.stubGlobal("fetch", fetchMock);
     const ingest = registered.tools.find((tool) => tool.name === "onclave_vault_ingest");
     await (ingest as unknown as { execute: Function }).execute("call", { url: "https://example.test/video" });
-    const request = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect(JSON.parse(String(request?.body))).toMatchObject({ notify_agent_id: "pi-test" });
-    vi.unstubAllGlobals();
+    expect(runtime.client.ingest).toHaveBeenCalledWith(
+      expect.objectContaining({ notify_agent_id: "pi-test" }),
+      expect.any(Object),
+    );
 
     const shutdown = registered.pi.on.mock.calls.find(([event]) => event === "session_shutdown")?.[1];
     await shutdown?.();
