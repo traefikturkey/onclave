@@ -11,7 +11,8 @@ import { EdgeType, EntityType, JobStatus, type ChunkModel, type ContentEntityEdg
 import type { SearchService } from "../src/vault/search";
 import { createVaultHttpServer } from "../src/vault/http";
 import { computeKeyId } from "../src/vault/keys";
-import { createVaultRouteHandlers } from "../src/vault/routes";
+import { createVaultRouteHandlers, type VaultTranscriptService } from "../src/vault/routes";
+import { YouTubeTranscriptService, type YouTubeTranscript } from "../src/vault/youtube-transcript";
 import { createVaultService, type VaultServiceOverrides } from "../src/vault/vault-service";
 import type { TranscriptSponsorBlock } from "../src/vault/transcript-artifacts";
 import type { VaultConfig } from "../src/vault/config";
@@ -81,6 +82,8 @@ describe("vault routes", () => {
   let bytes: Map<string, Buffer>;
   const reindexTexts: string[] = [];
   let sponsorblockCalls = 0;
+  let transcriptFailure: { videoId: string; error: string } | undefined;
+  let activeTranscriptService: VaultTranscriptService | undefined;
 
   beforeEach(async () => {
     key = testKey();
@@ -93,6 +96,8 @@ describe("vault routes", () => {
     bytes = new Map<string, Buffer>([["youtube/video-1/transcript.txt", Buffer.from("existing transcript")]]);
     reindexTexts.length = 0;
     sponsorblockCalls = 0;
+    transcriptFailure = undefined;
+    activeTranscriptService = undefined;
     const pipelineJobs = new Map<string, PipelineJob>();
     const entities = new Map<string, EntityModel>([
       ["topic-typescript", { id: "topic-typescript", entity_type: EntityType.TOPIC, name: "TypeScript", normalized_name: "typescript", hierarchy: ["Engineering", "TypeScript"] }],
@@ -211,7 +216,10 @@ describe("vault routes", () => {
       jobs,
       search: { async search(query: string): Promise<{ query: string; total: number; results: unknown[] }> { return { query, total: 1, results: [{ id: "video-1", title: "Existing video", snippet: "existing transcript" }] }; } } as unknown as SearchService,
       pricing: new LLMPricingService(repository as unknown as PricingSnapshotStorage),
-      transcript: { async fetchTranscript(): Promise<{ videoId: string; segments: [{ text: string; start: number; duration: number }]; language: string; fullText: string; timestampedText: string }> { return { videoId: "dQw4w9WgXcQ", segments: [{ text: "youtube transcript", start: 0, duration: 1 }], language: "en", fullText: "youtube transcript", timestampedText: "[00:00] youtube transcript" }; } },
+      transcript: { async fetchTranscript(videoId: string): Promise<YouTubeTranscript> {
+        if (activeTranscriptService !== undefined) return activeTranscriptService.fetchTranscript(videoId);
+        return { videoId, segments: [{ text: "youtube transcript", start: 0, duration: 1 }], language: "en", fullText: "youtube transcript", timestampedText: "[00:00] youtube transcript" };
+      } },
       sponsorblock: { async lookup() { sponsorblockCalls += 1; return { state: "not_attempted" as const }; } } satisfies TranscriptSponsorBlock,
       youtube: {
         async fetchMetadata(): Promise<never> { throw new Error("metadata unavailable"); },
@@ -222,7 +230,17 @@ describe("vault routes", () => {
       readiness: { async postgres(): Promise<void> {}, async s3(): Promise<void> {}, async ollama(): Promise<void> {} },
     };
     const vault = await createVaultService(vaultConfig(keysPath), overrides);
-    server = createVaultHttpServer({ keyStore: vault.keyStore, handlers: createVaultRouteHandlers({ ...vault, authorizeNotificationAgent: () => undefined, health: () => ({ status: "ok", git_sha: "test", broker: { connected: false, topologyDeclared: false } }) }) });
+    server = createVaultHttpServer({ keyStore: vault.keyStore, handlers: createVaultRouteHandlers({
+      ...vault,
+      authorizeNotificationAgent: () => undefined,
+      health: () => ({
+        status: transcriptFailure === undefined ? "ok" : "degraded",
+        ...(transcriptFailure === undefined ? {} : { transcript: { status: "degraded", videoId: transcriptFailure.videoId, lastError: transcriptFailure.error } }),
+        git_sha: "test",
+        broker: { connected: false, topologyDeclared: false },
+      }),
+      onTranscriptFailure: (videoId, error) => { transcriptFailure ??= { videoId, error: error.message }; },
+    }) });
     baseUrl = `http://127.0.0.1:${await listen(server)}`;
   });
 
@@ -232,6 +250,45 @@ describe("vault routes", () => {
     const bytes = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
     return fetch(`${baseUrl}${path}`, { method, headers: signRequest(key, method, path, new URL(baseUrl).host, bytes), body: bytes });
   }
+
+  it("does not degrade health for private videos, but latches real upstream failures", async () => {
+    const transcriptService = (reason: string): YouTubeTranscriptService => new YouTubeTranscriptService({
+      fetcher: async (url) => {
+        if (url.includes("/watch?v=")) return new Response('<script>var ytcfg = {"INNERTUBE_API_KEY":"test-key"};</script>');
+        if (url.includes("/youtubei/v1/player")) return new Response(JSON.stringify({ playabilityStatus: { status: "LOGIN_REQUIRED", reason } }));
+        return new Response('<transcript><text start="0" dur="1">Fetched transcript</text></transcript>');
+      },
+    });
+
+    expect((await fetch(`${baseUrl}/health`)).status).toBe(200);
+    activeTranscriptService = transcriptService("This is a private video");
+    const privateVideo = await request("/api/v1/ingest", "POST", { url: "https://youtube.com/watch?v=NVxhVlIZNIY" });
+    expect(privateVideo.status).toBe(500);
+    expect((await fetch(`${baseUrl}/health`)).status).toBe(200);
+    await expect((await fetch(`${baseUrl}/health`)).json()).resolves.toMatchObject({ status: "ok" });
+
+    activeTranscriptService = transcriptService("Sign in to confirm you're not a bot");
+    const blocked = await request("/api/v1/ingest", "POST", { url: "https://youtube.com/watch?v=AL-PQuB2wy0" });
+    expect(blocked.status).toBe(503);
+    await expect(blocked.json()).resolves.toEqual({ detail: "YouTube transcript service is temporarily unavailable" });
+    const unhealthy = await fetch(`${baseUrl}/health`);
+    expect(unhealthy.status).toBe(503);
+    await expect(unhealthy.json()).resolves.toMatchObject({
+      status: "degraded",
+      transcript: { status: "degraded", videoId: "AL-PQuB2wy0", lastError: expect.stringContaining("Sign in to confirm") },
+    });
+    expect((await fetch(`${baseUrl}/ready`)).status).toBe(200);
+
+    activeTranscriptService = new YouTubeTranscriptService({
+      fetcher: async (url) => {
+        if (url.includes("/watch?v=")) return new Response('<script>var ytcfg = {"INNERTUBE_API_KEY":"test-key"};</script>');
+        if (url.includes("/youtubei/v1/player")) return new Response(JSON.stringify({ captions: { playerCaptionsTracklistRenderer: { captionTracks: [{ baseUrl: "https://captions.example/en", languageCode: "en" }] } } }));
+        return new Response('<transcript><text start="0" dur="1">Fetched transcript</text></transcript>');
+      },
+    });
+    expect((await request("/api/v1/ingest", "POST", { url: "https://youtube.com/watch?v=dQw4w9WgXcQ" })).status).toBe(200);
+    expect((await fetch(`${baseUrl}/health`)).status).toBe(503);
+  });
 
   it("returns a pollable reprocessing job for duplicate YouTube ingest", async () => {
     const initial = await (await request("/api/v1/ingest", "POST", { url: "https://youtube.com/watch?v=dQw4w9WgXcQ" })).json() as Record<string, unknown>;

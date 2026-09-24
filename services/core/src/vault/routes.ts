@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import { HttpError } from "./errors";
+import { log } from "../log";
 import type { AnalysisSourceSegment } from "./analysis-budget";
 import type { VaultEmbeddingReindexer } from "./embedding-reindex";
 import type { KeyStore } from "./keys";
@@ -93,6 +94,7 @@ export type VaultRouteDependencies = {
   health: () => Record<string, unknown> | Promise<Record<string, unknown>>;
   ready: () => Promise<Record<string, unknown>>;
   authorizeNotificationAgent?: (agentId: string, keyId: string | undefined) => void;
+  onTranscriptFailure?: (videoId: string, error: TranscriptUpstreamUnavailable) => void;
 };
 
 type RequestObject = Record<string, unknown>;
@@ -429,7 +431,10 @@ function usageDate(value: string | undefined, name: string): Date | undefined {
 /** Builds all keep and keep-thin Menos route handlers. Dropped routes are intentionally absent. */
 export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHandlers {
   return {
-    health: async () => jsonResponse(await deps.health()),
+    health: async () => {
+      const result = await deps.health();
+      return jsonResponse(result, result.status === "degraded" ? 503 : 200);
+    },
     ready: async () => {
       const result = await deps.ready();
       return jsonResponse(result, result.status === "ready" ? 200 : 503);
@@ -656,7 +661,11 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
           try {
             transcript = await deps.transcript.fetchTranscript(videoId);
           } catch (error) {
-            if (error instanceof TranscriptUpstreamUnavailable) throw new HttpError(503, "YouTube transcript service is temporarily unavailable");
+            if (error instanceof TranscriptUpstreamUnavailable) {
+              log("error", "transcript.upstream_unavailable", { videoId, error: error.message });
+              deps.onTranscriptFailure?.(videoId, error);
+              throw new HttpError(503, "YouTube transcript service is temporarily unavailable");
+            }
             throw error;
           }
         }

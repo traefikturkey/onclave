@@ -90,8 +90,15 @@ Totals: 12 keep, 11 keep-thin, 16 drop-confirmed (of 39 operations).
 
 ### GET /health
 `200` JSON with `status == "ok"` and `git_sha` (deployment gate compares the
-pinned source revision). The unified service reports the Onclave release
-revision here; the deployment gate is updated in the same change.
+pinned source revision) until a live YouTube transcript fetch fails with a
+classified upstream-unavailable error. That real failure is logged and latched
+for the process lifetime; subsequent health checks return `503`,
+`status == "degraded"`, and a `transcript` object containing `videoId` and
+`lastError`. A `LOGIN_REQUIRED` response identifying a private video is a
+video-specific content failure and does not degrade service health. The unified
+service reports the Onclave release revision here; broker state remains
+diagnostic. No synthetic transcript requests are made.
+`GET /ready` remains a separate PostgreSQL/S3/Ollama readiness check.
 
 ### GET /ready
 `200` JSON with `status == "ready"` and `checks.postgres`, `checks.s3`,

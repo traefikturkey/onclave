@@ -29,6 +29,10 @@ docker compose \
 ## Health and ports
 
 - `GET /health` and `GET /ready` are published as `8000:8000`.
+  `/health` returns `503` after a real classified YouTube transcript upstream
+  failure and retains that diagnostic for the process lifetime, allowing the
+  container healthcheck to detect the long-lived service failure. `/ready`
+  continues to report only PostgreSQL, S3, and Ollama readiness.
 - RabbitMQ remains published on `5672`; its existing management port remains
   published on `15672`.
 - MinIO is published on `9000` and `9001`, Ollama on `11434`, SearXNG as

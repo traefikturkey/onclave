@@ -82,6 +82,7 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
 
   let vault: VaultService | undefined;
   let healthServer: Server | undefined;
+  let transcriptFailure: { videoId: string; error: string } | undefined;
   if (options.withHealthServer !== false) {
     if (config.vault === undefined) {
       healthServer = startHealthServer(config.httpPort, broker);
@@ -114,7 +115,10 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
               const status = broker.status();
               // Broker state is diagnostic only: the deployment gate requires a running HTTP service.
               return {
-                status: "ok",
+                status: transcriptFailure === undefined ? "ok" : "degraded",
+                ...(transcriptFailure === undefined ? {} : {
+                  transcript: { status: "degraded", videoId: transcriptFailure.videoId, lastError: transcriptFailure.error },
+                }),
                 git_sha: process.env.GIT_SHA ?? "unknown",
                 build_date: process.env.BUILD_DATE ?? "unknown",
                 app_version: vaultConfig.appVersion,
@@ -124,6 +128,9 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
                   ...(status.lastError === undefined ? {} : { lastError: status.lastError }),
                 },
               };
+            },
+            onTranscriptFailure: (videoId, error) => {
+              transcriptFailure ??= { videoId, error: error.message };
             },
           }),
           ...createAgentRouteHandlers({

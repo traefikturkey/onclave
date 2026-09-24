@@ -239,7 +239,10 @@ function transcriptUnavailableError(response: PlayerResponse | undefined, videoI
   const status = response?.playabilityStatus?.status;
   const reason = response?.playabilityStatus?.reason;
   if (status === "ERROR" || status === "UNPLAYABLE") return new Error(`Video unavailable: ${videoId}`);
-  if (status === "LOGIN_REQUIRED" && reason !== undefined) return blockedError(videoId, reason);
+  if (status === "LOGIN_REQUIRED" && reason !== undefined) {
+    if (/\bprivate video\b/i.test(reason)) return new Error(`Video unavailable: ${videoId}`);
+    return blockedError(videoId, reason);
+  }
   return new Error(`Transcripts disabled for video: ${videoId}`);
 }
 
