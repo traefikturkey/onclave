@@ -88,6 +88,9 @@ export type PipelineJob = {
   started_at?: Date | null;
   finished_at?: Date | null;
   stages?: PipelineStages;
+  request_payload?: JsonObject;
+  claim_token?: string | null;
+  lease_expires_at?: Date | null;
 };
 
 export type ChunkModel = {

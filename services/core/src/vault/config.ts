@@ -44,6 +44,13 @@ export type VaultConfig = {
   unifiedPipelineMaxConcurrency: number;
   unifiedPipelineInputBudget: number;
   unifiedPipelineMaxNewTags: number;
+  jobRecoveryBatchSize: number;
+  jobLeaseMs: number;
+  deliveryPollIntervalMs: number;
+  deliveryLeaseMs: number;
+  deliveryRetryBaseMs: number;
+  deliveryRetryMaxMs: number;
+  deliveryBatchSize: number;
   callbackUrl?: string;
   callbackSecret?: string;
   semanticScholarApiKey?: string;
@@ -131,6 +138,9 @@ export function loadVaultConfig(env: NodeJS.ProcessEnv = process.env): VaultConf
   }
   const ollamaModel = optional(env, "OLLAMA_MODEL") ?? "mxbai-embed-large";
   const configuredEmbeddingProvider = embeddingProvider(env, "EMBEDDING_PROVIDER", "ollama");
+  const deliveryRetryBaseMs = strictInteger(env, "DELIVERY_RETRY_BASE_MS", 1_000, 1);
+  const deliveryRetryMaxMs = strictInteger(env, "DELIVERY_RETRY_MAX_MS", 900_000, 1);
+  if (deliveryRetryMaxMs < deliveryRetryBaseMs) throw new Error("DELIVERY_RETRY_MAX_MS must not be less than DELIVERY_RETRY_BASE_MS");
   return {
     apiBaseUrl: optional(env, "API_BASE_URL") ?? "http://localhost:8000",
     appVersion: optional(env, "APP_VERSION") ?? "0.1.0",
@@ -171,6 +181,13 @@ export function loadVaultConfig(env: NodeJS.ProcessEnv = process.env): VaultConf
     unifiedPipelineMaxConcurrency: integer(env, "UNIFIED_PIPELINE_MAX_CONCURRENCY", 4, 1),
     unifiedPipelineInputBudget: strictInteger(env, "UNIFIED_PIPELINE_INPUT_BUDGET", DEFAULT_ANALYSIS_INPUT_BUDGET_TOKENS, 1),
     unifiedPipelineMaxNewTags: integer(env, "UNIFIED_PIPELINE_MAX_NEW_TAGS", 3, 0),
+    jobRecoveryBatchSize: strictInteger(env, "JOB_RECOVERY_BATCH_SIZE", 50, 1),
+    jobLeaseMs: strictInteger(env, "JOB_LEASE_MS", 300_000, 1_000),
+    deliveryPollIntervalMs: strictInteger(env, "DELIVERY_POLL_INTERVAL_MS", 1_000, 10),
+    deliveryLeaseMs: strictInteger(env, "DELIVERY_LEASE_MS", 300_000, 15_000),
+    deliveryRetryBaseMs,
+    deliveryRetryMaxMs,
+    deliveryBatchSize: strictInteger(env, "DELIVERY_BATCH_SIZE", 50, 1),
     callbackUrl: optional(env, "CALLBACK_URL"),
     callbackSecret: optional(env, "CALLBACK_SECRET"),
     semanticScholarApiKey: optional(env, "SEMANTIC_SCHOLAR_API_KEY"),

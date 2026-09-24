@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { loadVaultConfig } from "../src/vault/config";
-import { DataTier, JobStatus, type ContentMetadata, type PipelineJob } from "../src/vault/models";
+import { DataTier, EdgeType, EntityType, JobStatus, type ContentMetadata, type PipelineJob } from "../src/vault/models";
 import { PostgresRepository, type SqlClient } from "../src/vault/storage";
 
 type Call = { text: string; values: unknown[] | undefined };
@@ -110,12 +110,82 @@ describe("vault storage repository", () => {
     await repository.get_pipeline_job("job-1");
     await repository.list_pipeline_jobs("content-1", JobStatus.PENDING, 10, 5);
     expect(client.calls).toEqual([
-      { text: "INSERT INTO pipeline_job(id,resource_key,content_id,status,pipeline_version,data_tier, error_code,error_message,error_stage,metadata,created_at,started_at,finished_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *", values: ["job-1", "video:abc", "content-1", "pending", "1.0.0", "compact", null, null, null, {}, null, null, null] },
+      { text: "INSERT INTO pipeline_job(id,resource_key,content_id,status,pipeline_version,data_tier,error_code,error_message,error_stage,metadata,request_payload,created_at,started_at,finished_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *", values: ["job-1", "video:abc", "content-1", "pending", "1.0.0", "compact", null, null, null, {}, null, null, null, null] },
       { text: "UPDATE pipeline_job SET status=$1,started_at=coalesce($2,started_at), finished_at=coalesce($3,finished_at),error_code=coalesce($4,error_code), error_message=coalesce($5,error_message),error_stage=coalesce($6,error_stage) WHERE id=$7 RETURNING *", values: ["processing", new Date("2026-01-02T00:00:00.000Z"), null, null, null, null, "job-1"] },
       { text: "SELECT * FROM pipeline_job WHERE id=$1", values: ["job-1"] },
       { text: "SELECT count(*) AS count FROM pipeline_job WHERE content_id=$1 AND status=$2", values: ["content-1", "pending"] },
       { text: "SELECT * FROM pipeline_job WHERE content_id=$1 AND status=$2 ORDER BY created_at DESC,id LIMIT $3 OFFSET $4", values: ["content-1", "pending", 10, 5] },
     ]);
+  });
+
+  it("atomically begins a claimed job and marks its content processing", async () => {
+    const calls: Call[] = [];
+    let released = false;
+    const started = { id: "job-1", content_id: "content-1", status: JobStatus.PROCESSING, claim_token: "claim-a" };
+    const transaction = {
+      async query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount: number }> {
+        calls.push({ text, values });
+        if (text.startsWith("UPDATE pipeline_job")) return { rows: [started], rowCount: 1 };
+        if (text.startsWith("UPDATE content")) return { rows: [{ id: "content-1" }], rowCount: 1 };
+        return { rows: [], rowCount: 0 };
+      },
+      release(): void { released = true; },
+    };
+    const pool = { query: async () => ({ rows: [], rowCount: 0 }), connect: async () => transaction };
+    const startedAt = new Date("2026-01-02T00:00:00.000Z");
+
+    const result = await new PostgresRepository(pool).begin_pipeline_job("job-1", "claim-a", startedAt);
+
+    expect(result).toBe(started);
+    expect(calls.map(({ text }) => text === "BEGIN" || text === "COMMIT" ? text : text.startsWith("UPDATE pipeline_job") ? "job" : "content")).toEqual(["BEGIN", "job", "content", "COMMIT"]);
+    expect(calls[1]?.values).toEqual(["job-1", "claim-a", startedAt, [JobStatus.PENDING, JobStatus.PROCESSING]]);
+    expect(calls[2]).toEqual({ text: "UPDATE content SET processing_status=$1,updated_at=now() WHERE id=$2 RETURNING id", values: [JobStatus.PROCESSING, "content-1"] });
+    expect(released).toBe(true);
+  });
+
+  it("does not let stale claimant A overwrite terminal content or add delivery work", async () => {
+    const calls: Call[] = [];
+    let contentStatus: string = JobStatus.COMPLETED;
+    const deliveries = ["delivery-b"];
+    const transaction = {
+      async query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount: number }> {
+        calls.push({ text, values });
+        if (text.startsWith("UPDATE content")) contentStatus = JobStatus.PROCESSING;
+        if (text.includes("pipeline_job_delivery")) deliveries.push("delivery-a");
+        return { rows: [], rowCount: 0 };
+      },
+      release(): void {},
+    };
+    const pool = { query: async () => ({ rows: [], rowCount: 0 }), connect: async () => transaction };
+
+    const result = await new PostgresRepository(pool).begin_pipeline_job("job-1", "stale-claim-a", new Date("2026-01-02T00:05:00.000Z"));
+
+    expect(result).toBeUndefined();
+    expect(calls.map(({ text }) => text)).toEqual(["BEGIN", expect.stringContaining("UPDATE pipeline_job"), "ROLLBACK"]);
+    expect(calls[1]?.text).toContain("claim_token=$2 AND status=ANY($4)");
+    expect(contentStatus).toBe(JobStatus.COMPLETED);
+    expect(deliveries).toEqual(["delivery-b"]);
+  });
+
+  it("rolls back the job admission when its content status update fails", async () => {
+    const calls: Call[] = [];
+    let released = false;
+    const transaction = {
+      async query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount: number }> {
+        calls.push({ text, values });
+        if (text.startsWith("UPDATE pipeline_job")) return { rows: [{ id: "job-1", content_id: "content-1" }], rowCount: 1 };
+        if (text.startsWith("UPDATE content")) throw new Error("content update failed");
+        return { rows: [], rowCount: 0 };
+      },
+      release(): void { released = true; },
+    };
+    const pool = { query: async () => ({ rows: [], rowCount: 0 }), connect: async () => transaction };
+
+    await expect(new PostgresRepository(pool).begin_pipeline_job("job-1", "claim-a", new Date("2026-01-02T00:00:00.000Z"))).rejects.toThrow("content update failed");
+
+    expect(calls.map(({ text }) => text === "BEGIN" || text === "ROLLBACK" ? text : text.startsWith("UPDATE pipeline_job") ? "job" : "content")).toEqual(["BEGIN", "job", "content", "ROLLBACK"]);
+    expect(calls.some(({ text }) => text === "COMMIT")).toBe(false);
+    expect(released).toBe(true);
   });
 
   it("atomically adds a deduplicated subscriber only while a job is active", async () => {
@@ -137,7 +207,8 @@ describe("vault storage repository", () => {
     expect(result?.id).toBe("job-1");
     expect(client.calls[0]?.text).toContain("metadata=jsonb_set");
     expect(client.calls[0]?.text).toContain("coalesce(metadata->'stages'->>$2,'pending')=ANY($5)");
-    expect(client.calls[0]?.values).toEqual(["job-1", "llm_call", expect.stringContaining('"status":"processing"'), [JobStatus.PENDING, JobStatus.PROCESSING], ["pending"]]);
+    expect(client.calls[0]?.text).toContain("($6::text IS NULL OR claim_token=$6)");
+    expect(client.calls[0]?.values).toEqual(["job-1", "llm_call", expect.stringContaining('"status":"processing"'), [JobStatus.PENDING, JobStatus.PROCESSING], ["pending"], null]);
   });
 
   it("preserves stage started_at when completing a stage", async () => {
@@ -168,9 +239,39 @@ describe("vault storage repository", () => {
 
     expect(result).toBe(updated);
     expect(client.calls).toEqual([{
-      text: "UPDATE pipeline_job SET status=$1,started_at=coalesce($2,started_at), finished_at=coalesce($3,finished_at),error_code=coalesce($4,error_code), error_message=coalesce($5,error_message),error_stage=coalesce($6,error_stage) WHERE id=$7 AND status=ANY($8) RETURNING *",
+      text: "UPDATE pipeline_job\n        SET status=$1,started_at=coalesce($2,started_at),finished_at=coalesce($3,finished_at),\n            error_code=coalesce($4,error_code),error_message=coalesce($5,error_message),error_stage=coalesce($6,error_stage),\n            claim_token=NULL,lease_expires_at=NULL\n        WHERE id=$7 AND status=ANY($8) RETURNING *",
       values: [JobStatus.COMPLETED, startedAt, finishedAt, "", "", "", "job-1", [JobStatus.PROCESSING]],
     }]);
+  });
+
+  it("commits terminal state and callback plus subscriber intents in one transaction", async () => {
+    const calls: Call[] = [];
+    let released = false;
+    const terminal = { id: "job-1", status: JobStatus.COMPLETED, metadata: { notify_agent_ids: ["agent-a", "agent-b"] } };
+    const client = {
+      async query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount: number }> {
+        calls.push({ text, values });
+        return { rows: text.startsWith("UPDATE pipeline_job") ? [terminal] : [], rowCount: text.startsWith("UPDATE pipeline_job") ? 1 : 1 };
+      },
+      release(): void { released = true; },
+    };
+    const pool = { query: async (): Promise<{ rows: Record<string, unknown>[]; rowCount: number }> => ({ rows: [], rowCount: 0 }), connect: async () => client };
+    const repository = new PostgresRepository(pool);
+
+    await repository.transition_pipeline_job_terminal("job-1", JobStatus.COMPLETED, [undefined, new Date("2026-01-02T00:05:00.000Z")], [undefined, undefined, undefined], [JobStatus.PROCESSING], "claim-1", [
+      { kind: "callback", target: "https://callback.test", idempotency_key: "job:job-1:callback:v1", payload: { status: "completed" } },
+      { kind: "notification", target: "", idempotency_key: "job:job-1:terminal:*", payload: { schema: "onclave.job.terminal.v1" } },
+    ]);
+
+    expect(calls.map(({ text }) => text === "BEGIN" || text === "COMMIT" ? text : text.startsWith("UPDATE pipeline_job") ? "terminal" : "delivery")).toEqual(["BEGIN", "terminal", "delivery", "delivery", "delivery", "COMMIT"]);
+    expect(calls[1]?.text).toContain("AND claim_token=$9");
+    expect(calls[1]?.values?.at(-1)).toBe("claim-1");
+    expect(calls.slice(2, 5).map(({ values }) => values?.slice(2, 5))).toEqual([
+      ["callback", "https://callback.test", "job:job-1:callback:v1"],
+      ["notification", "agent-a", "job:job-1:terminal:agent-a"],
+      ["notification", "agent-b", "job:job-1:terminal:agent-b"],
+    ]);
+    expect(released).toBe(true);
   });
 
   it("uses only pending as the cancellation compare-and-set state", async () => {
@@ -202,7 +303,7 @@ describe("vault storage repository", () => {
 
     expect(result).toBeUndefined();
     expect(client.calls).toEqual([{
-      text: "UPDATE pipeline_job SET status=$1,started_at=coalesce($2,started_at), finished_at=coalesce($3,finished_at),error_code=coalesce($4,error_code), error_message=coalesce($5,error_message),error_stage=coalesce($6,error_stage) WHERE id=$7 AND status=ANY($8) RETURNING *",
+      text: "UPDATE pipeline_job\n        SET status=$1,started_at=coalesce($2,started_at),finished_at=coalesce($3,finished_at),\n            error_code=coalesce($4,error_code),error_message=coalesce($5,error_message),error_stage=coalesce($6,error_stage),\n            claim_token=NULL,lease_expires_at=NULL\n        WHERE id=$7 AND status=ANY($8) RETURNING *",
       values: [JobStatus.FAILED, null, new Date("2026-01-02T00:05:00.000Z"), "PIPELINE_ERROR", "failed", "pipeline", "job-1", [JobStatus.PROCESSING]],
     }]);
   });
@@ -372,6 +473,83 @@ describe("vault storage repository", () => {
       canonicalization_version: "youtube-text-v1",
       sha256: "a".repeat(64),
     })).rejects.toThrow("database does not support transactions");
+  });
+
+  it("rolls back without side-effect SQL when claimed finalization loses its fence", async () => {
+    const calls: Call[] = [];
+    let released = false;
+    const transaction = {
+      async query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount: number }> {
+        calls.push({ text, values });
+        return { rows: [], rowCount: 0 };
+      },
+      release(): void { released = true; },
+    };
+    const pool = { query: async () => ({ rows: [], rowCount: 0 }), connect: async () => transaction };
+
+    const committed = await new PostgresRepository(pool).complete_content_processing("content-1", { summary: "stale" }, "1.0.0", [], [], {
+      aliases: [["type-script", "typescript"]],
+      entities: [{ referenceId: "candidate-1", name: "TypeScript", entityType: EntityType.TOPIC, hierarchy: ["Engineering", "TypeScript"] }],
+      jobId: "job-1",
+      claimToken: "stale-claim",
+      persistStageCompletedAt: new Date("2026-01-02T00:05:00.000Z"),
+    });
+
+    expect(committed).toBe(false);
+    expect(calls.map(({ text }) => text)).toEqual(["BEGIN", expect.stringContaining("UPDATE pipeline_job"), "ROLLBACK"]);
+    expect(calls[1]?.text).toContain("content_id=$2 AND claim_token=$3 AND status=$5");
+    expect(calls[1]?.text).toContain("metadata->'stages'->>'persist'");
+    expect(calls.some(({ text }) => text.includes("tag_alias") || text.includes("DELETE FROM chunk") || text.startsWith("UPDATE content SET"))).toBe(false);
+    expect(released).toBe(true);
+  });
+
+  it("rolls back aliases, entities, content, relationships, chunks, and persist completion on a mid-transaction failure", async () => {
+    const calls: Call[] = [];
+    let released = false;
+    const transaction = {
+      async query(text: string, values?: unknown[]): Promise<{ rows: Record<string, unknown>[]; rowCount: number }> {
+        calls.push({ text, values });
+        if (text.startsWith("UPDATE pipeline_job")) return { rows: [{ id: "job-1" }], rowCount: 1 };
+        if (text.startsWith("SELECT id, entity_type")) return { rows: [], rowCount: 0 };
+        if (text.startsWith("INSERT INTO entity")) return { rows: [{ id: "entity-1" }], rowCount: 1 };
+        if (text.startsWith("UPDATE content SET")) throw new Error("simulated content update failure");
+        return { rows: [], rowCount: 1 };
+      },
+      release(): void { released = true; },
+    };
+    const pool = { query: async () => ({ rows: [], rowCount: 0 }), connect: async () => transaction };
+    const embedding = Array.from({ length: 1024 }, () => 0.5);
+
+    await expect(new PostgresRepository(pool).complete_content_processing(
+      "content-1",
+      { summary: "candidate" },
+      "1.0.0",
+      [{ content_id: "content-1", text: "chunk", chunk_index: 0, embedding }],
+      [{ content_id: "content-1", entity_id: "candidate-1", edge_type: EdgeType.DISCUSSES }],
+      {
+        aliases: [["type-script", "typescript"]],
+        entities: [{ referenceId: "candidate-1", name: "TypeScript", entityType: EntityType.TOPIC, hierarchy: ["Engineering", "TypeScript"] }],
+        jobId: "job-1",
+        claimToken: "claim-1",
+        persistStageCompletedAt: new Date("2026-01-02T00:05:00.000Z"),
+      },
+    )).rejects.toThrow("simulated content update failure");
+
+    expect(calls.map(({ text }) => text)).toEqual([
+      "BEGIN",
+      expect.stringContaining("UPDATE pipeline_job"),
+      expect.stringContaining("INSERT INTO tag_alias"),
+      expect.stringContaining("SELECT id, entity_type"),
+      expect.stringContaining("INSERT INTO entity"),
+      "DELETE FROM chunk WHERE content_id=$1",
+      expect.stringContaining("INSERT INTO chunk"),
+      "DELETE FROM content_entity WHERE content_id=$1",
+      expect.stringContaining("INSERT INTO content_entity"),
+      expect.stringContaining("UPDATE content SET"),
+      "ROLLBACK",
+    ]);
+    expect(calls.some(({ text }) => text === "COMMIT")).toBe(false);
+    expect(released).toBe(true);
   });
 
   it("atomically replaces content chunks", async () => {

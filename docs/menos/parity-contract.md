@@ -19,8 +19,10 @@ Dispositions:
 
 ## Authentication
 
-All routes except `GET /health` and `GET /ready` require RFC 9421 HTTP
-message signatures with Ed25519 keys. Normative pair: the retired server verifier and client signing in the dotfiles
+The public routes are `GET /live`, `GET /health`, `GET /ready`, and
+`GET /metrics`. All other routes, including
+`GET /api/v1/jobs/{job_id}/deliveries`, require RFC 9421 HTTP message
+signatures with Ed25519 keys. Normative pair: the retired server verifier and client signing in the dotfiles
 `tools/menos-youtube/signing.py` (signs method, path with query, host, and
 content digest for bodies; key loaded from the operator SSH Ed25519 key;
 server authorizes against a mounted `authorized_keys` file with reload via
@@ -84,21 +86,32 @@ the existing unmodified client signer.
 | GET /api/v1/usage | keep-thin | LLM spend inspection |
 | GET /api/v1/youtube/channel | keep | channel_videos.py |
 
-Totals: 12 keep, 11 keep-thin, 16 drop-confirmed (of 39 operations).
+Totals: 12 keep, 11 keep-thin, 16 drop-confirmed (of 39 frozen Menos parity
+operations). The following post-parity operational additions are not part of
+those historical totals:
+
+| Operation | Access |
+| --- | --- |
+| GET /live | public |
+| GET /metrics | public |
+| GET /api/v1/jobs/{job_id}/deliveries | RFC 9421 signed |
 
 ## Kept-route contracts (fields consumers actually read)
 
 ### GET /health
 `200` JSON with `status == "ok"` and `git_sha` (deployment gate compares the
-pinned source revision) until a live YouTube transcript fetch fails with a
-classified upstream-unavailable error. That real failure is logged and latched
-for the process lifetime; subsequent health checks return `503`,
-`status == "degraded"`, and a `transcript` object containing `videoId` and
-`lastError`. A `LOGIN_REQUIRED` response identifying a private video is a
-video-specific content failure and does not degrade service health. The unified
-service reports the Onclave release revision here; broker state remains
-diagnostic. No synthetic transcript requests are made.
-`GET /ready` remains a separate PostgreSQL/S3/Ollama readiness check.
+pinned source revision) unless a live YouTube transcript fetch fails with a
+classified upstream-unavailable error. A failure makes health return `503` and
+`status == "degraded"`; a successful external transcript fetch recovers health
+to `200`/`ok`. The optional `transcript` object retains failure and recovery
+counters/timestamps plus the latest safe structured failure (`videoId`, stage,
+classification, attempts, HTTP status, and safe error metadata) across recovery.
+Raw exception messages are not retained. The public ingest `503` remains generic.
+A `LOGIN_REQUIRED` response identifying a private video is a video-specific
+content failure and does not degrade service health. The unified service reports
+the Onclave release revision here; broker state remains diagnostic. No synthetic
+transcript requests are made. `GET /ready` remains a separate
+PostgreSQL/S3/Ollama readiness check.
 
 ### GET /ready
 `200` JSON with `status == "ready"` and `checks.postgres`, `checks.s3`,

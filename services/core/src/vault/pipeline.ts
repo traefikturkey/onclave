@@ -1,6 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import { DEFAULT_ANALYSIS_INPUT_BUDGET_TOKENS, DEFAULT_ANALYSIS_OUTPUT_RESERVATION_TOKENS, estimateAnalysisTokens, planAdjacentReduction, planAnalysisChunks, type AnalysisNote, type AnalysisSourceSegment } from "./analysis-budget";
 import type { VaultConfig } from "./config";
+import { emitVaultEvent, type JobDeliveryIntent, type VaultEventSink } from "./durability";
 import { legacySummaryFromCanonical, type CanonicalSummary, type VersionedOutline } from "./transcript-analysis";
 import type {
   ChunkModel,
@@ -129,6 +130,8 @@ export type PipelineConfig = Pick<
 > & {
   /** Optional for direct/test callers; production config supplies the tuned value. */
   unifiedPipelineInputBudget?: VaultConfig["unifiedPipelineInputBudget"];
+  unifiedPipelineProvider?: VaultConfig["unifiedPipelineProvider"];
+  onEvent?: VaultEventSink;
 };
 
 export type PreDetectedEntity = {
@@ -144,6 +147,7 @@ export type PipelineRequest = {
   contentType: string;
   title: string;
   jobId?: string;
+  claimToken?: string;
   preDetected?: readonly PreDetectedEntity[];
   existingTopics?: readonly string[];
   pipelineVersion: string;
@@ -152,7 +156,7 @@ export type PipelineRequest = {
 };
 
 export type PipelineStorage = {
-  transition_pipeline_job_stage?(jobId: string, stage: PipelineStage, status: PipelineStageStatus, timing: readonly [Date | null | undefined, Date | null | undefined], errors: readonly [string | null | undefined, string | null | undefined], expectedStatuses: readonly PipelineStageStatus[]): Promise<unknown>;
+  transition_pipeline_job_stage?(jobId: string, stage: PipelineStage, status: PipelineStageStatus, timing: readonly [Date | null | undefined, Date | null | undefined], errors: readonly [string | null | undefined, string | null | undefined], expectedStatuses: readonly PipelineStageStatus[], claimToken?: string): Promise<unknown>;
   list_tags_with_counts(): Promise<readonly Record<string, unknown>[]>;
   get_topic_hierarchy(): Promise<readonly EntityModel[]>;
   get_tag_cooccurrence(): Promise<Record<string, string[]>>;
@@ -170,7 +174,8 @@ export type PipelineStorage = {
     pipelineVersion: string,
     chunks: ChunkModel[],
     relationships: ContentEntityEdge[],
-  ): Promise<void>;
+    finalization?: PipelineFinalizationOptions,
+  ): Promise<boolean | void>;
 };
 
 export type ChunkingService = {
@@ -198,6 +203,25 @@ type ContextualLlmProvider = LlmProvider & {
 export type PipelineRunResult = {
   result: UnifiedResult;
   resultJson: JsonObject;
+};
+
+export type PipelineEntityCandidate = {
+  referenceId: string;
+  name: string;
+  entityType: EntityType;
+  hierarchy: string[] | null;
+};
+
+export type PipelineFinalizationOptions = {
+  aliases: readonly (readonly [string, string])[];
+  entities: readonly PipelineEntityCandidate[];
+  jobId?: string;
+  claimToken?: string;
+  persistStageCompletedAt: Date;
+};
+
+type ProcessedPipelineRunResult = PipelineRunResult & {
+  aliasMappings: [string, string][];
 };
 
 function defaultFetcher(url: string, init?: RequestInit): Promise<Response> {
@@ -525,10 +549,6 @@ function callbackPayload(job: PipelineJob, result: JsonObject | undefined): Json
   return payload;
 }
 
-function wait(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
 class AsyncSemaphore {
   private available: number;
   private readonly waiters: (() => void)[] = [];
@@ -568,66 +588,109 @@ export class UnifiedPipeline {
 
   async execute(request: PipelineRequest, beforeStart: (() => Promise<boolean>) | undefined = undefined): Promise<PipelineRunResult | undefined> {
     if (!this.config.unifiedPipelineEnabled) return undefined;
+    if (request.jobId !== undefined && request.claimToken === undefined) throw new Error("JOB_CLAIM_TOKEN_REQUIRED");
     const release = await this.semaphore.acquire();
     try {
       if (beforeStart !== undefined && !await beforeStart()) return undefined;
       const output = await this.process(request);
       await this.persist(request, output);
-      return output;
+      return { result: output.result, resultJson: output.resultJson };
     } finally {
       release();
     }
   }
 
-  async deliverCallback(job: PipelineJob, result: JsonObject | undefined = undefined): Promise<void> {
-    if (this.config.callbackUrl === undefined || this.config.callbackSecret === undefined) return;
-    const body = jsonString(callbackPayload(job, result));
+  createCallbackIntent(job: PipelineJob, result: JsonObject | undefined = undefined): JobDeliveryIntent | undefined {
+    if (this.config.callbackUrl === undefined || this.config.callbackSecret === undefined) return undefined;
+    return {
+      kind: "callback",
+      target: this.config.callbackUrl,
+      idempotency_key: `job:${job.id ?? ""}:callback:v1`,
+      payload: callbackPayload(job, result),
+    };
+  }
+
+  async deliverCallback(delivery: JobDeliveryIntent): Promise<void> {
+    if (this.config.callbackSecret === undefined) throw new Error("callback delivery is not configured");
+    const body = jsonString(delivery.payload);
     const signature = createHmac("sha256", this.config.callbackSecret).update(body).digest("hex");
-    const headers = { "Content-Type": "application/json", "X-Menos-Signature": signature };
-    for (const [index, delay] of [1_000, 4_000, 16_000].entries()) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 10_000);
-      try {
-        const response = await this.fetcher(this.config.callbackUrl, { method: "POST", headers, body, signal: controller.signal });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return;
-      } catch {
-        clearTimeout(timeout);
-        if (index < 2) await wait(delay);
-      } finally {
-        clearTimeout(timeout);
-      }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const response = await this.fetcher(delivery.target, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Menos-Signature": signature, "Idempotency-Key": delivery.idempotency_key },
+        body,
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } finally {
+      clearTimeout(timeout);
     }
   }
 
-  private async updateStage(request: PipelineRequest, stage: PipelineStage, status: PipelineStageStatus, timing: readonly [Date | null | undefined, Date | null | undefined] = [undefined, undefined], errors: readonly [string | null | undefined, string | null | undefined] = [undefined, undefined]): Promise<void> {
-    if (request.jobId === undefined || this.storage.transition_pipeline_job_stage === undefined) return;
+  private async updateStage(request: PipelineRequest, stage: PipelineStage, status: PipelineStageStatus, timing: readonly [Date | null | undefined, Date | null | undefined] = [undefined, undefined], errors: readonly [string | null | undefined, string | null | undefined] = [undefined, undefined]): Promise<boolean> {
+    if (request.jobId === undefined || this.storage.transition_pipeline_job_stage === undefined) return true;
     const expected: readonly PipelineStageStatus[] = status === "processing" ? ["pending"] : status === "skipped" ? ["pending"] : ["processing"];
-    await this.storage.transition_pipeline_job_stage(request.jobId, stage, status, timing, errors, expected);
+    const result = await this.storage.transition_pipeline_job_stage(request.jobId, stage, status, timing, errors, expected, request.claimToken);
+    return result !== undefined && result !== null;
   }
 
   private async skipAfter(request: PipelineRequest, stage: PipelineStage): Promise<void> {
     const index = PIPELINE_STAGES.indexOf(stage);
-    for (const skipped of PIPELINE_STAGES.slice(index + 1)) await this.updateStage(request, skipped, "skipped", [undefined, new Date()]);
+    for (const skipped of PIPELINE_STAGES.slice(index + 1)) {
+      if (!await this.updateStage(request, skipped, "skipped", [undefined, new Date()])) throw new Error("JOB_CLAIM_LOST");
+    }
+  }
+
+  private instrumentProvider(provider: LlmProvider, request: PipelineRequest, stage: PipelineStage): LlmProvider {
+    return {
+      model: provider.model,
+      generate: async (prompt, options): Promise<string> => {
+        const jobId = request.jobId;
+        const startedAt = Date.now();
+        const labels = { ...(jobId === undefined ? {} : { job_id: jobId }), stage, provider: this.config.unifiedPipelineProvider ?? "configured", model: provider.model };
+        emitVaultEvent(this.config.onEvent, { event: "provider.request.started", ...labels });
+        try {
+          const output = await provider.generate(prompt, options);
+          emitVaultEvent(this.config.onEvent, { event: "provider.request.completed", ...labels, duration_ms: Date.now() - startedAt, outcome: "success" });
+          return output;
+        } catch (error: unknown) {
+          emitVaultEvent(this.config.onEvent, { event: "provider.request.failed", ...labels, duration_ms: Date.now() - startedAt, outcome: "failure", error_code: error instanceof PipelineStageError ? error.code : "PROVIDER_REQUEST_FAILED" });
+          throw error;
+        }
+      },
+      close: () => provider.close(),
+    };
   }
 
   private async runStage<T>(request: PipelineRequest, stage: PipelineStage, operation: () => Promise<T>): Promise<T> {
-    await this.updateStage(request, stage, "processing", [new Date(), undefined]);
+    const jobId = request.jobId;
+    const startedAt = Date.now();
+    emitVaultEvent(this.config.onEvent, { event: "pipeline.stage.started", ...(jobId === undefined ? {} : { job_id: jobId }), stage });
+    if (!await this.updateStage(request, stage, "processing", [new Date(), undefined])) throw new Error("JOB_CLAIM_LOST");
     try {
       const result = await operation();
-      await this.updateStage(request, stage, "completed", [undefined, new Date()]);
+      if (!await this.updateStage(request, stage, "completed", [undefined, new Date()])) throw new Error("JOB_CLAIM_LOST");
+      emitVaultEvent(this.config.onEvent, { event: "pipeline.stage.completed", ...(jobId === undefined ? {} : { job_id: jobId }), stage, duration_ms: Date.now() - startedAt });
       return result;
     } catch (error: unknown) {
       const failure = error instanceof PipelineStageError ? error : undefined;
-      await this.updateStage(request, stage, "failed", [undefined, new Date()], [failure?.code ?? "PIPELINE_EXCEPTION", (failure?.message ?? errorMessage(error)).slice(0, 500)]);
-      await this.skipAfter(request, stage);
+      const errorCode = failure?.code ?? (error instanceof Error && error.message === "JOB_CLAIM_LOST" ? "JOB_CLAIM_LOST" : "PIPELINE_EXCEPTION");
+      if (errorCode !== "JOB_CLAIM_LOST") {
+        await this.updateStage(request, stage, "failed", [undefined, new Date()], [errorCode, (failure?.message ?? errorMessage(error)).slice(0, 500)]);
+        await this.skipAfter(request, stage);
+      }
+      emitVaultEvent(this.config.onEvent, { event: "pipeline.stage.failed", ...(jobId === undefined ? {} : { job_id: jobId }), stage, duration_ms: Date.now() - startedAt, error_code: errorCode });
       throw error;
     }
   }
 
-  private async process(request: PipelineRequest): Promise<PipelineRunResult> {
+  private async process(request: PipelineRequest): Promise<ProcessedPipelineRunResult> {
     const context = await this.runStage(request, "context_fetch", () => this.fetchContext(request.existingTopics));
-    const provider = request.jobId === undefined || this.llm.withContext === undefined ? this.llm : this.llm.withContext(`pipeline:${request.jobId}`);
+    const baseProvider = request.jobId === undefined || this.llm.withContext === undefined ? this.llm : this.llm.withContext(`pipeline:${request.jobId}`);
+    const provider = this.instrumentProvider(baseProvider, request, "llm_call");
+    const parseProvider = this.instrumentProvider(baseProvider, request, "parse");
     const youtube = request.contentType === "youtube";
     const retained = youtube ? analysisSegments(request) : [];
     let parsed: { result: UnifiedResult; aliasMappings: [string, string][] };
@@ -646,7 +709,7 @@ export class UnifiedPipeline {
           throw new PipelineStageError("llm_call", "LLM_CALL_ERROR", errorMessage(error).slice(0, 500));
         }
       });
-      parsed = await this.runStage(request, "parse", () => this.parseResponse(provider, analysis.response, context.existingTags, { youtube: true, segments: retained, coverage: analysis.coverage }));
+      parsed = await this.runStage(request, "parse", () => this.parseResponse(parseProvider, analysis.response, context.existingTags, { youtube: true, segments: retained, coverage: analysis.coverage }));
     } else {
       const prompt = this.buildPrompt(request, context);
       const response = await this.runStage(request, "llm_call", async () => {
@@ -656,17 +719,14 @@ export class UnifiedPipeline {
           throw new PipelineStageError("llm_call", "LLM_CALL_ERROR", errorMessage(error).slice(0, 500));
         }
       });
-      parsed = await this.runStage(request, "parse", () => this.parseResponse(provider, response, context.existingTags));
+      parsed = await this.runStage(request, "parse", () => this.parseResponse(parseProvider, response, context.existingTags));
     }
     const result = parsed.result;
     result.model = provider.model;
     result.processed_at = new Date().toISOString();
-    if (parsed.aliasMappings.length > 0) {
-      const aliases = [...new Map(parsed.aliasMappings.map((alias) => [`${alias[0]}\u0000${alias[1]}`, alias])).values()]
-        .sort(([left], [right]) => left.localeCompare(right));
-      await Promise.all(aliases.map(([variant, canonical]) => this.storage.record_tag_alias(variant, canonical)));
-    }
-    return { result, resultJson: this.resultJson(result) };
+    const aliasMappings = [...new Map(parsed.aliasMappings.map((alias) => [`${alias[0]}\u0000${alias[1]}`, alias])).values()]
+      .sort(([left], [right]) => left.localeCompare(right));
+    return { result, resultJson: this.resultJson(result), aliasMappings };
   }
 
   private noRetainedContentResult(): UnifiedResult {
@@ -986,7 +1046,7 @@ export class UnifiedPipeline {
     });
   }
 
-  private async persist(request: PipelineRequest, output: PipelineRunResult): Promise<void> {
+  private async persist(request: PipelineRequest, output: ProcessedPipelineRunResult): Promise<void> {
     const embeddingSource = request.contentType === "youtube" ? sourceText(analysisSegments(request)) : request.contentText;
     const chunkTexts = await this.runStage(request, "chunking", async () => this.chunking.chunkText(embeddingSource));
     const embeddings = await this.runStage(request, "embedding", async () => {
@@ -1005,11 +1065,71 @@ export class UnifiedPipeline {
       }
       return result;
     });
-    await this.runStage(request, "persist", async () => {
-      const chunks = chunkTexts.map((text, chunkIndex) => ({ content_id: request.contentId, text, chunk_index: chunkIndex, embedding: embeddings[chunkIndex] }));
-      const relationships = await this.resolveRelationships(request.contentId, output.result);
-      await this.storage.complete_content_processing(request.contentId, output.resultJson, request.pipelineVersion, chunks, relationships);
-    });
+    const chunks = chunkTexts.map((text, chunkIndex) => ({ content_id: request.contentId, text, chunk_index: chunkIndex, embedding: embeddings[chunkIndex] }));
+    if (request.jobId === undefined) {
+      await this.runStage(request, "persist", async () => {
+        await Promise.all(output.aliasMappings.map(([variant, canonical]) => this.storage.record_tag_alias(variant, canonical)));
+        const relationships = await this.resolveRelationships(request.contentId, output.result);
+        await this.storage.complete_content_processing(request.contentId, output.resultJson, request.pipelineVersion, chunks, relationships);
+      });
+      return;
+    }
+    await this.persistClaimed(request, output, chunks);
+  }
+
+  private async persistClaimed(request: PipelineRequest, output: ProcessedPipelineRunResult, chunks: ChunkModel[]): Promise<void> {
+    const jobId = request.jobId;
+    const claimToken = request.claimToken;
+    if (jobId === undefined || claimToken === undefined) throw new Error("JOB_CLAIM_TOKEN_REQUIRED");
+    const startedAt = Date.now();
+    emitVaultEvent(this.config.onEvent, { event: "pipeline.stage.started", job_id: jobId, stage: "persist" });
+    if (!await this.updateStage(request, "persist", "processing", [new Date(), undefined])) throw new Error("JOB_CLAIM_LOST");
+    try {
+      const prepared = this.prepareClaimedRelationships(request.contentId, output.result);
+      const completedAt = new Date();
+      const committed = await this.storage.complete_content_processing(
+        request.contentId,
+        output.resultJson,
+        request.pipelineVersion,
+        chunks,
+        prepared.relationships,
+        { aliases: output.aliasMappings, entities: prepared.entities, jobId, claimToken, persistStageCompletedAt: completedAt },
+      );
+      if (committed === false) throw new Error("JOB_CLAIM_LOST");
+      // Void is retained only for pre-fencing test/direct storage implementations.
+      // The production repository returns a boolean and commits this transition
+      // in the content transaction.
+      if (committed === undefined && !await this.updateStage(request, "persist", "completed", [undefined, completedAt])) throw new Error("JOB_CLAIM_LOST");
+      emitVaultEvent(this.config.onEvent, { event: "pipeline.stage.completed", job_id: jobId, stage: "persist", duration_ms: Date.now() - startedAt });
+    } catch (error: unknown) {
+      const claimLost = error instanceof Error && error.message === "JOB_CLAIM_LOST";
+      if (!claimLost) await this.updateStage(request, "persist", "failed", [undefined, new Date()], ["PIPELINE_EXCEPTION", errorMessage(error).slice(0, 500)]);
+      emitVaultEvent(this.config.onEvent, { event: "pipeline.stage.failed", job_id: jobId, stage: "persist", duration_ms: Date.now() - startedAt, error_code: claimLost ? "JOB_CLAIM_LOST" : "PIPELINE_EXCEPTION" });
+      throw error;
+    }
+  }
+
+  private prepareClaimedRelationships(contentId: string, result: UnifiedResult): { entities: PipelineEntityCandidate[]; relationships: ContentEntityEdge[] } {
+    const entities: PipelineEntityCandidate[] = [];
+    const references = new Map<string, string>();
+    const edges = new Map<string, ContentEntityEdge>();
+    for (const extracted of [...(result.topics ?? []), ...(result.additional_entities ?? [])]) {
+      const key = `${extracted.entity_type}\u0000${normalizedName(extracted.name)}`;
+      let referenceId = references.get(key);
+      if (referenceId === undefined) {
+        referenceId = `__pipeline_entity_${entities.length}`;
+        references.set(key, referenceId);
+        entities.push({ referenceId, name: extracted.name, entityType: extracted.entity_type, hierarchy: extracted.hierarchy ?? null });
+      }
+      const edge: ContentEntityEdge = { content_id: contentId, entity_id: referenceId, edge_type: extracted.edge_type, confidence: confidenceValue(extracted.confidence) };
+      edges.set(`${edge.entity_id}\u0000${edge.edge_type}`, edge);
+    }
+    for (const validation of result.pre_detected_validations ?? []) {
+      if (!validation.confirmed) continue;
+      const edge: ContentEntityEdge = { content_id: contentId, entity_id: validation.entity_id.replace(/^entity:/, ""), edge_type: validation.edge_type };
+      edges.set(`${edge.entity_id}\u0000${edge.edge_type}`, edge);
+    }
+    return { entities, relationships: [...edges.values()] };
   }
 
   private async resolveRelationships(contentId: string, result: UnifiedResult): Promise<ContentEntityEdge[]> {

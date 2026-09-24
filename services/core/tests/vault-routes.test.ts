@@ -4,8 +4,9 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PipelineOrchestrator } from "../src/vault/jobs";
+import type { JobDelivery } from "../src/vault/durability";
 import { LLMPricingService, type PricingSnapshotStorage } from "../src/vault/llm-pricing";
 import { EdgeType, EntityType, JobStatus, type ChunkModel, type ContentEntityEdge, type ContentMetadata, type EntityModel, type JobErrors, type JobTiming, type JsonObject, type PipelineJob } from "../src/vault/models";
 import type { SearchService } from "../src/vault/search";
@@ -13,6 +14,7 @@ import { createVaultHttpServer } from "../src/vault/http";
 import { computeKeyId } from "../src/vault/keys";
 import { createVaultRouteHandlers, type VaultTranscriptService } from "../src/vault/routes";
 import { YouTubeTranscriptService, type YouTubeTranscript } from "../src/vault/youtube-transcript";
+import { safeTranscriptFailure, TranscriptHealthTracker } from "../src/vault/transcript-health";
 import { createVaultService, type VaultServiceOverrides } from "../src/vault/vault-service";
 import type { TranscriptSponsorBlock } from "../src/vault/transcript-artifacts";
 import type { VaultConfig } from "../src/vault/config";
@@ -69,7 +71,7 @@ function vaultConfig(keysPath: string): VaultConfig {
   return {
     apiBaseUrl: "http://localhost:8000", appVersion: "test", postgresHost: "localhost", postgresPort: 5432, postgresUser: "menos", postgresPassword: "secret", postgresDatabase: "menos", postgresPoolMinSize: 1, postgresPoolMaxSize: 1,
     s3EndpointUrl: "localhost:9000", s3AccessKey: "access", s3SecretKey: "secret", s3Secure: false, s3Bucket: "menos", s3Region: "us-east-1", ollamaUrl: "http://ollama", ollamaModel: "embed", embeddingProvider: "ollama", embeddingModel: "embed", doclingUrl: "http://docling", sshPublicKeysPath: keysPath,
-    webshareProxyUsername: "user", webshareProxyPassword: "password", agentExpansionProvider: "none", agentExpansionModel: "", agentRerankProvider: "none", agentRerankModel: "", agentSynthesisProvider: "none", agentSynthesisModel: "", unifiedPipelineEnabled: true, unifiedPipelineProvider: "none", unifiedPipelineModel: "", unifiedPipelineMaxConcurrency: 1, unifiedPipelineInputBudget: 12_000, unifiedPipelineMaxNewTags: 3, entityMaxTopicsPerContent: 7, entityMinConfidence: 0.6, entityFetchExternalMetadata: true,
+    webshareProxyUsername: "user", webshareProxyPassword: "password", agentExpansionProvider: "none", agentExpansionModel: "", agentRerankProvider: "none", agentRerankModel: "", agentSynthesisProvider: "none", agentSynthesisModel: "", unifiedPipelineEnabled: true, unifiedPipelineProvider: "none", unifiedPipelineModel: "", unifiedPipelineMaxConcurrency: 1, unifiedPipelineInputBudget: 12_000, unifiedPipelineMaxNewTags: 3, jobRecoveryBatchSize: 50, jobLeaseMs: 300_000, deliveryPollIntervalMs: 1_000, deliveryLeaseMs: 300_000, deliveryRetryBaseMs: 1_000, deliveryRetryMaxMs: 900_000, deliveryBatchSize: 50, entityMaxTopicsPerContent: 7, entityMinConfidence: 0.6, entityFetchExternalMetadata: true,
   };
 }
 
@@ -82,8 +84,10 @@ describe("vault routes", () => {
   let bytes: Map<string, Buffer>;
   const reindexTexts: string[] = [];
   let sponsorblockCalls = 0;
-  let transcriptFailure: { videoId: string; error: string } | undefined;
+  let transcriptHealth: TranscriptHealthTracker;
   let activeTranscriptService: VaultTranscriptService | undefined;
+  let jobDeliveries: JobDelivery[];
+  let providerUnavailable: boolean;
 
   beforeEach(async () => {
     key = testKey();
@@ -96,8 +100,10 @@ describe("vault routes", () => {
     bytes = new Map<string, Buffer>([["youtube/video-1/transcript.txt", Buffer.from("existing transcript")]]);
     reindexTexts.length = 0;
     sponsorblockCalls = 0;
-    transcriptFailure = undefined;
+    transcriptHealth = new TranscriptHealthTracker();
     activeTranscriptService = undefined;
+    jobDeliveries = [];
+    providerUnavailable = false;
     const pipelineJobs = new Map<string, PipelineJob>();
     const entities = new Map<string, EntityModel>([
       ["topic-typescript", { id: "topic-typescript", entity_type: EntityType.TOPIC, name: "TypeScript", normalized_name: "typescript", hierarchy: ["Engineering", "TypeScript"] }],
@@ -161,6 +167,33 @@ describe("vault routes", () => {
         pipelineJobs.set(id, updated);
         return updated;
       },
+      async claim_pipeline_job(id: string, claimToken: string, _now: Date, leaseExpiresAt: Date): Promise<PipelineJob | undefined> {
+        const job = pipelineJobs.get(id);
+        if (job === undefined || job.status !== JobStatus.PENDING) return undefined;
+        const updated = { ...job, claim_token: claimToken, lease_expires_at: leaseExpiresAt };
+        pipelineJobs.set(id, updated);
+        return updated;
+      },
+      async renew_pipeline_job_lease(id: string, claimToken: string, leaseExpiresAt: Date): Promise<boolean> {
+        const job = pipelineJobs.get(id);
+        if (job?.claim_token !== claimToken) return false;
+        pipelineJobs.set(id, { ...job, lease_expires_at: leaseExpiresAt });
+        return true;
+      },
+      async begin_pipeline_job(id: string, claimToken: string, startedAt: Date): Promise<PipelineJob | undefined> {
+        const job = pipelineJobs.get(id);
+        if (job?.claim_token !== claimToken || job.status !== JobStatus.PENDING) return undefined;
+        const updated = { ...job, status: JobStatus.PROCESSING, started_at: startedAt };
+        pipelineJobs.set(id, updated);
+        return updated;
+      },
+      async list_recoverable_pipeline_jobs(): Promise<PipelineJob[]> { return []; },
+      async create_terminal_pipeline_job_delivery(): Promise<undefined> { return undefined; },
+      async list_due_pipeline_job_deliveries(): Promise<[]> { return []; },
+      async claim_pipeline_job_delivery(): Promise<undefined> { return undefined; },
+      async complete_pipeline_job_delivery(): Promise<boolean> { return false; },
+      async retry_pipeline_job_delivery(): Promise<boolean> { return false; },
+      async list_pipeline_job_deliveries(jobId: string): Promise<JobDelivery[]> { return jobDeliveries.filter((delivery) => delivery.job_id === jobId); },
       async transition_pipeline_job_stage(id: string, stage: "context_fetch" | "llm_call" | "parse" | "chunking" | "embedding" | "persist", status: "pending" | "processing" | "completed" | "failed" | "skipped"): Promise<PipelineJob | undefined> {
         const job = pipelineJobs.get(id);
         if (job === undefined) return undefined;
@@ -227,19 +260,36 @@ describe("vault routes", () => {
       },
       docling: { async extractMarkdown(): Promise<{ markdown: string; title: string }> { return { markdown: "# Page\nBody", title: "Page" }; } },
       embeddingReindexer: { async reindex(_content: ContentMetadata, text?: string): Promise<{ chunk_count: number; model: string }> { reindexTexts.push(text ?? "<missing>"); return { chunk_count: 1, model: "test-embedding" }; } },
-      readiness: { async postgres(): Promise<void> {}, async s3(): Promise<void> {}, async ollama(): Promise<void> {} },
+      readiness: {
+        async postgres(): Promise<void> {},
+        async s3(): Promise<void> {},
+        async ollama(): Promise<void> { if (providerUnavailable) throw new Error("provider secret must not escape"); },
+      },
     };
     const vault = await createVaultService(vaultConfig(keysPath), overrides);
     server = createVaultHttpServer({ keyStore: vault.keyStore, handlers: createVaultRouteHandlers({
       ...vault,
       authorizeNotificationAgent: () => undefined,
-      health: () => ({
-        status: transcriptFailure === undefined ? "ok" : "degraded",
-        ...(transcriptFailure === undefined ? {} : { transcript: { status: "degraded", videoId: transcriptFailure.videoId, lastError: transcriptFailure.error } }),
-        git_sha: "test",
-        broker: { connected: false, topologyDeclared: false },
-      }),
-      onTranscriptFailure: (videoId, error) => { transcriptFailure ??= { videoId, error: error.message }; },
+      health: () => {
+        const transcript = transcriptHealth.snapshot();
+        return {
+          status: transcript.degraded ? "degraded" : "ok",
+          transcript: {
+            status: transcript.degraded ? "degraded" : "ok",
+            ...transcript,
+            proxy: {
+              mode: "webshare", configured: true, credentialStatus: "present",
+              dispatcherStatus: "owned", connectivity: "not_checked",
+            },
+          },
+          git_sha: "test",
+          broker: { connected: false, topologyDeclared: false },
+        };
+      },
+      metrics: () => "# HELP onclave_test Test metric.\n# TYPE onclave_test counter\n",
+      metricsContentType: "text/plain; version=0.0.4; charset=utf-8",
+      onTranscriptFailure: (videoId, error) => transcriptHealth.recordFailure({ occurredAt: new Date(), failure: safeTranscriptFailure({ videoId, ...error.diagnostic }) }),
+      onTranscriptSuccess: () => transcriptHealth.recordSuccess({ occurredAt: new Date() }),
     }) });
     baseUrl = `http://127.0.0.1:${await listen(server)}`;
   });
@@ -251,7 +301,7 @@ describe("vault routes", () => {
     return fetch(`${baseUrl}${path}`, { method, headers: signRequest(key, method, path, new URL(baseUrl).host, bytes), body: bytes });
   }
 
-  it("does not degrade health for private videos, but latches real upstream failures", async () => {
+  it("tracks exhausted transcript failures and clears degradation only after an external fetch", async () => {
     const transcriptService = (reason: string): YouTubeTranscriptService => new YouTubeTranscriptService({
       fetcher: async (url) => {
         if (url.includes("/watch?v=")) return new Response('<script>var ytcfg = {"INNERTUBE_API_KEY":"test-key"};</script>');
@@ -262,21 +312,59 @@ describe("vault routes", () => {
 
     expect((await fetch(`${baseUrl}/health`)).status).toBe(200);
     activeTranscriptService = transcriptService("This is a private video");
-    const privateVideo = await request("/api/v1/ingest", "POST", { url: "https://youtube.com/watch?v=NVxhVlIZNIY" });
-    expect(privateVideo.status).toBe(500);
+    expect((await request("/api/v1/ingest", "POST", { url: "https://youtube.com/watch?v=NVxhVlIZNIY" })).status).toBe(500);
     expect((await fetch(`${baseUrl}/health`)).status).toBe(200);
-    await expect((await fetch(`${baseUrl}/health`)).json()).resolves.toMatchObject({ status: "ok" });
 
-    activeTranscriptService = transcriptService("Sign in to confirm you're not a bot");
-    const blocked = await request("/api/v1/ingest", "POST", { url: "https://youtube.com/watch?v=AL-PQuB2wy0" });
-    expect(blocked.status).toBe(503);
-    await expect(blocked.json()).resolves.toEqual({ detail: "YouTube transcript service is temporarily unavailable" });
+    activeTranscriptService = new YouTubeTranscriptService({
+      maxAttempts: 2, retryDelayMs: 0,
+      fetcher: async () => { throw Object.assign(new TypeError("network failure https://user:secret@example.invalid/path"), { code: "ECONNRESET" }); },
+    });
+    const logSpy = vi.spyOn(process.stderr, "write");
+    const failed = await request("/api/v1/ingest", "POST", { url: "https://youtube.com/watch?v=AL-PQuB2wy0" });
+    const failureLogs = logSpy.mock.calls.map(([line]) => String(line)).join("");
+    logSpy.mockRestore();
+    expect(failureLogs).toContain('"event":"transcript.upstream_unavailable"');
+    expect(failureLogs).toContain('"errorCode":"ECONNRESET"');
+    expect(failureLogs).not.toContain("secret");
+    expect(failed.status).toBe(503);
+    await expect(failed.json()).resolves.toEqual({ detail: "YouTube transcript service is temporarily unavailable" });
     const unhealthy = await fetch(`${baseUrl}/health`);
     expect(unhealthy.status).toBe(503);
     await expect(unhealthy.json()).resolves.toMatchObject({
       status: "degraded",
-      transcript: { status: "degraded", videoId: "AL-PQuB2wy0", lastError: expect.stringContaining("Sign in to confirm") },
+      transcript: {
+        status: "degraded",
+        degraded: true,
+        failureCount: 1,
+        lastFailure: {
+          videoId: "AL-PQuB2wy0", stage: "watch", classification: "network", attempts: 2,
+          errorName: "TypeError", errorCode: "ECONNRESET", occurredAt: expect.any(String),
+        },
+        recentFailures: [expect.objectContaining({ videoId: "AL-PQuB2wy0" })],
+        proxy: {
+          mode: "webshare", configured: true, credentialStatus: "present",
+          dispatcherStatus: "owned", connectivity: "not_checked",
+        },
+      },
     });
+    expect(JSON.stringify(transcriptHealth.snapshot())).not.toContain("secret");
+    expect((await fetch(`${baseUrl}/ready`)).status).toBe(200);
+    await expect((await fetch(`${baseUrl}/live`)).json()).resolves.toEqual({ status: "ok" });
+    providerUnavailable = true;
+    const providerDegraded = await fetch(`${baseUrl}/ready`);
+    expect(providerDegraded.status).toBe(503);
+    await expect(providerDegraded.json()).resolves.toEqual({
+      status: "degraded",
+      checks: { postgres: "ok", s3: "ok", ollama: "error:unavailable" },
+    });
+    expect(JSON.stringify(await (await fetch(`${baseUrl}/health`)).json())).not.toContain("secret");
+    await expect((await fetch(`${baseUrl}/live`)).json()).resolves.toEqual({ status: "ok" });
+    providerUnavailable = false;
+
+    expect((await request("/api/v1/ingest", "POST", {
+      url: "https://youtube.com/watch?v=supplied1234", transcript_text: "Provided transcript",
+    })).status).toBe(200);
+    expect((await fetch(`${baseUrl}/health`)).status).toBe(503);
     expect((await fetch(`${baseUrl}/ready`)).status).toBe(200);
 
     activeTranscriptService = new YouTubeTranscriptService({
@@ -287,7 +375,12 @@ describe("vault routes", () => {
       },
     });
     expect((await request("/api/v1/ingest", "POST", { url: "https://youtube.com/watch?v=dQw4w9WgXcQ" })).status).toBe(200);
-    expect((await fetch(`${baseUrl}/health`)).status).toBe(503);
+    const recovered = await fetch(`${baseUrl}/health`);
+    expect(recovered.status).toBe(200);
+    await expect(recovered.json()).resolves.toMatchObject({
+      status: "ok", transcript: { status: "ok", degraded: false, failureCount: 1, recoveryCount: 1,
+        lastRecoveryAt: expect.any(String), lastFailure: { videoId: "AL-PQuB2wy0", errorCode: "ECONNRESET" } },
+    });
   });
 
   it("returns a pollable reprocessing job for duplicate YouTube ingest", async () => {
@@ -356,6 +449,44 @@ describe("vault routes", () => {
       status: "completed",
       stages: { context_fetch: { status: "completed" }, llm_call: { status: "completed" }, parse: { status: "completed" }, chunking: { status: "completed" }, embedding: { status: "completed" }, persist: { status: "completed" } },
     });
+    await expect((await request(`/api/v1/jobs/${ingest.job_id}/deliveries`)).json()).resolves.toEqual([]);
+    expect((await request("/api/v1/jobs/missing/deliveries")).status).toBe(404);
+    const deliveryTime = new Date("2026-01-02T03:04:05.000Z");
+    jobDeliveries.push({
+      id: "delivery-1",
+      job_id: ingest.job_id,
+      kind: "callback",
+      target: "https://user:secret@example.invalid/callback",
+      idempotency_key: `job:${ingest.job_id}:callback:v1`,
+      payload: { secret: "must-not-escape" },
+      status: "pending",
+      attempt_count: 2,
+      next_attempt_at: deliveryTime,
+      lease_token: "secret-lease",
+      lease_expires_at: deliveryTime,
+      last_error_code: "DELIVERY_FAILED",
+      created_at: deliveryTime,
+      updated_at: deliveryTime,
+      delivered_at: null,
+    });
+    expect((await fetch(`${baseUrl}/api/v1/jobs/${ingest.job_id}/deliveries`)).status).toBe(401);
+    const deliveryResponse = await request(`/api/v1/jobs/${ingest.job_id}/deliveries`);
+    expect(deliveryResponse.status).toBe(200);
+    const deliveryBody = await deliveryResponse.json();
+    expect(deliveryBody).toEqual([{
+      id: "delivery-1",
+      job_id: ingest.job_id,
+      kind: "callback",
+      idempotency_key: `job:${ingest.job_id}:callback:v1`,
+      status: "pending",
+      attempt_count: 2,
+      next_attempt_at: deliveryTime.toISOString(),
+      last_error_code: "DELIVERY_FAILED",
+      created_at: deliveryTime.toISOString(),
+      updated_at: deliveryTime.toISOString(),
+      delivered_at: null,
+    }]);
+    expect(JSON.stringify(deliveryBody)).not.toContain("secret");
     await expect((await request(`/api/v1/content/${ingest.content_id}`)).json()).resolves.toMatchObject({
       summary: "A concise overview.\n\n- Point one\n\n- Point two",
       structured_summary: { version: 1, overview: "A concise overview.", key_points: ["Point one", "Point two"] },
@@ -383,6 +514,10 @@ describe("vault routes", () => {
     expect((await request("/api/v1/graph")).status).toBe(404);
     await expect((await fetch(`${baseUrl}/health`)).json()).resolves.toMatchObject({ status: "ok", git_sha: "test", broker: { connected: false } });
     await expect((await fetch(`${baseUrl}/ready`)).json()).resolves.toEqual({ status: "ready", checks: { postgres: "ok", s3: "ok", ollama: "ok" } });
+    const metrics = await fetch(`${baseUrl}/metrics`);
+    expect(metrics.status).toBe(200);
+    expect(metrics.headers.get("content-type")).toBe("text/plain; version=0.0.4; charset=utf-8");
+    await expect(metrics.text()).resolves.toContain("# TYPE onclave_test counter");
     if (typeof ingest.content_id !== "string") throw new Error("ingest did not return a content ID");
     await expect((await request(`/api/v1/content/${ingest.content_id}`, "DELETE")).json()).resolves.toEqual({ status: "deleted", id: ingest.content_id });
     expect(bytes.has("youtube/dQw4w9WgXcQ/transcript.txt")).toBe(false);

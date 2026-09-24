@@ -8,11 +8,14 @@ import { loadCoreConfig, redactAmqpUrl, type CoreConfig } from "./config";
 import { TaskStore } from "./tasks";
 import { startDeadLetterConsumer } from "./dead-letter";
 import { startHealthServer } from "./health";
+import { createObservability } from "./observability";
 import { createVaultHttpServer } from "./vault/http";
 import { HttpError } from "./vault/errors";
 import { createAgentRouteHandlers } from "./vault/agent-routes";
 import { createVaultRouteHandlers } from "./vault/routes";
+import { safeTranscriptFailure, TranscriptHealthTracker } from "./vault/transcript-health";
 import { createVaultService, type VaultService } from "./vault/vault-service";
+import { YouTubeTranscriptService } from "./vault/youtube-transcript";
 import type { JobNotificationDelivery } from "./vault/jobs";
 import { log } from "./log";
 import { Registry } from "./registry";
@@ -31,6 +34,33 @@ export type StartCoreOptions = {
   config?: CoreConfig;
   withHealthServer?: boolean;
 };
+
+async function waitForListening(server: Server): Promise<void> {
+  if (server.listening) return;
+  await new Promise<void>((resolve, reject) => {
+    const cleanup = (): void => {
+      server.off("listening", onListening);
+      server.off("error", onError);
+    };
+    const onListening = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: Error): void => {
+      cleanup();
+      reject(error);
+    };
+    server.once("listening", onListening);
+    server.once("error", onError);
+  });
+}
+
+async function closeHttpServer(server: Server | undefined): Promise<void> {
+  if (server === undefined || !server.listening) return;
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => error === undefined ? resolve() : reject(error));
+  });
+}
 
 export async function startCore(options: StartCoreOptions = {}): Promise<CoreRuntime> {
   const config = options.config ?? loadCoreConfig();
@@ -69,6 +99,7 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
   });
 
   const deliveries = new AgentDeliveryService();
+  const observability = createObservability();
   const broker = startBroker({
     amqpUrl: config.amqpUrl,
     retryBaseMs: config.connectRetryBaseMs,
@@ -82,13 +113,20 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
 
   let vault: VaultService | undefined;
   let healthServer: Server | undefined;
-  let transcriptFailure: { videoId: string; error: string } | undefined;
+  const transcriptHealth = new TranscriptHealthTracker({ onEvent: observability.sinks.transcriptHealth });
   if (options.withHealthServer !== false) {
     if (config.vault === undefined) {
-      healthServer = startHealthServer(config.httpPort, broker);
+      healthServer = startHealthServer(config.httpPort, broker, observability);
+      await waitForListening(healthServer);
     } else {
       const vaultConfig = config.vault;
-      vault = await createVaultService(vaultConfig, {
+      const transcript = new YouTubeTranscriptService({
+        proxy: { username: vaultConfig.webshareProxyUsername, password: vaultConfig.webshareProxyPassword },
+        onAttempt: observability.sinks.transcriptAttempt,
+      });
+      const vaultService = await createVaultService(vaultConfig, {
+        transcript,
+        onEvent: observability.sinks.vault,
         notify: async (agentId, delivery: JobNotificationDelivery) => {
           const channel = broker.channel();
           if (channel === undefined) throw new Error("Broker unavailable");
@@ -101,11 +139,13 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
           });
         },
       });
+      vault = vaultService;
+      await vaultService.jobs.start();
       healthServer = createVaultHttpServer({
-        keyStore: vault.keyStore,
+        keyStore: vaultService.keyStore,
         handlers: {
           ...createVaultRouteHandlers({
-            ...vault,
+            ...vaultService,
             authorizeNotificationAgent: (agentId, keyId) => {
               const agent = services.registry.get(agentId);
               if (agent === undefined) throw new HttpError(404, "Notification agent is not registered");
@@ -113,12 +153,15 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
             },
             health: () => {
               const status = broker.status();
+              const transcriptSnapshot = transcriptHealth.snapshot();
               // Broker state is diagnostic only: the deployment gate requires a running HTTP service.
               return {
-                status: transcriptFailure === undefined ? "ok" : "degraded",
-                ...(transcriptFailure === undefined ? {} : {
-                  transcript: { status: "degraded", videoId: transcriptFailure.videoId, lastError: transcriptFailure.error },
-                }),
+                status: transcriptSnapshot.degraded ? "degraded" : "ok",
+                transcript: {
+                  status: transcriptSnapshot.degraded ? "degraded" : "ok",
+                  ...transcriptSnapshot,
+                  proxy: transcript.getProxyDiagnostic(),
+                },
                 git_sha: process.env.GIT_SHA ?? "unknown",
                 build_date: process.env.BUILD_DATE ?? "unknown",
                 app_version: vaultConfig.appVersion,
@@ -129,8 +172,25 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
                 },
               };
             },
+            ready: async () => {
+              const readiness = await vaultService.ready();
+              const status = broker.status();
+              const brokerReady = status.connected && status.topologyDeclared;
+              return {
+                status: readiness.status === "ready" && brokerReady ? "ready" : "degraded",
+                checks: {
+                  ...readiness.checks,
+                  broker: brokerReady ? "ok" : "error:unavailable",
+                },
+              };
+            },
+            metrics: () => observability.renderMetrics(),
+            metricsContentType: observability.contentType,
             onTranscriptFailure: (videoId, error) => {
-              transcriptFailure ??= { videoId, error: error.message };
+              transcriptHealth.recordFailure({ occurredAt: new Date(), failure: safeTranscriptFailure({ videoId, ...error.diagnostic }) });
+            },
+            onTranscriptSuccess: () => {
+              transcriptHealth.recordSuccess({ occurredAt: new Date() });
             },
           }),
           ...createAgentRouteHandlers({
@@ -143,6 +203,7 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
       healthServer.listen(config.httpPort, () => {
         log("info", "health.listening", { port: config.httpPort });
       });
+      await waitForListening(healthServer);
     }
   }
 
@@ -154,7 +215,7 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
     healthServer,
     services,
     stop: async () => {
-      healthServer?.close();
+      await closeHttpServer(healthServer);
       deliveries.close();
       await vault?.close();
       await broker.close();

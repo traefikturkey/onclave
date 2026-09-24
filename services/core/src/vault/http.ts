@@ -15,8 +15,10 @@ type RouteDefinition = {
 
 /** The complete keep and keep-thin Menos vault route inventory. */
 export const VAULT_ROUTE_TABLE = [
+  { name: "live", method: "GET", path: "/live", public: true },
   { name: "health", method: "GET", path: "/health", public: true },
   { name: "ready", method: "GET", path: "/ready", public: true },
+  { name: "metrics", method: "GET", path: "/metrics", public: true },
   { name: "authKeys", method: "GET", path: "/api/v1/auth/keys", public: false },
   { name: "authKeysReload", method: "POST", path: "/api/v1/auth/keys/reload", public: false },
   { name: "authWhoami", method: "GET", path: "/api/v1/auth/whoami", public: false },
@@ -95,6 +97,12 @@ export const VAULT_ROUTE_TABLE = [
   { name: "jobsList", method: "GET", path: "/api/v1/jobs", public: false },
   { name: "jobsStats", method: "GET", path: "/api/v1/jobs/stats", public: false },
   { name: "jobDetail", method: "GET", path: "/api/v1/jobs/{job_id}", public: false },
+  {
+    name: "jobDeliveries",
+    method: "GET",
+    path: "/api/v1/jobs/{job_id}/deliveries",
+    public: false,
+  },
   {
     name: "jobCancel",
     method: "POST",

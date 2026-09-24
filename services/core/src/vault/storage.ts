@@ -17,7 +17,9 @@ import {
   type RelatedContent,
 } from "./models";
 import { DataTier, EntitySource, JobStatus } from "./models";
-import { PIPELINE_STAGE_STATUSES, type PipelineStage, type PipelineStageStatus } from "./job-stages";
+import { initialPipelineStages, PIPELINE_STAGE_STATUSES, type PipelineStage, type PipelineStageStatus } from "./job-stages";
+import type { JobDelivery, JobDeliveryIntent } from "./durability";
+import type { PipelineFinalizationOptions } from "./pipeline";
 
 const CONTENT_COLUMNS = "id, content_type, title, description, mime_type, file_size, file_path, author, tags, tier, metadata, created_at, updated_at";
 const ENTITY_COLUMNS = "id, entity_type, name, normalized_name, description, hierarchy, metadata, created_at, updated_at, source";
@@ -92,6 +94,26 @@ function numberValue(value: unknown): number {
 
 function jsonObject(value: unknown): JsonObject {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as JsonObject : {};
+}
+
+function deliveryFromRow(row: Row): JobDelivery {
+  return {
+    id: String(row.id),
+    job_id: String(row.job_id),
+    kind: row.kind as JobDelivery["kind"],
+    target: String(row.target),
+    idempotency_key: String(row.idempotency_key),
+    payload: jsonObject(row.payload),
+    status: row.status as JobDelivery["status"],
+    attempt_count: numberValue(row.attempt_count),
+    next_attempt_at: row.next_attempt_at as Date,
+    lease_token: row.lease_token as string | null | undefined,
+    lease_expires_at: row.lease_expires_at as Date | null | undefined,
+    last_error_code: row.last_error_code as string | null | undefined,
+    created_at: row.created_at as Date,
+    updated_at: row.updated_at as Date,
+    delivered_at: row.delivered_at as Date | null | undefined,
+  };
 }
 
 function contentFromRow(row: Row): ContentMetadata {
@@ -577,29 +599,78 @@ export class PostgresRepository {
   async update_content_processing_status(contentId: string, status: string, pipelineVersion?: string): Promise<void> { await this.database.query("UPDATE content SET processing_status=$1,pipeline_version=coalesce($2,pipeline_version),updated_at=now() WHERE id=$3", [status, pipelineVersion ?? null, contentId]); }
   async update_content_processing_result(contentId: string, result: JsonObject, pipelineVersion: string): Promise<void> { await this.database.query("UPDATE content SET metadata=jsonb_set(metadata,'{unified_result}',$1), processing_status='completed',processed_at=now(),pipeline_version=$2,updated_at=now() WHERE id=$3", [result, pipelineVersion, contentId]); }
 
-  async complete_content_processing(contentId: string, result: JsonObject, pipelineVersion: string, chunks: ChunkModel[], relationships: ContentEntityEdge[]): Promise<void> {
+  async complete_content_processing(contentId: string, result: JsonObject, pipelineVersion: string, chunks: ChunkModel[], relationships: ContentEntityEdge[], finalization?: PipelineFinalizationOptions): Promise<boolean> {
     const pool = this.database as TransactionPool;
     if (typeof pool.connect !== "function") throw new Error("database does not support transactions");
+    if (finalization?.jobId !== undefined && finalization.claimToken === undefined) throw new Error("JOB_CLAIM_TOKEN_REQUIRED");
+    if (finalization?.jobId === undefined && finalization?.claimToken !== undefined) throw new Error("job ID is required with a claim token");
     const now = new Date();
     for (const edge of relationships) if (edge.content_id !== contentId) throw new Error("relationship content ID does not match completed content");
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      if (finalization?.jobId !== undefined) {
+        const stageState = JSON.stringify({ status: "completed", finished_at: finalization.persistStageCompletedAt.toISOString() });
+        const fence = await client.query(`UPDATE pipeline_job
+          SET metadata=jsonb_set(coalesce(metadata,'{}'::jsonb), ARRAY['stages','persist'], coalesce(metadata->'stages'->'persist','{}'::jsonb) || $4::jsonb, true)
+          WHERE id=$1 AND content_id=$2 AND claim_token=$3 AND status=$5
+            AND coalesce(metadata->'stages'->>'persist','pending')='processing'
+          RETURNING id`, [finalization.jobId, contentId, finalization.claimToken, stageState, JobStatus.PROCESSING]);
+        if (fence.rowCount !== 1) {
+          await client.query("ROLLBACK");
+          return false;
+        }
+      }
+      for (const [variant, canonical] of finalization?.aliases ?? []) {
+        await client.query("INSERT INTO tag_alias(id,variant,canonical,usage_count) VALUES($1,$2,$3,1) ON CONFLICT(variant,canonical) DO UPDATE SET usage_count=tag_alias.usage_count+1,updated_at=now()", [newId(), variant, canonical]);
+      }
+      const entityIds = new Map<string, string>();
+      for (const candidate of finalization?.entities ?? []) {
+        const normalized = normalizeName(candidate.name);
+        const existing = await client.query(`SELECT ${ENTITY_COLUMNS} FROM entity WHERE normalized_name=$1 AND entity_type=$2 ORDER BY id LIMIT 1`, [normalized, candidate.entityType]);
+        let entity = existing.rows[0];
+        if (entity === undefined) {
+          const id = newId();
+          const inserted = await client.query(`INSERT INTO entity(id,entity_type,name,normalized_name,description,hierarchy,metadata,created_at,updated_at,source)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING ${ENTITY_COLUMNS}`, [id, candidate.entityType, candidate.name, normalized, null, candidate.hierarchy, {}, now, now, EntitySource.AI_EXTRACTED]);
+          entity = inserted.rows[0];
+        }
+        if (entity === undefined || typeof entity.id !== "string" || entity.id === "") throw new Error(`failed to resolve entity while completing processing: ${candidate.name}`);
+        entityIds.set(candidate.referenceId, entity.id);
+      }
       await client.query("DELETE FROM chunk WHERE content_id=$1", [contentId]);
-      for (const chunk of chunks) { chunk.id ??= newId(); chunk.created_at ??= now; await client.query("INSERT INTO chunk (id,content_id,text,chunk_index,embedding,created_at) VALUES ($1,$2,$3,$4,$5::vector,$6)", [chunk.id, contentId, chunk.text, chunk.chunk_index, vectorLiteral(chunk.embedding ?? []), chunk.created_at]); }
+      for (const source of chunks) {
+        const chunk = { ...source, id: source.id ?? newId(), created_at: source.created_at ?? now };
+        await client.query("INSERT INTO chunk (id,content_id,text,chunk_index,embedding,created_at) VALUES ($1,$2,$3,$4,$5::vector,$6)", [chunk.id, contentId, chunk.text, chunk.chunk_index, vectorLiteral(chunk.embedding ?? []), chunk.created_at]);
+      }
       await client.query("DELETE FROM content_entity WHERE content_id=$1", [contentId]);
-      for (const edge of relationships) { edge.id ??= newId(); edge.created_at ??= now; await client.query("INSERT INTO content_entity (id,content_id,entity_id,edge_type,confidence,mention_count,source,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", [edge.id, edge.content_id, edge.entity_id, edge.edge_type, edge.confidence ?? null, edge.mention_count ?? null, edge.source ?? EntitySource.AI_EXTRACTED, edge.created_at]); }
+      const resolvedEdges = new Map<string, ContentEntityEdge>();
+      for (const source of relationships) {
+        const entityId = entityIds.get(source.entity_id) ?? source.entity_id;
+        const edge = { ...source, entity_id: entityId };
+        resolvedEdges.set(`${entityId}\u0000${edge.edge_type}`, edge);
+      }
+      for (const source of resolvedEdges.values()) {
+        const edge = { ...source, id: source.id ?? newId(), created_at: source.created_at ?? now };
+        await client.query("INSERT INTO content_entity (id,content_id,entity_id,edge_type,confidence,mention_count,source,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)", [edge.id, edge.content_id, edge.entity_id, edge.edge_type, edge.confidence ?? null, edge.mention_count ?? null, edge.source ?? EntitySource.AI_EXTRACTED, edge.created_at]);
+      }
       const update = await client.query("UPDATE content SET metadata=jsonb_set(metadata,'{unified_result}',$1), processing_status='completed',processed_at=now(),pipeline_version=$2,updated_at=now() WHERE id=$3", [result, pipelineVersion, contentId]);
       if (update.rowCount !== 1) throw new Error(`content not found while completing processing: ${contentId}`);
       await client.query("COMMIT");
-    } catch (error: unknown) { await client.query("ROLLBACK"); throw error; } finally { client.release(); }
+      return true;
+    } catch (error: unknown) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async find_potential_duplicates(maxDistance = 1): Promise<EntityModel[][]> { const entities = await this.list_all_entities(); const groups: EntityModel[][] = []; const used = new Set<number>(); for (let index = 0; index < entities.length; index += 1) { if (used.has(index)) continue; const entity = entities[index]; if (entity === undefined) continue; const group = [entity]; for (let otherIndex = index + 1; otherIndex < entities.length; otherIndex += 1) { const other = entities[otherIndex]; if (other !== undefined && !used.has(otherIndex) && editDistance(entity.normalized_name, other.normalized_name) <= maxDistance) { group.push(other); used.add(otherIndex); } } if (group.length > 1) { groups.push(group); used.add(index); } } return groups; }
   async get_content_processing_status(contentId: string): Promise<string | undefined> { const result = await this.database.query("SELECT processing_status FROM content WHERE id=$1", [contentId]); return result.rows[0]?.processing_status as string | undefined; }
   async get_pipeline_result(contentId: string): Promise<JsonObject | undefined> { const result = await this.database.query("SELECT processing_status, metadata->'unified_result' AS unified_result FROM content WHERE id=$1", [contentId]); const row = result.rows[0]; return row?.processing_status === "completed" && row.unified_result !== null && typeof row.unified_result === "object" && !Array.isArray(row.unified_result) ? row.unified_result as JsonObject : undefined; }
 
-  async create_pipeline_job(job: PipelineJob): Promise<Row> { const result = await this.database.query("INSERT INTO pipeline_job(id,resource_key,content_id,status,pipeline_version,data_tier, error_code,error_message,error_stage,metadata,created_at,started_at,finished_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *", [job.id, job.resource_key, job.content_id, job.status ?? JobStatus.PENDING, job.pipeline_version ?? "", job.data_tier ?? DataTier.COMPACT, job.error_code ?? null, job.error_message ?? null, job.error_stage ?? null, job.metadata ?? {}, job.created_at ?? null, job.started_at ?? null, job.finished_at ?? null]); return result.rows[0] ?? job as Row; }
+  async create_pipeline_job(job: PipelineJob): Promise<Row> { const result = await this.database.query("INSERT INTO pipeline_job(id,resource_key,content_id,status,pipeline_version,data_tier,error_code,error_message,error_stage,metadata,request_payload,created_at,started_at,finished_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *", [job.id, job.resource_key, job.content_id, job.status ?? JobStatus.PENDING, job.pipeline_version ?? "", job.data_tier ?? DataTier.COMPACT, job.error_code ?? null, job.error_message ?? null, job.error_stage ?? null, job.metadata ?? {}, job.request_payload ?? null, job.created_at ?? null, job.started_at ?? null, job.finished_at ?? null]); return result.rows[0] ?? job as Row; }
   async get_pipeline_job(jobId: string): Promise<Row | undefined> { return (await this.database.query("SELECT * FROM pipeline_job WHERE id=$1", [jobId])).rows[0]; }
   async find_active_pipeline_job(resourceKey: string): Promise<Row | undefined> { return (await this.database.query("SELECT * FROM pipeline_job WHERE resource_key=$1 AND status=ANY($2) ORDER BY created_at DESC,id LIMIT 1", [resourceKey, [JobStatus.PENDING, JobStatus.PROCESSING]])).rows[0]; }
   async add_pipeline_job_subscriber(jobId: string, subscriberId: string): Promise<Row | undefined> {
@@ -615,8 +686,135 @@ export class PostgresRepository {
       WHERE id=$1 AND status=ANY($3) RETURNING *`, [jobId, subscriberId, [JobStatus.PENDING, JobStatus.PROCESSING]])).rows[0];
   }
   async update_pipeline_job(jobId: string, status: JobStatus, timing: JobTiming, errors: JobErrors): Promise<Row | undefined> { return (await this.database.query("UPDATE pipeline_job SET status=$1,started_at=coalesce($2,started_at), finished_at=coalesce($3,finished_at),error_code=coalesce($4,error_code), error_message=coalesce($5,error_message),error_stage=coalesce($6,error_stage) WHERE id=$7 RETURNING *", [status, timing[0] ?? null, timing[1] ?? null, errors[0] ?? null, errors[1] ?? null, errors[2] ?? null, jobId])).rows[0]; }
-  async transition_pipeline_job_terminal(jobId: string, status: JobStatus, timing: JobTiming, errors: JobErrors, expectedStatuses: readonly JobStatus[]): Promise<Row | undefined> { return (await this.database.query("UPDATE pipeline_job SET status=$1,started_at=coalesce($2,started_at), finished_at=coalesce($3,finished_at),error_code=coalesce($4,error_code), error_message=coalesce($5,error_message),error_stage=coalesce($6,error_stage) WHERE id=$7 AND status=ANY($8) RETURNING *", [status, timing[0] ?? null, timing[1] ?? null, errors[0] ?? null, errors[1] ?? null, errors[2] ?? null, jobId, expectedStatuses])).rows[0]; }
-  async transition_pipeline_job_stage(jobId: string, stage: PipelineStage, status: PipelineStageStatus, timing: readonly [Date | null | undefined, Date | null | undefined], errors: readonly [string | null | undefined, string | null | undefined], expectedStatuses: readonly PipelineStageStatus[]): Promise<Row | undefined> {
+  async claim_pipeline_job(jobId: string, claimToken: string, now: Date, leaseExpiresAt: Date): Promise<Row | undefined> {
+    return (await this.database.query(`UPDATE pipeline_job
+      SET claim_token=$2, lease_expires_at=$4,
+          metadata=CASE WHEN status='processing' THEN jsonb_set(coalesce(metadata,'{}'::jsonb), '{stages}', $5::jsonb, true) ELSE metadata END
+      WHERE id=$1 AND status=ANY($6)
+        AND (claim_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= $3)
+      RETURNING *`, [jobId, claimToken, now, leaseExpiresAt, JSON.stringify(initialPipelineStages()), [JobStatus.PENDING, JobStatus.PROCESSING]])).rows[0];
+  }
+  async renew_pipeline_job_lease(jobId: string, claimToken: string, leaseExpiresAt: Date): Promise<boolean> {
+    const result = await this.database.query("UPDATE pipeline_job SET lease_expires_at=$3 WHERE id=$1 AND claim_token=$2 AND status=ANY($4) RETURNING id", [jobId, claimToken, leaseExpiresAt, [JobStatus.PENDING, JobStatus.PROCESSING]]);
+    return result.rowCount === 1;
+  }
+  async begin_pipeline_job(jobId: string, claimToken: string, startedAt: Date): Promise<Row | undefined> {
+    const pool = this.database as Partial<TransactionPool>;
+    if (pool.connect === undefined) throw new Error("database does not support transactions");
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const started = (await client.query(`UPDATE pipeline_job
+        SET status='processing', started_at=coalesce(started_at,$3)
+        WHERE id=$1 AND claim_token=$2 AND status=ANY($4)
+        RETURNING *`, [jobId, claimToken, startedAt, [JobStatus.PENDING, JobStatus.PROCESSING]])).rows[0];
+      if (started === undefined) {
+        await client.query("ROLLBACK");
+        return undefined;
+      }
+      const contentId = started.content_id;
+      if (typeof contentId !== "string" || contentId === "") throw new Error("claimed pipeline job has no content ID");
+      const content = await client.query("UPDATE content SET processing_status=$1,updated_at=now() WHERE id=$2 RETURNING id", [JobStatus.PROCESSING, contentId]);
+      if (content.rowCount !== 1) throw new Error(`content not found while beginning pipeline job: ${contentId}`);
+      await client.query("COMMIT");
+      return started;
+    } catch (error: unknown) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+  async list_recoverable_pipeline_jobs(now: Date, limit: number): Promise<Row[]> {
+    return (await this.database.query(`SELECT * FROM pipeline_job
+      WHERE status=ANY($1) AND (claim_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= $2)
+      ORDER BY created_at,id LIMIT $3`, [[JobStatus.PENDING, JobStatus.PROCESSING], now, limit])).rows;
+  }
+  async transition_pipeline_job_terminal(jobId: string, status: JobStatus, timing: JobTiming, errors: JobErrors, expectedStatuses: readonly JobStatus[], claimToken?: string, intents: readonly JobDeliveryIntent[] = []): Promise<Row | undefined> {
+    const pool = this.database as Partial<TransactionPool>;
+    if (intents.length > 0 && pool.connect === undefined) throw new Error("database does not support transactions");
+    const client = intents.length > 0 ? await (pool.connect as () => Promise<TransactionClient>)() : undefined;
+    const database = client ?? this.database;
+    try {
+      if (client !== undefined) await client.query("BEGIN");
+      const claimClause = claimToken === undefined ? "" : " AND claim_token=$9";
+      const values: unknown[] = [status, timing[0] ?? null, timing[1] ?? null, errors[0] ?? null, errors[1] ?? null, errors[2] ?? null, jobId, expectedStatuses];
+      if (claimToken !== undefined) values.push(claimToken);
+      const updated = (await database.query(`UPDATE pipeline_job
+        SET status=$1,started_at=coalesce($2,started_at),finished_at=coalesce($3,finished_at),
+            error_code=coalesce($4,error_code),error_message=coalesce($5,error_message),error_stage=coalesce($6,error_stage),
+            claim_token=NULL,lease_expires_at=NULL
+        WHERE id=$7 AND status=ANY($8)${claimClause} RETURNING *`, values)).rows[0];
+      if (updated !== undefined) {
+        const insertDelivery = async (intent: JobDeliveryIntent): Promise<void> => {
+          await database.query(`INSERT INTO pipeline_job_delivery(id,job_id,kind,target,idempotency_key,payload)
+            VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(idempotency_key) DO NOTHING`, [newId(), jobId, intent.kind, intent.target, intent.idempotency_key, intent.payload]);
+        };
+        for (const intent of intents) if (intent.kind !== "notification" || intent.target !== "") await insertDelivery(intent);
+        const notificationTemplate = intents.find((intent) => intent.kind === "notification" && intent.target === "");
+        if (notificationTemplate !== undefined) {
+          const metadata = jsonObject(updated.metadata);
+          const subscribers = new Set<string>();
+          const rawSubscribers = metadata.notify_agent_ids;
+          if (Array.isArray(rawSubscribers)) for (const subscriber of rawSubscribers) if (typeof subscriber === "string" && subscriber !== "") subscribers.add(subscriber);
+          const legacySubscriber = metadata.notify_agent_id;
+          if (typeof legacySubscriber === "string" && legacySubscriber !== "") subscribers.add(legacySubscriber);
+          for (const subscriber of subscribers) await insertDelivery({
+            ...notificationTemplate,
+            target: subscriber,
+            idempotency_key: `job:${jobId}:terminal:${subscriber}`,
+          });
+        }
+      }
+      if (client !== undefined) await client.query("COMMIT");
+      return updated;
+    } catch (error: unknown) {
+      if (client !== undefined) await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client?.release();
+    }
+  }
+  async create_terminal_pipeline_job_delivery(jobId: string, intent: JobDeliveryIntent): Promise<boolean> {
+    const row = (await this.database.query(`WITH terminal_job AS (
+        SELECT id FROM pipeline_job WHERE id=$1 AND status=ANY($7)
+      ), inserted AS (
+        INSERT INTO pipeline_job_delivery(id,job_id,kind,target,idempotency_key,payload)
+        SELECT $2,terminal_job.id,$3,$4,$5,$6 FROM terminal_job
+        ON CONFLICT(idempotency_key) DO NOTHING RETURNING id
+      )
+      SELECT EXISTS(SELECT 1 FROM terminal_job) AS terminal`, [jobId, newId(), intent.kind, intent.target, intent.idempotency_key, intent.payload, [JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED]])).rows[0];
+    return row?.terminal === true;
+  }
+  async list_due_pipeline_job_deliveries(now: Date, limit: number): Promise<Row[]> {
+    return (await this.database.query(`SELECT * FROM pipeline_job_delivery
+      WHERE (status='pending' AND next_attempt_at <= $1)
+         OR (status='processing' AND (lease_expires_at IS NULL OR lease_expires_at <= $1))
+      ORDER BY next_attempt_at,created_at,id LIMIT $2`, [now, limit])).rows;
+  }
+  async claim_pipeline_job_delivery(deliveryId: string, leaseToken: string, now: Date, leaseExpiresAt: Date): Promise<Row | undefined> {
+    return (await this.database.query(`UPDATE pipeline_job_delivery
+      SET status='processing',attempt_count=attempt_count+1,lease_token=$2,lease_expires_at=$4,updated_at=$3
+      WHERE id=$1 AND ((status='pending' AND next_attempt_at <= $3)
+        OR (status='processing' AND (lease_expires_at IS NULL OR lease_expires_at <= $3)))
+      RETURNING *`, [deliveryId, leaseToken, now, leaseExpiresAt])).rows[0];
+  }
+  async complete_pipeline_job_delivery(deliveryId: string, leaseToken: string, deliveredAt: Date): Promise<boolean> {
+    const result = await this.database.query(`UPDATE pipeline_job_delivery
+      SET status='delivered',delivered_at=$3,updated_at=$3,lease_token=NULL,lease_expires_at=NULL,last_error_code=NULL
+      WHERE id=$1 AND status='processing' AND lease_token=$2 RETURNING id`, [deliveryId, leaseToken, deliveredAt]);
+    return result.rowCount === 1;
+  }
+  async retry_pipeline_job_delivery(deliveryId: string, leaseToken: string, nextAttemptAt: Date, errorCode: string): Promise<boolean> {
+    const result = await this.database.query(`UPDATE pipeline_job_delivery
+      SET status='pending',next_attempt_at=$3,updated_at=now(),lease_token=NULL,lease_expires_at=NULL,last_error_code=$4
+      WHERE id=$1 AND status='processing' AND lease_token=$2 RETURNING id`, [deliveryId, leaseToken, nextAttemptAt, errorCode]);
+    return result.rowCount === 1;
+  }
+  async list_pipeline_job_deliveries(jobId: string): Promise<JobDelivery[]> {
+    return (await this.database.query("SELECT * FROM pipeline_job_delivery WHERE job_id=$1 ORDER BY created_at,id", [jobId])).rows.map(deliveryFromRow);
+  }
+  async transition_pipeline_job_stage(jobId: string, stage: PipelineStage, status: PipelineStageStatus, timing: readonly [Date | null | undefined, Date | null | undefined], errors: readonly [string | null | undefined, string | null | undefined], expectedStatuses: readonly PipelineStageStatus[], claimToken?: string): Promise<Row | undefined> {
     if (!PIPELINE_STAGE_STATUSES.includes(status)) throw new Error(`invalid pipeline stage status: ${status}`);
     const state: Record<string, unknown> = { status };
     if (timing[0] !== undefined) state.started_at = timing[0]?.toISOString() ?? null;
@@ -625,8 +823,9 @@ export class PostgresRepository {
     if (errors[1] !== undefined) state.error_message = errors[1] ?? null;
     return (await this.database.query(`UPDATE pipeline_job
       SET metadata=jsonb_set(coalesce(metadata,'{}'::jsonb), ARRAY['stages',$2], coalesce(metadata->'stages'->$2, '{}'::jsonb) || $3::jsonb, true)
-      WHERE id=$1 AND (status=ANY($4) OR (status='failed' AND $3::jsonb->>'status'=ANY(ARRAY['failed','skipped']))) AND coalesce(metadata->'stages'->>$2,'pending')=ANY($5)
-      RETURNING *`, [jobId, stage, JSON.stringify(state), [JobStatus.PENDING, JobStatus.PROCESSING], expectedStatuses])).rows[0];
+      WHERE id=$1 AND (status=ANY($4) OR (status='failed' AND $3::jsonb->>'status'=ANY(ARRAY['failed','skipped'])))
+        AND coalesce(metadata->'stages'->>$2,'pending')=ANY($5) AND ($6::text IS NULL OR claim_token=$6)
+      RETURNING *`, [jobId, stage, JSON.stringify(state), [JobStatus.PENDING, JobStatus.PROCESSING], expectedStatuses, claimToken ?? null])).rows[0];
   }
   async list_pipeline_jobs(contentId: string | undefined, status: JobStatus | undefined, limit: number, offset: number): Promise<[Row[], number]> { const clauses: string[] = []; const params: unknown[] = []; if (contentId !== undefined) { params.push(contentId); clauses.push(`content_id=$${params.length}`); } if (status !== undefined) { params.push(status); clauses.push(`status=$${params.length}`); } const where = clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`; const count = await this.database.query(`SELECT count(*) AS count FROM pipeline_job${where}`, params); const rows = await this.database.query(`SELECT * FROM pipeline_job${where} ORDER BY created_at DESC,id LIMIT $${params.length + 1} OFFSET $${params.length + 2}`, [...params, limit, offset]); return [rows.rows, numberValue(count.rows[0]?.count) || 0]; }
   async get_pipeline_job_stats(): Promise<{ total_jobs: number; completed_jobs: number; failed_jobs: number; cancelled_jobs: number; average_completion_seconds: number | null }> { const result = await this.database.query("SELECT count(*) AS total_jobs,count(*) FILTER (WHERE status='completed') AS completed_jobs,count(*) FILTER (WHERE status='failed') AS failed_jobs,count(*) FILTER (WHERE status='cancelled') AS cancelled_jobs,avg(extract(epoch FROM (finished_at-started_at))) FILTER (WHERE status='completed' AND started_at IS NOT NULL AND finished_at IS NOT NULL) AS average_completion_seconds FROM pipeline_job"); const row = result.rows[0] ?? {}; const average = row.average_completion_seconds; return { total_jobs: numberValue(row.total_jobs), completed_jobs: numberValue(row.completed_jobs), failed_jobs: numberValue(row.failed_jobs), cancelled_jobs: numberValue(row.cancelled_jobs), average_completion_seconds: average === null || average === undefined ? null : numberValue(average) }; }

@@ -1,11 +1,12 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { PipelineOrchestrator, type JobNotificationDelivery, type JobStorage } from "../src/vault/jobs";
+import type { JobDelivery, JobDeliveryIntent, VaultPipelineEvent } from "../src/vault/durability";
 import { MeteringLLMProvider, type MeteredLlmUsage } from "../src/vault/llm-metering";
 import { LLMPricingService, type PricingSnapshotStorage } from "../src/vault/llm-pricing";
 import type { LlmGenerationOptions, LlmProvider } from "../src/vault/llm-providers";
-import { EdgeType, EntityType, JobStatus, type ChunkModel, type ContentEntityEdge, type ContentMetadata, type EntityModel, type JsonObject, type PipelineJob } from "../src/vault/models";
-import { pipelineStages, type PipelineStage, type PipelineStageStatus } from "../src/vault/job-stages";
+import { DataTier, EdgeType, EntityType, JobStatus, type ChunkModel, type ContentEntityEdge, type ContentMetadata, type EntityModel, type JsonObject, type PipelineJob } from "../src/vault/models";
+import { initialPipelineStages, pipelineStages, type PipelineStage, type PipelineStageStatus } from "../src/vault/job-stages";
 import { UnifiedPipeline, type PipelineConfig, type PipelineEmbeddingService, type PipelineStorage } from "../src/vault/pipeline";
 import { chunkText } from "../src/vault/vault-service";
 
@@ -35,6 +36,7 @@ const response = JSON.stringify({
 
 class FakeStorage implements PipelineStorage, JobStorage, PricingSnapshotStorage {
   readonly jobs = new Map<string, PipelineJob>();
+  readonly deliveries = new Map<string, JobDelivery>();
   readonly statuses: { contentId: string; status: string }[] = [];
   readonly usages: MeteredLlmUsage[] = [];
   readonly completions: { contentId: string; result: JsonObject; chunks: ChunkModel[]; relationships: ContentEntityEdge[] }[] = [];
@@ -44,6 +46,7 @@ class FakeStorage implements PipelineStorage, JobStorage, PricingSnapshotStorage
   transitionBlock?: { status: JobStatus; entered: () => void; release: Promise<void> };
   subscriberBlock?: { entered: () => void; release: Promise<void> };
   processingCasSucceeded?: () => void;
+  throwCompleteDeliveryOnce = false;
   private entityCount = 0;
 
   async list_tags_with_counts(): Promise<readonly Record<string, unknown>[]> {
@@ -108,9 +111,9 @@ class FakeStorage implements PipelineStorage, JobStorage, PricingSnapshotStorage
     return updated;
   }
 
-  async transition_pipeline_job_stage(jobId: string, stage: PipelineStage, status: PipelineStageStatus, timing: readonly [Date | null | undefined, Date | null | undefined], errors: readonly [string | null | undefined, string | null | undefined], expectedStatuses: readonly PipelineStageStatus[]): Promise<unknown> {
+  async transition_pipeline_job_stage(jobId: string, stage: PipelineStage, status: PipelineStageStatus, timing: readonly [Date | null | undefined, Date | null | undefined], errors: readonly [string | null | undefined, string | null | undefined], expectedStatuses: readonly PipelineStageStatus[], claimToken?: string): Promise<unknown> {
     const job = this.jobs.get(jobId);
-    if (job === undefined) return undefined;
+    if (job === undefined || (claimToken !== undefined && job.claim_token !== claimToken)) return undefined;
     const current = job.stages ?? pipelineStages(undefined);
     const previous = current[stage];
     if (!expectedStatuses.includes(previous.status)) return undefined;
@@ -136,7 +139,7 @@ class FakeStorage implements PipelineStorage, JobStorage, PricingSnapshotStorage
     return updated;
   }
 
-  async transition_pipeline_job_terminal(jobId: string, status: JobStatus, timing: readonly [Date | null | undefined, Date | null | undefined], errors: readonly [string | null | undefined, string | null | undefined, string | null | undefined], expectedStatuses: readonly JobStatus[]): Promise<unknown> {
+  async transition_pipeline_job_terminal(jobId: string, status: JobStatus, timing: readonly [Date | null | undefined, Date | null | undefined], errors: readonly [string | null | undefined, string | null | undefined, string | null | undefined], expectedStatuses: readonly JobStatus[], claimToken?: string, intents: readonly JobDeliveryIntent[] = []): Promise<unknown> {
     const block = this.transitionBlock?.status === status ? this.transitionBlock : undefined;
     if (block !== undefined) {
       this.transitionBlock = undefined;
@@ -144,10 +147,12 @@ class FakeStorage implements PipelineStorage, JobStorage, PricingSnapshotStorage
       await block.release;
     }
     const job = this.jobs.get(jobId);
-    if (job === undefined || !expectedStatuses.includes(job.status ?? JobStatus.PENDING)) return undefined;
+    if (job === undefined || !expectedStatuses.includes(job.status ?? JobStatus.PENDING) || (claimToken !== undefined && job.claim_token !== claimToken)) return undefined;
     const updated: PipelineJob = {
       ...job,
       status,
+      claim_token: null,
+      lease_expires_at: null,
       started_at: timing[0] ?? job.started_at,
       finished_at: timing[1] ?? job.finished_at,
       error_code: errors[0] ?? job.error_code,
@@ -155,8 +160,97 @@ class FakeStorage implements PipelineStorage, JobStorage, PricingSnapshotStorage
       error_stage: errors[2] ?? job.error_stage,
     };
     this.jobs.set(jobId, updated);
+    for (const intent of intents) if (intent.kind !== "notification" || intent.target !== "") this.insertDelivery(jobId, intent);
+    const notification = intents.find((intent) => intent.kind === "notification" && intent.target === "");
+    if (notification !== undefined) {
+      const subscribers = new Set<string>();
+      const rawIds = updated.metadata?.notify_agent_ids;
+      if (Array.isArray(rawIds)) for (const subscriber of rawIds) if (typeof subscriber === "string" && subscriber !== "") subscribers.add(subscriber);
+      const legacyId = updated.metadata?.notify_agent_id;
+      if (typeof legacyId === "string" && legacyId !== "") subscribers.add(legacyId);
+      for (const subscriber of subscribers) this.insertDelivery(jobId, { ...notification, target: subscriber, idempotency_key: `job:${jobId}:terminal:${subscriber}` });
+    }
     if (status === JobStatus.PROCESSING && expectedStatuses.includes(JobStatus.PENDING)) this.processingCasSucceeded?.();
     return updated;
+  }
+
+  private insertDelivery(jobId: string, intent: JobDeliveryIntent): JobDelivery {
+    const existing = [...this.deliveries.values()].find((delivery) => delivery.idempotency_key === intent.idempotency_key);
+    if (existing !== undefined) return existing;
+    const now = new Date();
+    const delivery: JobDelivery = { ...intent, id: `delivery-${this.deliveries.size + 1}`, job_id: jobId, status: "pending", attempt_count: 0, next_attempt_at: now, created_at: now, updated_at: now };
+    this.deliveries.set(delivery.id, delivery);
+    return delivery;
+  }
+
+  async claim_pipeline_job(jobId: string, claimToken: string, now: Date, leaseExpiresAt: Date): Promise<unknown> {
+    const job = this.jobs.get(jobId);
+    if (job === undefined || ![JobStatus.PENDING, JobStatus.PROCESSING].includes(job.status ?? JobStatus.PENDING)) return undefined;
+    if (job.claim_token !== null && job.claim_token !== undefined && job.lease_expires_at !== null && job.lease_expires_at !== undefined && job.lease_expires_at > now) return undefined;
+    const updated = { ...job, claim_token: claimToken, lease_expires_at: leaseExpiresAt, ...(job.status === JobStatus.PROCESSING ? { stages: pipelineStages(undefined), metadata: { ...job.metadata, stages: pipelineStages(undefined) as unknown as JsonObject } } : {}) };
+    this.jobs.set(jobId, updated);
+    return updated;
+  }
+
+  async renew_pipeline_job_lease(jobId: string, claimToken: string, leaseExpiresAt: Date): Promise<boolean> {
+    const job = this.jobs.get(jobId);
+    if (job === undefined || job.claim_token !== claimToken || ![JobStatus.PENDING, JobStatus.PROCESSING].includes(job.status ?? JobStatus.PENDING)) return false;
+    this.jobs.set(jobId, { ...job, lease_expires_at: leaseExpiresAt });
+    return true;
+  }
+
+  async begin_pipeline_job(jobId: string, claimToken: string, startedAt: Date): Promise<unknown> {
+    const job = this.jobs.get(jobId);
+    if (job === undefined || job.claim_token !== claimToken || ![JobStatus.PENDING, JobStatus.PROCESSING].includes(job.status ?? JobStatus.PENDING)) return undefined;
+    const updated = { ...job, status: JobStatus.PROCESSING, started_at: job.started_at ?? startedAt };
+    this.jobs.set(jobId, updated);
+    this.statuses.push({ contentId: job.content_id, status: JobStatus.PROCESSING });
+    this.processingCasSucceeded?.();
+    return updated;
+  }
+
+  async list_recoverable_pipeline_jobs(now: Date, limit: number): Promise<unknown[]> {
+    return [...this.jobs.values()].filter((job) => [JobStatus.PENDING, JobStatus.PROCESSING].includes(job.status ?? JobStatus.PENDING) && (job.claim_token === null || job.claim_token === undefined || job.lease_expires_at === null || job.lease_expires_at === undefined || job.lease_expires_at <= now)).slice(0, limit);
+  }
+
+  async create_terminal_pipeline_job_delivery(jobId: string, intent: JobDeliveryIntent): Promise<unknown> {
+    const job = this.jobs.get(jobId);
+    if (job === undefined || ![JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED].includes(job.status ?? JobStatus.PENDING)) return undefined;
+    return this.insertDelivery(jobId, intent);
+  }
+
+  async list_due_pipeline_job_deliveries(now: Date, limit: number): Promise<unknown[]> {
+    return [...this.deliveries.values()].filter((delivery) => (delivery.status === "pending" && delivery.next_attempt_at <= now) || (delivery.status === "processing" && (delivery.lease_expires_at === undefined || delivery.lease_expires_at === null || delivery.lease_expires_at <= now))).slice(0, limit);
+  }
+
+  async claim_pipeline_job_delivery(deliveryId: string, leaseToken: string, now: Date, leaseExpiresAt: Date): Promise<unknown> {
+    const delivery = this.deliveries.get(deliveryId);
+    if (delivery === undefined || !((delivery.status === "pending" && delivery.next_attempt_at <= now) || (delivery.status === "processing" && (delivery.lease_expires_at === undefined || delivery.lease_expires_at === null || delivery.lease_expires_at <= now)))) return undefined;
+    const claimed = { ...delivery, status: "processing" as const, lease_token: leaseToken, lease_expires_at: leaseExpiresAt, attempt_count: delivery.attempt_count + 1, updated_at: now };
+    this.deliveries.set(deliveryId, claimed);
+    return claimed;
+  }
+
+  async complete_pipeline_job_delivery(deliveryId: string, leaseToken: string, deliveredAt: Date): Promise<boolean> {
+    if (this.throwCompleteDeliveryOnce) {
+      this.throwCompleteDeliveryOnce = false;
+      throw new Error("simulated acknowledgement persistence failure");
+    }
+    const delivery = this.deliveries.get(deliveryId);
+    if (delivery === undefined || delivery.status !== "processing" || delivery.lease_token !== leaseToken) return false;
+    this.deliveries.set(deliveryId, { ...delivery, status: "delivered", delivered_at: deliveredAt, updated_at: deliveredAt, lease_token: null, lease_expires_at: null });
+    return true;
+  }
+
+  async retry_pipeline_job_delivery(deliveryId: string, leaseToken: string, nextAttemptAt: Date, errorCode: string): Promise<boolean> {
+    const delivery = this.deliveries.get(deliveryId);
+    if (delivery === undefined || delivery.status !== "processing" || delivery.lease_token !== leaseToken) return false;
+    this.deliveries.set(deliveryId, { ...delivery, status: "pending", next_attempt_at: nextAttemptAt, updated_at: new Date(), lease_token: null, lease_expires_at: null, last_error_code: errorCode });
+    return true;
+  }
+
+  async list_pipeline_job_deliveries(jobId: string): Promise<JobDelivery[]> {
+    return [...this.deliveries.values()].filter((delivery) => delivery.job_id === jobId);
   }
 
   async list_pipeline_jobs(_contentId: string | undefined, _status: JobStatus | undefined, _limit: number, _offset: number): Promise<readonly [unknown[], number]> {
@@ -206,9 +300,9 @@ function config(overrides: Partial<PipelineConfig> = {}): PipelineConfig {
   };
 }
 
-function orchestrator(storage: FakeStorage, llm: LlmProvider, options: { pipeline?: PipelineConfig; fetcher?: (url: string, init?: RequestInit) => Promise<Response>; notify?: (agentId: string, delivery: JobNotificationDelivery) => Promise<void> } = {}): PipelineOrchestrator {
-  const pipeline = new UnifiedPipeline(llm, storage, options.pipeline ?? config(), { chunkText: (text: string): string[] => [text] }, new FakeEmbeddings(), options.fetcher);
-  return new PipelineOrchestrator(pipeline, storage, { pipelineVersion: "1.0.0", notify: options.notify });
+function orchestrator(storage: FakeStorage, llm: LlmProvider, options: { pipeline?: PipelineConfig; fetcher?: (url: string, init?: RequestInit) => Promise<Response>; notify?: (agentId: string, delivery: JobNotificationDelivery) => Promise<void>; onEvent?: (event: Readonly<VaultPipelineEvent>) => void } = {}): PipelineOrchestrator {
+  const pipeline = new UnifiedPipeline(llm, storage, { ...(options.pipeline ?? config()), onEvent: options.onEvent }, { chunkText: (text: string): string[] => [text] }, new FakeEmbeddings(), options.fetcher);
+  return new PipelineOrchestrator(pipeline, storage, { pipelineVersion: "1.0.0", notify: options.notify, onEvent: options.onEvent });
 }
 
 function staticProvider(text = response): LlmProvider {
@@ -265,6 +359,21 @@ describe("vault unified pipeline and jobs", () => {
     expect(storage.usages[0]?.context).toBe(`pipeline:${job?.id ?? ""}`);
     expect(storage.jobs.get(job?.id ?? "")?.status).toBe(JobStatus.COMPLETED);
     expect(Object.values(storage.jobs.get(job?.id ?? "")?.stages ?? {}).map((stage) => stage.status)).toEqual(["completed", "completed", "completed", "completed", "completed", "completed"]);
+  });
+
+  it("emits structured stage, provider, and job events without source payloads", async () => {
+    const storage = new FakeStorage();
+    const events: VaultPipelineEvent[] = [];
+    const secretSource = "source-text-that-must-not-appear-in-telemetry";
+    const jobs = orchestrator(storage, staticProvider(), { onEvent: (event) => { events.push(event as VaultPipelineEvent); } });
+
+    const job = await jobs.submit({ contentId: "content-telemetry", contentText: secretSource, contentType: "markdown", title: "Telemetry", resourceKey: "cid:telemetry" });
+    await jobs.waitForIdle();
+
+    expect(events.map(({ event }) => event)).toEqual(expect.arrayContaining(["job.claimed", "job.started", "pipeline.stage.started", "pipeline.stage.completed", "provider.request.started", "provider.request.completed", "job.terminal"]));
+    expect(JSON.stringify(events)).not.toContain(secretSource);
+    expect(JSON.stringify(events)).not.toContain(response);
+    expect(events.every((event) => event.job_id === job.id)).toBe(true);
   });
 
   it("notifies the caller when terminal completion wins subscriber enrollment", async () => {
@@ -345,6 +454,11 @@ describe("vault unified pipeline and jobs", () => {
 
     expect(notifications).toHaveLength(2);
     expect(notifications.map(({ agentId }) => agentId)).toEqual(["caller-agent", "second-agent"]);
+    const terminalJobId = [...storage.jobs.values()][0]?.id ?? "";
+    expect(await jobs.deliveryStatus(terminalJobId)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ idempotency_key: expect.stringMatching(/:terminal:caller-agent$/), status: "pending", attempt_count: 1, last_error_code: "DELIVERY_FAILED" }),
+      expect.objectContaining({ idempotency_key: expect.stringMatching(/:terminal:second-agent$/), status: "delivered", attempt_count: 1 }),
+    ]));
     expect(notifications.map(({ delivery }) => delivery.idempotency_key)).toEqual([
       expect.stringMatching(/^job:.+:terminal:caller-agent$/),
       expect.stringMatching(/^job:.+:terminal:second-agent$/),
@@ -682,6 +796,108 @@ describe("vault unified pipeline and jobs", () => {
     expect(JSON.parse(body)).toMatchObject({ schema_version: "1", job_id: job?.id, content_id: "content-6", status: "completed", pipeline_version: "1.0.0", result: { summary: "A concise summary." } });
     const headers = calls[0]?.init?.headers as Record<string, string>;
     expect(headers["X-Menos-Signature"]).toBe(createHmac("sha256", "callback-secret").update(body).digest("hex"));
+    expect(headers["Idempotency-Key"]).toBe(`job:${job?.id}:callback:v1`);
+  });
+
+  it("recovers pending and abandoned processing jobs from their persisted requests after restart", async () => {
+    const storage = new FakeStorage();
+    const prompts: string[] = [];
+    const provider: LlmProvider = {
+      model: "recovery-model",
+      async generate(prompt): Promise<string> { prompts.push(prompt); return response; },
+      async close(): Promise<void> {},
+    };
+    const seed = async (id: string, status: JobStatus): Promise<void> => {
+      const request = { contentId: `content-${id}`, contentText: `durable input ${id}`, contentType: "markdown", title: `Recovered ${id}`, pipelineVersion: "1.0.0" };
+      await storage.create_pipeline_job({
+        id,
+        resource_key: `cid:${id}`,
+        content_id: request.contentId,
+        status,
+        pipeline_version: request.pipelineVersion,
+        data_tier: DataTier.COMPACT,
+        request_payload: request as unknown as JsonObject,
+        metadata: { notify_agent_ids: [`agent-${id}`], stages: initialPipelineStages() as unknown as JsonObject },
+        stages: initialPipelineStages(),
+        created_at: new Date("2026-01-01T00:00:00.000Z"),
+        ...(status === JobStatus.PROCESSING ? { started_at: new Date("2026-01-01T00:01:00.000Z") } : {}),
+      });
+    };
+    await seed("restart-pending", JobStatus.PENDING);
+    await seed("restart-processing", JobStatus.PROCESSING);
+    const notifications: string[] = [];
+    const jobs = orchestrator(storage, provider, { notify: async (agentId) => { notifications.push(agentId); } });
+
+    await jobs.start();
+    await jobs.waitForIdle();
+    await jobs.stop();
+
+    expect(storage.jobs.get("restart-pending")?.status).toBe(JobStatus.COMPLETED);
+    expect(storage.jobs.get("restart-processing")?.status).toBe(JobStatus.COMPLETED);
+    expect(prompts).toHaveLength(2);
+    expect(prompts).toEqual(expect.arrayContaining([expect.stringContaining("durable input restart-pending"), expect.stringContaining("durable input restart-processing")]));
+    expect(notifications.sort()).toEqual(["agent-restart-pending", "agent-restart-processing"]);
+    expect(storage.jobs.get("restart-processing")?.started_at).toEqual(new Date("2026-01-01T00:01:00.000Z"));
+  });
+
+  it("terminalizes legacy active jobs that cannot be reconstructed from a saved request", async () => {
+    const storage = new FakeStorage();
+    await storage.create_pipeline_job({ id: "legacy-active", resource_key: "legacy", content_id: "legacy-content", status: JobStatus.PROCESSING, pipeline_version: "1.0.0", metadata: { notify_agent_ids: ["legacy-agent"] } });
+    const delivered: string[] = [];
+    const jobs = orchestrator(storage, staticProvider(), { notify: async (agentId) => { delivered.push(agentId); } });
+
+    await jobs.start();
+    await jobs.waitForIdle();
+    await jobs.stop();
+
+    expect(storage.jobs.get("legacy-active")).toMatchObject({ status: JobStatus.FAILED, error_code: "JOB_RECOVERY_PAYLOAD_MISSING" });
+    expect(delivered).toEqual(["legacy-agent"]);
+  });
+
+  it("fences stale job claims and terminal writes after a lease is reclaimed", async () => {
+    const storage = new FakeStorage();
+    await storage.create_pipeline_job({ id: "fenced-job", resource_key: "fenced", content_id: "fenced-content", status: JobStatus.PENDING, pipeline_version: "1.0.0", metadata: {} });
+    const now = new Date();
+    const oldClaim = await storage.claim_pipeline_job("fenced-job", "old-token", now, new Date(now.getTime() + 60_000)) as PipelineJob;
+    const current = storage.jobs.get("fenced-job");
+    if (current === undefined) throw new Error("seeded job disappeared");
+    storage.jobs.set("fenced-job", { ...current, lease_expires_at: new Date(0) });
+    const newClaim = await storage.claim_pipeline_job("fenced-job", "new-token", new Date(), new Date(Date.now() + 60_000)) as PipelineJob;
+
+    const staleTerminal = await storage.transition_pipeline_job_terminal("fenced-job", JobStatus.FAILED, [undefined, new Date()], ["STALE", "stale worker", "pipeline"], [JobStatus.PENDING], oldClaim.claim_token ?? undefined, [{ kind: "notification", target: "agent", idempotency_key: "stale-key", payload: {} }]);
+
+    expect(newClaim.claim_token).toBe("new-token");
+    expect(staleTerminal).toBeUndefined();
+    expect(storage.jobs.get("fenced-job")?.status).toBe(JobStatus.PENDING);
+    expect(storage.deliveries).toHaveLength(0);
+  });
+
+  it("retries an acknowledged callback after an acknowledgement crash with the same idempotency key", async () => {
+    const storage = new FakeStorage();
+    storage.throwCompleteDeliveryOnce = true;
+    const calls: { body: string; key: string | undefined }[] = [];
+    const jobs = orchestrator(storage, staticProvider(), {
+      pipeline: config({ callbackUrl: "https://callback.test/jobs", callbackSecret: "callback-secret" }),
+      fetcher: async (_url, init): Promise<Response> => {
+        const headers = init?.headers as Record<string, string>;
+        calls.push({ body: String(init?.body), key: headers["Idempotency-Key"] });
+        return new Response("ok", { status: 200 });
+      },
+    });
+
+    const job = await jobs.submit({ contentId: "content-callback-crash", contentText: "durable callback", contentType: "markdown", title: "Callback", resourceKey: "cid:callback-crash" });
+    await jobs.waitForIdle();
+    const [pendingDelivery] = await jobs.deliveryStatus(job.id ?? "");
+    const persistedDelivery = pendingDelivery === undefined ? undefined : storage.deliveries.get(pendingDelivery.id);
+    if (persistedDelivery === undefined) throw new Error("callback delivery was not persisted");
+    storage.deliveries.set(persistedDelivery.id, { ...persistedDelivery, next_attempt_at: new Date(0) });
+    await jobs.drainDueDeliveries();
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.key).toBe(`job:${job.id}:callback:v1`);
+    expect(calls[1]?.key).toBe(calls[0]?.key);
+    expect(calls[1]?.body).toBe(calls[0]?.body);
+    expect((await jobs.deliveryStatus(job.id ?? "")).map(({ status, attempt_count }) => ({ status, attempt_count }))).toEqual([{ status: "delivered", attempt_count: 2 }]);
   });
 
   it("limits in-flight pipeline work to the configured concurrency", async () => {

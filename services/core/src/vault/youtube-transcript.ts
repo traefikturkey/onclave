@@ -24,11 +24,13 @@ export type TranscriptFetchInit = {
   headers?: Record<string, string>;
   body?: string;
   dispatcher?: Dispatcher;
+  signal?: AbortSignal;
 };
 
 export type TranscriptFetchResponse = {
   ok: boolean;
   status: number;
+  headers?: { get(name: string): string | null };
   text(): Promise<string>;
   json(): Promise<unknown>;
 };
@@ -59,11 +61,46 @@ const YOUTUBE_CLIENT_NAME = "ANDROID";
 const YOUTUBE_CLIENT_VERSION = "20.10.38";
 const WEBSHARE_PROXY_HOST = "p.webshare.io:80";
 const TRANSCRIPT_UNAVAILABLE_PREFIX = "YouTube is blocking requests for video";
+export const YOUTUBE_TRANSCRIPT_OVERALL_TIMEOUT_MS = 25_000;
+
+export type TranscriptStage = "watch" | "player" | "captions" | "request";
+export type TranscriptFailureClassification = "network" | "timeout" | "rate_limited" | "upstream" | "blocked";
+
+export type TranscriptAttemptEvent = Readonly<{
+  stage: TranscriptStage;
+  attempt: number;
+  outcome: "success" | "retry" | "failure";
+  classification?: TranscriptFailureClassification;
+  durationMs: number;
+  httpStatus?: number;
+}>;
+
+export type TranscriptProxyDiagnostic = Readonly<{
+  mode: "webshare" | "custom" | "direct";
+  configured: boolean;
+  credentialStatus: "present" | "missing" | "not_applicable";
+  dispatcherStatus: "owned" | "injected" | "none";
+  connectivity: "not_checked";
+}>;
+
+export type TranscriptFailureDiagnostic = {
+  stage: TranscriptStage;
+  classification: TranscriptFailureClassification;
+  attempts: number;
+  httpStatus?: number;
+  errorName?: string;
+  errorCode?: string;
+  errno?: number | string;
+  syscall?: string;
+};
 
 export class TranscriptUpstreamUnavailable extends Error {
-  constructor(message: string) {
+  readonly diagnostic?: TranscriptFailureDiagnostic;
+
+  constructor(message: string, diagnostic?: TranscriptFailureDiagnostic) {
     super(message);
     this.name = "TranscriptUpstreamUnavailable";
+    this.diagnostic = diagnostic;
   }
 }
 
@@ -79,10 +116,10 @@ function readCaptionTracks(value: unknown): CaptionTrack[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const tracks: CaptionTrack[] = [];
   for (const item of value) {
-    if (!isRecord(item)) continue;
+    if (!isRecord(item)) return undefined;
     const baseUrl = readString(item.baseUrl);
     const languageCode = readString(item.languageCode);
-    if (baseUrl === undefined || languageCode === undefined) continue;
+    if (baseUrl === undefined || languageCode === undefined) return undefined;
     const kind = readString(item.kind);
     tracks.push(kind === undefined ? { baseUrl, languageCode } : { baseUrl, languageCode, kind });
   }
@@ -93,11 +130,11 @@ function parsePlayerResponse(value: unknown): PlayerResponse | undefined {
   if (!isRecord(value)) return undefined;
   const response: PlayerResponse = {};
   const captions = value.captions;
-  if (isRecord(captions)) {
-    const renderer = captions.playerCaptionsTracklistRenderer;
-    if (isRecord(renderer)) {
-      response.captions = { playerCaptionsTracklistRenderer: { captionTracks: readCaptionTracks(renderer.captionTracks) } };
-    }
+  if (captions !== undefined) {
+    if (!isRecord(captions) || !isRecord(captions.playerCaptionsTracklistRenderer)) return undefined;
+    const tracks = readCaptionTracks(captions.playerCaptionsTracklistRenderer.captionTracks);
+    if (tracks === undefined) return undefined;
+    response.captions = { playerCaptionsTracklistRenderer: { captionTracks: tracks } };
   }
   const playabilityStatus = value.playabilityStatus;
   if (isRecord(playabilityStatus)) {
@@ -106,6 +143,8 @@ function parsePlayerResponse(value: unknown): PlayerResponse | undefined {
       reason: readString(playabilityStatus.reason),
     };
   }
+  if (response.playabilityStatus?.status === undefined && response.captions === undefined) return undefined;
+  if (response.playabilityStatus?.status === "OK" && response.captions === undefined) return undefined;
   return response;
 }
 
@@ -218,20 +257,12 @@ export function extractYouTubeVideoId(urlOrId: string): string {
   throw new Error(`Could not extract video ID from: ${urlOrId}`);
 }
 
-function blockedError(videoId: string, detail: string): TranscriptUpstreamUnavailable {
+function blockedError(videoId: string, _detail: string): TranscriptUpstreamUnavailable {
   return new TranscriptUpstreamUnavailable(
     `${TRANSCRIPT_UNAVAILABLE_PREFIX} ${videoId} despite using Webshare proxy. ` +
       "Ensure you have purchased 'Residential' proxies (not 'Proxy Server' or 'Static Residential'). " +
-      "Check WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD in .env. " +
-      `Original error: ${detail}`,
-  );
-}
-
-function requestFailedError(videoId: string, detail: string): TranscriptUpstreamUnavailable {
-  return new TranscriptUpstreamUnavailable(
-    `YouTube request failed for video ${videoId}. This may indicate a proxy connection issue. ` +
-      "Check WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD in .env. " +
-      `Original error: ${detail}`,
+      "Check WEBSHARE_PROXY_USERNAME and WEBSHARE_PROXY_PASSWORD in .env.",
+    { stage: "player", classification: "blocked", attempts: 1 },
   );
 }
 
@@ -252,20 +283,92 @@ function isTranscriptContentError(error: Error): boolean {
     || error.message.startsWith("No transcript found for video: ");
 }
 
+type RequestFailure = {
+  classification: TranscriptFailureClassification;
+  httpStatus?: number;
+  retryable?: boolean;
+  retryAfterMs?: number;
+  error?: unknown;
+};
+
+class TranscriptRequestFailure extends Error {
+  constructor(readonly failure: RequestFailure) {
+    super("Transcript upstream request failed");
+  }
+}
+
+function safeErrorName(value: unknown): string | undefined {
+  return typeof value === "string" && [
+    "Error", "TypeError", "AbortError", "TimeoutError", "FetchError", "SocketError", "ConnectTimeoutError",
+  ].includes(value) ? value : undefined;
+}
+
+function safeErrorCode(value: unknown): string | undefined {
+  return typeof value === "string" && /^(?:EAI_AGAIN|ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|ENOTFOUND|EHOSTUNREACH|ENETUNREACH|UND_ERR_[A-Z_]+)$/.test(value)
+    ? value : undefined;
+}
+
+function safeSyscall(value: unknown): string | undefined {
+  return typeof value === "string" && ["connect", "read", "write", "getaddrinfo", "lookup", "socket"].includes(value)
+    ? value : undefined;
+}
+
+function failureMetadata(error: unknown): Pick<TranscriptFailureDiagnostic, "errorName" | "errorCode" | "errno" | "syscall"> {
+  const result: Pick<TranscriptFailureDiagnostic, "errorName" | "errorCode" | "errno" | "syscall"> = {};
+  let current = error;
+  for (let depth = 0; depth < 5 && typeof current === "object" && current !== null; depth += 1) {
+    const record = current as Record<string, unknown>;
+    result.errorName ??= safeErrorName(record.name);
+    result.errorCode ??= safeErrorCode(record.code);
+    result.syscall ??= safeSyscall(record.syscall);
+    if (result.errno === undefined && typeof record.errno === "number" && Number.isFinite(record.errno)) result.errno = record.errno;
+    current = record.cause;
+  }
+  return result;
+}
+
+function retryAfterMs(headers: TranscriptFetchResponse["headers"]): number | undefined {
+  const value = headers?.get("retry-after");
+  if (value === null || value === undefined) return undefined;
+  const seconds = Number(value);
+  const delay = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : Date.parse(value) - Date.now();
+  return Number.isFinite(delay) && delay >= 0 ? Math.min(delay, 5_000) : undefined;
+}
+
 export type YouTubeTranscriptServiceOptions = {
   proxy?: WebshareProxyCredentials;
   fetcher?: TranscriptFetcher;
   dispatcher?: Dispatcher;
+  maxAttempts?: number;
+  requestTimeoutMs?: number;
+  overallTimeoutMs?: number;
+  retryDelayMs?: number;
+  random?: () => number;
+  onAttempt?: (event: TranscriptAttemptEvent) => void | Promise<void>;
 };
 
 export class YouTubeTranscriptService {
   private readonly fetcher: TranscriptFetcher;
   private readonly dispatcher: Dispatcher | undefined;
   private readonly ownedDispatcher: ProxyAgent | undefined;
+  private readonly maxAttempts: number;
+  private readonly requestTimeoutMs: number;
+  private readonly overallTimeoutMs: number;
+  private readonly retryDelayMs: number;
+  private readonly random: () => number;
+  private readonly onAttempt: YouTubeTranscriptServiceOptions["onAttempt"];
+  private readonly proxyCredentials: WebshareProxyCredentials | undefined;
 
   constructor(options: YouTubeTranscriptServiceOptions = {}) {
     this.fetcher = options.fetcher ?? defaultFetcher;
     this.dispatcher = options.dispatcher;
+    this.maxAttempts = Math.max(1, Math.floor(options.maxAttempts ?? 3));
+    this.requestTimeoutMs = Math.max(1, options.requestTimeoutMs ?? 10_000);
+    this.overallTimeoutMs = Math.max(1, options.overallTimeoutMs ?? YOUTUBE_TRANSCRIPT_OVERALL_TIMEOUT_MS);
+    this.retryDelayMs = Math.max(0, options.retryDelayMs ?? 150);
+    this.random = options.random ?? Math.random;
+    this.onAttempt = options.onAttempt;
+    this.proxyCredentials = options.proxy;
     this.ownedDispatcher = options.dispatcher === undefined && options.proxy !== undefined
       ? createWebshareProxyDispatcher(options.proxy)
       : undefined;
@@ -279,52 +382,160 @@ export class YouTubeTranscriptService {
     await this.ownedDispatcher?.close();
   }
 
+  /** Static configuration inspection only; connectivity is never probed. */
+  getProxyDiagnostic(): TranscriptProxyDiagnostic {
+    const mode = this.proxyCredentials !== undefined ? "webshare" : this.dispatcher !== undefined ? "custom" : "direct";
+    const usernamePresent = this.proxyCredentials !== undefined && this.proxyCredentials.username.trim() !== "";
+    const passwordPresent = this.proxyCredentials !== undefined && this.proxyCredentials.password.trim() !== "";
+    return Object.freeze({
+      mode,
+      configured: mode === "custom" || (mode === "webshare" && usernamePresent && passwordPresent),
+      credentialStatus: mode !== "webshare" ? "not_applicable" : usernamePresent && passwordPresent ? "present" : "missing",
+      dispatcherStatus: this.ownedDispatcher !== undefined ? "owned" : this.dispatcher !== undefined ? "injected" : "none",
+      connectivity: "not_checked",
+    });
+  }
+
+  private emitAttempt(event: TranscriptAttemptEvent): void {
+    try {
+      const result = this.onAttempt?.(Object.freeze(event));
+      void result?.catch(() => undefined);
+    } catch {
+      // Telemetry must not alter transcript fetch results.
+    }
+  }
+
+  private async request<T>(
+    stage: TranscriptFailureDiagnostic["stage"],
+    deadline: number,
+    operation: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    let attempts = 0;
+    let lastFailure: RequestFailure = { classification: "network" };
+    while (attempts < this.maxAttempts && Date.now() < deadline) {
+      attempts += 1;
+      const startedAt = Date.now();
+      const remaining = deadline - startedAt;
+      const controller = new AbortController();
+      let timedOut = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeoutMs = Math.min(this.requestTimeoutMs, remaining);
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          timedOut = true;
+          controller.abort();
+          reject(new TranscriptRequestFailure({ classification: "timeout" }));
+        }, timeoutMs);
+      });
+      try {
+        const value = await Promise.race([operation(controller.signal), timeout]);
+        this.emitAttempt({ stage, attempt: attempts, outcome: "success", durationMs: Math.max(0, Date.now() - startedAt) });
+        return value;
+      } catch (error) {
+        if (error instanceof TranscriptRequestFailure) lastFailure = error.failure;
+        else if (error instanceof Error && isTranscriptContentError(error)) throw error;
+        else if (error instanceof SyntaxError || (error instanceof Error && error.message === "caption response contained no transcript segments")) {
+          lastFailure = { classification: "upstream", retryable: true };
+        } else {
+          lastFailure = { classification: timedOut ? "timeout" : "network", error };
+        }
+        const shouldRetry = lastFailure.retryable === true || lastFailure.classification === "network"
+          || lastFailure.classification === "timeout" || lastFailure.classification === "rate_limited"
+          || (lastFailure.classification === "upstream" && [500, 502, 503, 504].includes(lastFailure.httpStatus ?? 0));
+        const willRetry = shouldRetry && attempts < this.maxAttempts && Date.now() < deadline;
+        this.emitAttempt({
+          stage, attempt: attempts, outcome: willRetry ? "retry" : "failure",
+          classification: lastFailure.classification,
+          durationMs: Math.max(0, Date.now() - startedAt),
+          ...(lastFailure.httpStatus === undefined ? {} : { httpStatus: lastFailure.httpStatus }),
+        });
+        if (!willRetry) break;
+        const random = Math.max(0, Math.min(1, this.random()));
+        const backoff = Math.min(5_000, this.retryDelayMs * (2 ** (attempts - 1)) * (0.5 + random));
+        const delay = lastFailure.retryAfterMs === undefined ? backoff : Math.max(backoff, lastFailure.retryAfterMs);
+        await new Promise((resolve) => setTimeout(resolve, Math.min(delay, Math.max(0, deadline - Date.now()))));
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+    }
+    const diagnostic: TranscriptFailureDiagnostic = {
+      stage,
+      classification: lastFailure.classification,
+      attempts,
+      ...(lastFailure.httpStatus === undefined ? {} : { httpStatus: lastFailure.httpStatus }),
+      ...failureMetadata(lastFailure.error),
+    };
+    throw new TranscriptUpstreamUnavailable(
+      "YouTube request failed. This may indicate a transient upstream or proxy connection issue. Check proxy configuration.",
+      diagnostic,
+    );
+  }
+
   async fetchTranscript(videoId: string, languages: readonly string[] = ["en"]): Promise<YouTubeTranscript> {
     const dispatcher = this.dispatcher ?? this.ownedDispatcher;
+    const deadline = Date.now() + this.overallTimeoutMs;
+    let currentStage: TranscriptFailureDiagnostic["stage"] = "watch";
     try {
-      const watchResponse = await this.fetcher(`${YOUTUBE_WATCH_URL}${encodeURIComponent(videoId)}`, {
-        headers: { "user-agent": "Mozilla/5.0" },
-        dispatcher,
-      });
-      if (!watchResponse.ok) {
-        if (watchResponse.status === 403 || watchResponse.status === 429) {
-          throw blockedError(videoId, `HTTP ${watchResponse.status}`);
+      const apiKey = await this.request("watch", deadline, async (signal) => {
+        const response = await this.fetcher(`${YOUTUBE_WATCH_URL}${encodeURIComponent(videoId)}`, {
+          headers: { "user-agent": "Mozilla/5.0" }, dispatcher, signal,
+        });
+        if (!response.ok) {
+          if (response.status === 404) throw new Error(`Video unavailable: ${videoId}`);
+          const classification = response.status === 429 ? "rate_limited" : response.status === 403 ? "blocked" : "upstream";
+          throw new TranscriptRequestFailure({
+            classification, httpStatus: response.status,
+            retryAfterMs: [429, 503].includes(response.status) ? retryAfterMs(response.headers) : undefined,
+          });
         }
-        if (watchResponse.status === 404) throw new Error(`Video unavailable: ${videoId}`);
-        throw requestFailedError(videoId, `HTTP ${watchResponse.status}`);
-      }
-
-      const watchHtml = await watchResponse.text();
-      const apiKey = innertubeApiKeyFromWatchPage(watchHtml);
-      if (apiKey === undefined) throw requestFailedError(videoId, "watch page did not contain an Innertube API key");
-      const response = await this.fetcher(`${YOUTUBE_PLAYER_URL}${encodeURIComponent(apiKey)}`, {
-        method: "POST",
-        headers: { "content-type": "application/json", origin: "https://www.youtube.com", "user-agent": "Mozilla/5.0" },
-        body: JSON.stringify({ context: { client: { clientName: YOUTUBE_CLIENT_NAME, clientVersion: YOUTUBE_CLIENT_VERSION } }, videoId }),
-        dispatcher,
+        const watchHtml = await response.text();
+        const apiKey = innertubeApiKeyFromWatchPage(watchHtml);
+        if (apiKey === undefined) throw new TranscriptRequestFailure({ classification: "upstream", retryable: true });
+        return apiKey;
       });
-      if (!response.ok) {
-        if (response.status === 403 || response.status === 429) throw blockedError(videoId, `HTTP ${response.status}`);
-        throw requestFailedError(videoId, `HTTP ${response.status}`);
-      }
-      const playerResponse = parsePlayerResponse(await response.json());
+      currentStage = "player";
+      const playerResponse = await this.request("player", deadline, async (signal) => {
+        const response = await this.fetcher(`${YOUTUBE_PLAYER_URL}${encodeURIComponent(apiKey)}`, {
+          method: "POST",
+          headers: { "content-type": "application/json", origin: "https://www.youtube.com", "user-agent": "Mozilla/5.0" },
+          body: JSON.stringify({ context: { client: { clientName: YOUTUBE_CLIENT_NAME, clientVersion: YOUTUBE_CLIENT_VERSION } }, videoId }),
+          dispatcher, signal,
+        });
+        if (!response.ok) {
+          const classification = response.status === 429 ? "rate_limited" : response.status === 403 ? "blocked" : "upstream";
+          throw new TranscriptRequestFailure({
+            classification, httpStatus: response.status,
+            retryAfterMs: [429, 503].includes(response.status) ? retryAfterMs(response.headers) : undefined,
+          });
+        }
+        const parsed = parsePlayerResponse(await response.json());
+        if (parsed === undefined) throw new TranscriptRequestFailure({ classification: "upstream", retryable: true });
+        return parsed;
+      });
 
       const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
       if (tracks === undefined) throw transcriptUnavailableError(playerResponse, videoId);
       const track = selectCaptionTrack(tracks, languages);
       if (track === undefined) throw new Error(`No transcript found for video: ${videoId}`);
 
+      currentStage = "captions";
       const captionUrl = track.baseUrl.replace("&fmt=srv3", "");
-      const captionResponse = await this.fetcher(captionUrl, { dispatcher });
-      if (!captionResponse.ok) {
-        if (captionResponse.status === 403 || captionResponse.status === 429) throw blockedError(videoId, `HTTP ${captionResponse.status}`);
-        throw requestFailedError(videoId, `HTTP ${captionResponse.status}`);
-      }
-      const body = await captionResponse.text();
-      const segments = captionUrl.includes("fmt=json3")
-        ? parseTranscriptJson3(JSON.parse(body) as unknown)
-        : parseTranscriptXml(body);
-      if (segments.length === 0) throw requestFailedError(videoId, "caption response contained no transcript segments");
+      const segments = await this.request("captions", deadline, async (signal) => {
+        const captionResponse = await this.fetcher(captionUrl, { dispatcher, signal });
+        if (!captionResponse.ok) {
+          const classification = captionResponse.status === 429 ? "rate_limited" : captionResponse.status === 403 ? "blocked" : "upstream";
+          throw new TranscriptRequestFailure({
+            classification, httpStatus: captionResponse.status,
+            retryAfterMs: [429, 503].includes(captionResponse.status) ? retryAfterMs(captionResponse.headers) : undefined,
+          });
+        }
+        const body = await captionResponse.text();
+        const parsed = captionUrl.includes("fmt=json3")
+          ? parseTranscriptJson3(JSON.parse(body) as unknown)
+          : parseTranscriptXml(body);
+        if (parsed.length === 0) throw new TranscriptRequestFailure({ classification: "upstream", retryable: true });
+        return parsed;
+      });
       return {
         videoId,
         segments,
@@ -335,7 +546,16 @@ export class YouTubeTranscriptService {
     } catch (error) {
       if (error instanceof TranscriptUpstreamUnavailable) throw error;
       if (error instanceof Error && isTranscriptContentError(error)) throw error;
-      throw requestFailedError(videoId, error instanceof Error ? error.message : String(error));
+      const diagnostic: TranscriptFailureDiagnostic = {
+        stage: currentStage,
+        classification: "upstream",
+        attempts: 1,
+        ...failureMetadata(error),
+      };
+      throw new TranscriptUpstreamUnavailable(
+        "YouTube request failed. This may indicate an upstream or proxy connection issue. Check proxy configuration.",
+        diagnostic,
+      );
     }
   }
 }

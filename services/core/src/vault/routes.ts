@@ -16,6 +16,7 @@ import type { YouTubeTranscript } from "./youtube-transcript";
 import { TranscriptUpstreamUnavailable } from "./youtube-transcript";
 import { UrlDetector } from "./url-detector";
 import { jsonResponse, rawResponse, type VaultHandlers } from "./http";
+import { safeTranscriptFailure } from "./transcript-health";
 import {
   TRANSCRIPT_DOWNLOAD_MIME_TYPE,
   storeTranscriptArtifacts,
@@ -93,8 +94,11 @@ export type VaultRouteDependencies = {
   transcriptResolver: WholeTranscriptResolver;
   health: () => Record<string, unknown> | Promise<Record<string, unknown>>;
   ready: () => Promise<Record<string, unknown>>;
+  metrics: () => string;
+  metricsContentType: string;
   authorizeNotificationAgent?: (agentId: string, keyId: string | undefined) => void;
   onTranscriptFailure?: (videoId: string, error: TranscriptUpstreamUnavailable) => void;
+  onTranscriptSuccess?: () => void;
 };
 
 type RequestObject = Record<string, unknown>;
@@ -431,6 +435,7 @@ function usageDate(value: string | undefined, name: string): Date | undefined {
 /** Builds all keep and keep-thin Menos route handlers. Dropped routes are intentionally absent. */
 export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHandlers {
   return {
+    live: () => jsonResponse({ status: "ok" }),
     health: async () => {
       const result = await deps.health();
       return jsonResponse(result, result.status === "degraded" ? 503 : 200);
@@ -439,6 +444,7 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
       const result = await deps.ready();
       return jsonResponse(result, result.status === "ready" ? 200 : 503);
     },
+    metrics: () => rawResponse(deps.metrics(), deps.metricsContentType),
     authKeys: () => jsonResponse({ keys: deps.keyStore.listKeyIds() }),
     authKeysReload: () => {
       deps.keyStore.reload();
@@ -660,9 +666,12 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
         if (transcriptText === undefined) {
           try {
             transcript = await deps.transcript.fetchTranscript(videoId);
+            deps.onTranscriptSuccess?.();
           } catch (error) {
             if (error instanceof TranscriptUpstreamUnavailable) {
-              log("error", "transcript.upstream_unavailable", { videoId, error: error.message });
+              log("error", "transcript.upstream_unavailable", {
+                ...safeTranscriptFailure({ videoId, ...error.diagnostic }),
+              });
               deps.onTranscriptFailure?.(videoId, error);
               throw new HttpError(503, "YouTube transcript service is temporarily unavailable");
             }
@@ -751,6 +760,24 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
         job_id: job.job_id, content_id: job.content_id, status: job.status,
         created_at: job.created_at, started_at: job.started_at, finished_at: job.finished_at, stages: job.stages,
       });
+    },
+    jobDeliveries: async (request) => {
+      const id = request.params.job_id ?? "";
+      if (await deps.jobs.get(id) === undefined) throw new HttpError(404, "Job not found");
+      const deliveries = await deps.jobs.deliveryStatus(id);
+      return jsonResponse(deliveries.map((delivery) => ({
+        id: delivery.id,
+        job_id: delivery.job_id,
+        kind: delivery.kind,
+        idempotency_key: delivery.idempotency_key,
+        status: delivery.status,
+        attempt_count: delivery.attempt_count,
+        next_attempt_at: delivery.next_attempt_at,
+        last_error_code: delivery.last_error_code,
+        created_at: delivery.created_at,
+        updated_at: delivery.updated_at,
+        delivered_at: delivery.delivered_at,
+      })));
     },
     jobCancel: async (request) => {
       const job = await deps.jobs.cancel(request.params.job_id ?? "");

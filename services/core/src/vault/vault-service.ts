@@ -1,6 +1,6 @@
 import { Client as MinioClient } from "minio";
 import type { Pool } from "pg";
-import { createVaultPool } from "./db";
+import { createVaultPool, migrateVaultDurability } from "./db";
 import { EmbeddingReindexService, type VaultEmbeddingReindexer } from "./embedding-reindex";
 import { createEmbeddingService, type EmbeddingClient } from "./embeddings";
 import type { KeyStore } from "./keys";
@@ -9,9 +9,11 @@ import { createConfiguredLlmProvider, providerName, type UsageReportingLlmProvid
 import { MeteringLLMProvider, type LlmUsageStorage } from "./llm-metering";
 import { LLMPricingService, type PricingSnapshotStorage } from "./llm-pricing";
 import { PipelineOrchestrator, type JobNotificationDelivery, type JobStorage } from "./jobs";
+import type { VaultEventSink } from "./durability";
 import { UnifiedPipeline, type PipelineStorage } from "./pipeline";
 import { SearchService, type SearchStorage } from "./search";
 import { PostgresRepository, S3Storage } from "./storage";
+import { configuredReadinessChecks, readinessResult, type VaultReadiness, type VaultReadinessChecks } from "./readiness";
 import { YouTubeTranscriptService } from "./youtube-transcript";
 import { YouTubeMetadataService } from "./youtube-metadata";
 import { DoclingClient } from "./docling";
@@ -37,18 +39,9 @@ type VaultRuntimeRepository = VaultRepository & PricingSnapshotStorage & SearchS
   replace_content_chunks(contentId: string, chunks: ChunkModel[]): Promise<void>;
 };
 
-export type VaultReadiness = {
-  status: "ready" | "degraded";
-  checks: { postgres: string; s3: string; ollama: string };
-};
+export type { VaultReadiness, VaultReadinessChecks } from "./readiness";
 
-export type VaultReadinessChecks = {
-  postgres(): Promise<void>;
-  s3(): Promise<void>;
-  ollama(): Promise<void>;
-};
-
-export type VaultService = Omit<VaultRouteDependencies, "health" | "ready"> & {
+export type VaultService = Omit<VaultRouteDependencies, "health" | "ready" | "metrics" | "metricsContentType"> & {
   ready(): Promise<VaultReadiness>;
   close(): Promise<void>;
 };
@@ -70,11 +63,8 @@ export type VaultServiceOverrides = {
   readiness?: VaultReadinessChecks;
   close?: () => Promise<void>;
   notify?: (agentId: string, delivery: JobNotificationDelivery) => Promise<void>;
+  onEvent?: VaultEventSink;
 };
-
-function errorValue(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 export function chunkText(text: string): string[] {
   const normalized = text.trim();
@@ -87,43 +77,6 @@ export function chunkText(text: string): string[] {
   return chunks;
 }
 
-function configuredReadiness(pool: Pool, storage: S3Storage, config: VaultConfig): VaultReadinessChecks {
-  return {
-    postgres: async (): Promise<void> => {
-      await pool.query("SELECT 1");
-    },
-    s3: async (): Promise<void> => {
-      await storage.client.bucketExists(storage.bucket);
-    },
-    ollama: async (): Promise<void> => {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
-      try {
-        const response = await fetch(new URL("/api/tags", config.ollamaUrl), { signal: controller.signal });
-        if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`.trim());
-      } finally {
-        clearTimeout(timeout);
-      }
-    },
-  };
-}
-
-async function readinessResult(checks: VaultReadinessChecks): Promise<VaultReadiness> {
-  const run = async (check: () => Promise<void>): Promise<string> => {
-    try {
-      await check();
-      return "ok";
-    } catch (error) {
-      return `error: ${errorValue(error)}`;
-    }
-  };
-  const [postgres, s3, ollama] = await Promise.all([run(checks.postgres), run(checks.s3), run(checks.ollama)]);
-  return {
-    status: postgres === "ok" && s3 === "ok" && ollama === "ok" ? "ready" : "degraded",
-    checks: { postgres, s3, ollama },
-  };
-}
-
 /**
  * Constructs the vault in Menos dependency order. Overrides let in-process
  * callers replace external systems without changing route behavior.
@@ -134,6 +87,7 @@ export async function createVaultService(
 ): Promise<VaultService> {
   const keyStore = overrides.keyStore ?? new FileKeyStore(config.sshPublicKeysPath);
   const pool = overrides.repository === undefined ? createVaultPool(config) : undefined;
+  if (pool !== undefined) await migrateVaultDurability(pool);
   const storage = overrides.storage ?? new S3Storage(new MinioClient({
     endPoint: config.s3EndpointUrl.replace(/^https?:\/\//, "").split(":")[0] ?? config.s3EndpointUrl,
     port: Number.parseInt(config.s3EndpointUrl.replace(/^https?:\/\//, "").split(":")[1] ?? (config.s3Secure ? "443" : "9000"), 10),
@@ -167,11 +121,19 @@ export async function createVaultService(
       record_llm_usage: async ({ created_at: _createdAt, ...usage }): Promise<void> => repository.record_llm_usage(usage),
     };
     const metered = new MeteringLLMProvider(llm, meteringStorage, "pipeline", providerName(llm), llm.model, pricing);
-    const pipeline = new UnifiedPipeline(metered, repository, config, { chunkText }, embeddings);
+    const pipeline = new UnifiedPipeline(metered, repository, { ...config, onEvent: overrides.onEvent }, { chunkText }, embeddings);
     jobs = new PipelineOrchestrator(pipeline, repository, {
       pipelineVersion: config.appVersion,
       notify: overrides.notify,
       transcriptResolver,
+      recoveryBatchSize: config.jobRecoveryBatchSize,
+      jobLeaseMs: config.jobLeaseMs,
+      pollIntervalMs: config.deliveryPollIntervalMs,
+      deliveryLeaseMs: config.deliveryLeaseMs,
+      deliveryRetryBaseMs: config.deliveryRetryBaseMs,
+      deliveryRetryMaxMs: config.deliveryRetryMaxMs,
+      deliveryBatchSize: config.deliveryBatchSize,
+      onEvent: overrides.onEvent,
     });
   }
   const transcript = overrides.transcript ?? new YouTubeTranscriptService({
@@ -181,7 +143,7 @@ export async function createVaultService(
   const docling = overrides.docling ?? new DoclingClient(config.doclingUrl);
   const readiness = overrides.readiness ?? (pool === undefined || !(storage instanceof S3Storage)
     ? { postgres: async (): Promise<void> => {}, s3: async (): Promise<void> => {}, ollama: async (): Promise<void> => {} }
-    : configuredReadiness(pool, storage, config));
+    : configuredReadinessChecks(pool, storage, config));
 
   return {
     keyStore,
@@ -195,8 +157,9 @@ export async function createVaultService(
     docling,
     embeddingReindexer,
     transcriptResolver,
-    ready: async (): Promise<VaultReadiness> => readinessResult(readiness),
+    ready: async (): Promise<VaultReadiness> => readinessResult(config, readiness),
     close: async (): Promise<void> => {
+      await jobs?.stop();
       if (overrides.close !== undefined) {
         await overrides.close();
         return;

@@ -94,6 +94,13 @@ all remaining values can be overridden by the consumer.
 | `ONCLAVE_VAULT_UNIFIED_PIPELINE_MAX_CONCURRENCY` | `4` |
 | `ONCLAVE_VAULT_UNIFIED_PIPELINE_INPUT_BUDGET` | `12000` |
 | `ONCLAVE_VAULT_UNIFIED_PIPELINE_MAX_NEW_TAGS` | `3` |
+| `ONCLAVE_VAULT_JOB_RECOVERY_BATCH_SIZE` | `50` |
+| `ONCLAVE_VAULT_JOB_LEASE_MS` | `300000` |
+| `ONCLAVE_VAULT_DELIVERY_POLL_INTERVAL_MS` | `1000` |
+| `ONCLAVE_VAULT_DELIVERY_LEASE_MS` | `300000` |
+| `ONCLAVE_VAULT_DELIVERY_RETRY_BASE_MS` | `1000` |
+| `ONCLAVE_VAULT_DELIVERY_RETRY_MAX_MS` | `900000` |
+| `ONCLAVE_VAULT_DELIVERY_BATCH_SIZE` | `50` |
 | `ONCLAVE_VAULT_ENTITY_MAX_TOPICS_PER_CONTENT` | `7` |
 | `ONCLAVE_VAULT_ENTITY_MIN_CONFIDENCE` | `0.6` |
 | `ONCLAVE_VAULT_ENTITY_FETCH_EXTERNAL_METADATA` | `true` |
@@ -141,6 +148,73 @@ uses `ONCLAVE_VAULT_APP_VERSION`.
 
 The adopted `menos` PostgreSQL database and user defaults and S3 bucket default
 are persistent data identities, not configuration aliases.
+
+## Durable jobs and callback delivery
+
+The seven `JOB_*` and `DELIVERY_*` tuning variables above control recovery
+batching, processing and delivery leases, polling, callback retry bounds, and
+delivery batching. Retries start at 1 second and back off to a 15-minute cap.
+Pending jobs and expired processing leases are recovered after restart. A
+legacy active job without its saved input fails explicitly with
+`JOB_RECOVERY_PAYLOAD_MISSING`. Callback delivery is at-least-once and uses the
+stable `Idempotency-Key: job:<id>:callback:v1`; consumers should deduplicate
+using that key. Authenticated `GET /api/v1/jobs/{job_id}/deliveries` exposes
+callback delivery status independently from job status. Unknown job IDs return
+404; a known job with no delivery intents returns 200 with an empty result.
+Retries are automatic; there is no manual delivery endpoint.
+
+During vault construction, versioned additive/idempotent migrations execute
+automatically before the service starts accepting requests. The
+`20260722_job_durability` migration applies to existing database volumes; it
+does not depend on PostgreSQL's `initdb` scripts running again. The Compose
+`vault-schema.sql` initialization remains for fresh database volumes only.
+For the first rollout consuming this migration, use the reviewed deployment
+role; do not consume it through a core-only helper.
+
+## HTTP diagnostics and probes
+
+- `GET /live` is a process-only liveness probe. It returns HTTP 200 with
+  `status: "ok"` independent of external dependencies. Container healthchecks
+  use this endpoint; they do not restart the service because a dependency is
+  temporarily unavailable.
+- `GET /health` retains its existing `status: "ok"` or `"degraded"` response
+  and broker, `git_sha`, and safe transcript diagnostics. A transient transcript
+  outage may return HTTP 503. It is diagnostic, not a container restart probe.
+  Transcript diagnostics include `recentFailures` with a fixed maximum of 10.
+  The static proxy accessor is `transcript.proxy`, exposing only
+  `{mode, configured, credentialStatus, dispatcherStatus,
+  connectivity: "not_checked"}`. It contains no URL or credentials and does not
+  prove proxy connectivity.
+- `GET /ready` returns HTTP 200 with `ready` or HTTP 503 with `degraded`. It
+  checks PostgreSQL and S3, the configured embedding provider, and the enabled
+  unified-pipeline provider when that provider is not `none`. An unused Ollama
+  dependency is reported as `skipped`. Provider checks are non-generative and
+  bounded to 5 seconds; cloud auth probes are cached/coalesced for 5 seconds.
+  Safe provider result tokens are `ok`, `skipped`, `error:timeout`, `error:unavailable`,
+  `error:missing_credential`, `error:unauthorized`, and
+  `error:not_configured`.
+- `GET /metrics` returns public Prometheus text with content type
+  `text/plain; version=0.0.4; charset=utf-8`. The six counters and four duration
+  summaries are listed below. All families emit `HELP` and `TYPE` lines even
+  before they have samples. Values are in memory and reset when the process
+  restarts.
+
+### Prometheus metric families
+
+| Family | Type | Labels |
+| --- | --- | --- |
+| `onclave_transcript_attempts_total` | counter | `stage`, `outcome`, `classification` |
+| `onclave_transcript_health_transitions_total` | counter | `state` |
+| `onclave_vault_job_events_total` | counter | `event`, `outcome` |
+| `onclave_vault_pipeline_stage_events_total` | counter | `stage`, `status` |
+| `onclave_vault_provider_requests_total` | counter | `provider`, `outcome` |
+| `onclave_vault_delivery_attempts_total` | counter | `kind`, `outcome` |
+| `onclave_transcript_attempt_duration_seconds` | summary | `stage`, `outcome`, `classification` |
+| `onclave_vault_pipeline_stage_duration_seconds` | summary | `stage`, `outcome` |
+| `onclave_vault_provider_request_duration_seconds` | summary | `provider`, `outcome` |
+| `onclave_vault_delivery_attempt_duration_seconds` | summary | `kind`, `outcome` |
+
+Summary families expose `_count` and `_sum` samples; they do not expose quantiles.
 
 ## Provider seam
 

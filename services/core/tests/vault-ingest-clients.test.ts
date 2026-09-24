@@ -14,6 +14,8 @@ import {
   parseTranscriptXml,
   selectCaptionTrack,
   transcriptFullText,
+  YOUTUBE_TRANSCRIPT_OVERALL_TIMEOUT_MS,
+  type TranscriptAttemptEvent,
 } from "../src/vault/youtube-transcript";
 import { YouTubeMetadataService, formatDuration, parseDurationToSeconds } from "../src/vault/youtube-metadata";
 
@@ -145,6 +147,296 @@ describe("YouTube transcript parsing and retrieval", () => {
     expect(calls[2]?.init.dispatcher).toBe(dispatcher);
   });
 
+  it("retries transient HTTP failures within the attempt budget and keeps diagnostics structural", async () => {
+    let watchAttempts = 0;
+    const service = new YouTubeTranscriptService({
+      maxAttempts: 3,
+      retryDelayMs: 0,
+      random: () => 0,
+      fetcher: async (url) => {
+        if (url.includes("watch")) {
+          watchAttempts += 1;
+          if (watchAttempts === 1) return new Response("secret body", { status: 503 });
+          return new Response('<script>{"INNERTUBE_API_KEY":"key"}</script>');
+        }
+        if (url.includes("youtubei")) return responseJson({ captions: { playerCaptionsTracklistRenderer: {
+          captionTracks: [{ baseUrl: "https://captions.example/en?signature=secret", languageCode: "en" }],
+        } } });
+        return new Response('<transcript><text start="0" dur="1">ok</text></transcript>');
+      },
+    });
+    await expect(service.fetchTranscript("dQw4w9WgXcQ")).resolves.toMatchObject({ fullText: "ok" });
+    expect(watchAttempts).toBe(2);
+  });
+
+  it("retries a malformed successful watch page and emits retry rather than false success", async () => {
+    const events: TranscriptAttemptEvent[] = [];
+    let watchAttempts = 0;
+    const service = new YouTubeTranscriptService({
+      maxAttempts: 2, retryDelayMs: 0, onAttempt: (event) => { events.push(event); },
+      fetcher: async (url) => {
+        if (url.includes("watch")) {
+          watchAttempts += 1;
+          return new Response(watchAttempts === 1 ? "<html>temporarily incomplete</html>" : '<script>{"INNERTUBE_API_KEY":"key"}</script>');
+        }
+        if (url.includes("youtubei")) return responseJson({ captions: { playerCaptionsTracklistRenderer: {
+          captionTracks: [{ baseUrl: "https://captions.example/en", languageCode: "en" }],
+        } } });
+        return new Response('<transcript><text start="0" dur="1">ok</text></transcript>');
+      },
+    });
+
+    await expect(service.fetchTranscript("dQw4w9WgXcQ")).resolves.toMatchObject({ fullText: "ok" });
+    expect(events.filter((event) => event.stage === "watch")).toEqual([
+      expect.objectContaining({ stage: "watch", attempt: 1, outcome: "retry", classification: "upstream" }),
+      expect.objectContaining({ stage: "watch", attempt: 2, outcome: "success" }),
+    ]);
+  });
+
+  it("classifies exhausted malformed watch pages as bounded upstream failures", async () => {
+    const events: TranscriptAttemptEvent[] = [];
+    let watchAttempts = 0;
+    const service = new YouTubeTranscriptService({
+      maxAttempts: 2, retryDelayMs: 0, onAttempt: (event) => { events.push(event); },
+      fetcher: async () => { watchAttempts += 1; return new Response("<html>incomplete</html>"); },
+    });
+    const failure = await service.fetchTranscript("dQw4w9WgXcQ").catch((error: unknown) => error);
+
+    expect(watchAttempts).toBe(2);
+    expect(failure).toMatchObject({
+      name: "TranscriptUpstreamUnavailable",
+      diagnostic: { stage: "watch", classification: "upstream", attempts: 2 },
+    });
+    expect(events).toEqual([
+      expect.objectContaining({ stage: "watch", attempt: 1, outcome: "retry", classification: "upstream" }),
+      expect.objectContaining({ stage: "watch", attempt: 2, outcome: "failure", classification: "upstream" }),
+    ]);
+    expect(events.some((event) => event.stage === "watch" && event.outcome === "success")).toBe(false);
+  });
+
+  it("emits finite per-attempt telemetry without changing request results", async () => {
+    const events: TranscriptAttemptEvent[] = [];
+    let watchAttempts = 0;
+    const service = new YouTubeTranscriptService({
+      maxAttempts: 2, retryDelayMs: 0,
+      onAttempt: (event) => { events.push(event); throw new Error("observer failure"); },
+      fetcher: async (url) => {
+        if (url.includes("watch")) {
+          watchAttempts += 1;
+          if (watchAttempts === 1) return new Response("", { status: 503 });
+          return new Response('<script>{"INNERTUBE_API_KEY":"key"}</script>');
+        }
+        if (url.includes("youtubei")) return responseJson({ captions: { playerCaptionsTracklistRenderer: {
+          captionTracks: [{ baseUrl: "https://captions.example/en", languageCode: "en" }],
+        } } });
+        return new Response('<transcript><text start="0" dur="1">ok</text></transcript>');
+      },
+    });
+    await expect(service.fetchTranscript("dQw4w9WgXcQ")).resolves.toMatchObject({ fullText: "ok" });
+    expect(events).toEqual([
+      expect.objectContaining({ stage: "watch", attempt: 1, outcome: "retry", classification: "upstream", httpStatus: 503 }),
+      expect.objectContaining({ stage: "watch", attempt: 2, outcome: "success" }),
+      expect.objectContaining({ stage: "player", attempt: 1, outcome: "success" }),
+      expect.objectContaining({ stage: "captions", attempt: 1, outcome: "success" }),
+    ]);
+    for (const event of events) {
+      expect(event.durationMs).toBeGreaterThanOrEqual(0);
+      expect(Number.isFinite(event.durationMs)).toBe(true);
+      expect(Object.isFrozen(event)).toBe(true);
+      expect(Object.keys(event)).not.toContain("url");
+    }
+  });
+
+  it("reports static proxy configuration without exposing credentials or probing connectivity", async () => {
+    const direct = new YouTubeTranscriptService();
+    expect(direct.getProxyDiagnostic()).toEqual({
+      mode: "direct", configured: false, credentialStatus: "not_applicable", dispatcherStatus: "none", connectivity: "not_checked",
+    });
+    const custom = new YouTubeTranscriptService({ dispatcher: {} as Dispatcher });
+    expect(custom.getProxyDiagnostic()).toEqual({
+      mode: "custom", configured: true, credentialStatus: "not_applicable", dispatcherStatus: "injected", connectivity: "not_checked",
+    });
+    const webshare = new YouTubeTranscriptService({ proxy: { username: "user-private", password: "pass-private" } });
+    try {
+      const diagnostic = webshare.getProxyDiagnostic();
+      expect(diagnostic).toEqual({
+        mode: "webshare", configured: true, credentialStatus: "present", dispatcherStatus: "owned", connectivity: "not_checked",
+      });
+      expect(JSON.stringify(diagnostic)).not.toMatch(/user-private|pass-private/);
+    } finally {
+      await webshare.close();
+    }
+    const missing = new YouTubeTranscriptService({ proxy: { username: "", password: "" } });
+    try {
+      expect(missing.getProxyDiagnostic()).toMatchObject({ configured: false, credentialStatus: "missing", connectivity: "not_checked" });
+    } finally {
+      await missing.close();
+    }
+  });
+
+  it("keeps the server deadline below the official 30-second client deadline", () => {
+    expect(YOUTUBE_TRANSCRIPT_OVERALL_TIMEOUT_MS).toBeLessThan(30_000);
+    expect(YOUTUBE_TRANSCRIPT_OVERALL_TIMEOUT_MS).toBeLessThanOrEqual(25_000);
+  });
+
+  it("reads only whitelisted metadata through bounded nested causes", async () => {
+    const innermost = Object.assign(new Error("https://user:secret@example.test/?token=hidden"), {
+      code: "ECONNRESET", errno: -104, syscall: "connect",
+    });
+    const middle = Object.assign(new Error("unsafe outer message"), { cause: innermost });
+    const outer = Object.assign(new Error("another unsafe message"), { cause: middle });
+    const service = new YouTubeTranscriptService({ maxAttempts: 1, fetcher: async () => { throw outer; } });
+    const failure = await service.fetchTranscript("dQw4w9WgXcQ").catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      diagnostic: { classification: "network", errorName: "Error", errorCode: "ECONNRESET", errno: -104, syscall: "connect" },
+    });
+    expect(JSON.stringify(failure)).not.toMatch(/secret|hidden|example\.test|unsafe outer/);
+  });
+
+  it.each([
+    ["invalid player schema", { playabilityStatus: { status: "OK" } }],
+    ["malformed player JSON", null],
+  ])("retries %s as invalid upstream", async (_label, playerBody) => {
+    let playerAttempts = 0;
+    const service = new YouTubeTranscriptService({
+      maxAttempts: 2, retryDelayMs: 0,
+      fetcher: async (url) => {
+        if (url.includes("watch")) return new Response('<script>{"INNERTUBE_API_KEY":"key"}</script>');
+        if (url.includes("youtubei")) {
+          playerAttempts += 1;
+          if (playerAttempts === 1 && playerBody === null) {
+            return { ok: true, status: 200, json: async () => { throw new SyntaxError("private response URL"); }, text: async () => "" };
+          }
+          if (playerAttempts === 1) return responseJson(playerBody);
+          return responseJson({ captions: { playerCaptionsTracklistRenderer: {
+            captionTracks: [{ baseUrl: "https://captions.example/en", languageCode: "en" }],
+          } } });
+        }
+        return new Response('<transcript><text start="0" dur="1">ok</text></transcript>');
+      },
+    });
+    await expect(service.fetchTranscript("dQw4w9WgXcQ")).resolves.toMatchObject({ fullText: "ok" });
+    expect(playerAttempts).toBe(2);
+  });
+
+  it.each(["empty", "malformed-json"])("retries %s caption responses", async (firstResponse) => {
+    let captionAttempts = 0;
+    const service = new YouTubeTranscriptService({
+      maxAttempts: 2, retryDelayMs: 0,
+      fetcher: async (url) => {
+        if (url.includes("watch")) return new Response('<script>{"INNERTUBE_API_KEY":"key"}</script>');
+        if (url.includes("youtubei")) return responseJson({ captions: { playerCaptionsTracklistRenderer: {
+          captionTracks: [{ baseUrl: "https://captions.example/en?fmt=json3", languageCode: "en" }],
+        } } });
+        captionAttempts += 1;
+        if (captionAttempts === 1) return new Response(firstResponse === "empty" ? '{"events":[]}' : "not json");
+        return new Response('{"events":[{"tStartMs":0,"segs":[{"utf8":"ok"}]}]}');
+      },
+    });
+    await expect(service.fetchTranscript("dQw4w9WgXcQ")).resolves.toMatchObject({ fullText: "ok" });
+    expect(captionAttempts).toBe(2);
+  });
+
+  it("honors bounded Retry-After and exponentially increases jittered retry delays", async () => {
+    const retryTimes: number[] = [];
+    let watchAttempts = 0;
+    const service = new YouTubeTranscriptService({
+      maxAttempts: 3, retryDelayMs: 20, random: () => 1,
+      fetcher: async (url) => {
+        if (url.includes("youtubei")) return responseJson({ captions: { playerCaptionsTracklistRenderer: {
+          captionTracks: [{ baseUrl: "https://captions.example/en", languageCode: "en" }],
+        } } });
+        if (url.includes("captions.example")) return new Response('<transcript><text start="0" dur="1">ok</text></transcript>');
+        if (!url.includes("watch")) throw new Error("unexpected request");
+        watchAttempts += 1;
+        retryTimes.push(Date.now());
+        if (watchAttempts === 1) return new Response("", { status: 429, headers: { "retry-after": "0.04" } });
+        if (watchAttempts === 2) return new Response("", { status: 503, headers: { "retry-after": "0.07" } });
+        return new Response('<script>{"INNERTUBE_API_KEY":"key"}</script>');
+      },
+    });
+    await expect(service.fetchTranscript("dQw4w9WgXcQ")).resolves.toMatchObject({ fullText: "ok" });
+    expect(watchAttempts).toBe(3);
+    expect((retryTimes[1] ?? 0) - (retryTimes[0] ?? 0)).toBeGreaterThanOrEqual(35);
+    expect((retryTimes[2] ?? 0) - (retryTimes[1] ?? 0)).toBeGreaterThanOrEqual(65);
+  });
+
+  it("preserves the last response classification when the deadline expires during backoff", async () => {
+    let attempts = 0;
+    const service = new YouTubeTranscriptService({
+      maxAttempts: 3, overallTimeoutMs: 30, retryDelayMs: 1_000,
+      fetcher: async () => { attempts += 1; return new Response("", { status: 429 }); },
+    });
+    const failure = await service.fetchTranscript("dQw4w9WgXcQ").catch((error: unknown) => error);
+    expect(attempts).toBe(1);
+    expect(failure).toMatchObject({ diagnostic: { classification: "rate_limited", httpStatus: 429, attempts: 1 } });
+  });
+
+  it("does not retry permanent content errors", async () => {
+    let playerAttempts = 0;
+    const service = new YouTubeTranscriptService({
+      fetcher: async (url) => {
+        if (url.includes("watch")) return new Response('<script>{"INNERTUBE_API_KEY":"key"}</script>');
+        playerAttempts += 1;
+        return responseJson({ playabilityStatus: { status: "ERROR", reason: "Video unavailable" } });
+      },
+    });
+    await expect(service.fetchTranscript("dQw4w9WgXcQ")).rejects.toThrow("Video unavailable");
+    expect(playerAttempts).toBe(1);
+  });
+
+  it("does not retry permanent HTTP failures and exposes only sanitized diagnostics", async () => {
+    let attempts = 0;
+    const service = new YouTubeTranscriptService({
+      retryDelayMs: 0,
+      fetcher: async () => {
+        attempts += 1;
+        return new Response("secret body", { status: 403 });
+      },
+    });
+    let failure: unknown;
+    try {
+      await service.fetchTranscript("dQw4w9WgXcQ");
+    } catch (error) {
+      failure = error;
+    }
+    expect(attempts).toBe(1);
+    expect(failure).toMatchObject({
+      name: "TranscriptUpstreamUnavailable",
+      diagnostic: { stage: "watch", classification: "blocked", attempts: 1, httpStatus: 403 },
+    });
+    expect(JSON.stringify(failure)).not.toContain("secret");
+  });
+
+  it("aborts timed-out requests and reports a bounded timeout diagnostic", async () => {
+    let aborted = false;
+    const service = new YouTubeTranscriptService({
+      maxAttempts: 2,
+      requestTimeoutMs: 5,
+      overallTimeoutMs: 100,
+      retryDelayMs: 0,
+      random: () => 0,
+      fetcher: (_url, init) => new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          aborted = true;
+          reject(Object.assign(new Error("https://user:pass@example.test/?token=secret"), { code: "ETIMEDOUT" }));
+        });
+      }),
+    });
+    let failure: unknown;
+    try {
+      await service.fetchTranscript("dQw4w9WgXcQ");
+    } catch (error) {
+      failure = error;
+    }
+    expect(aborted).toBe(true);
+    expect(failure).toMatchObject({
+      name: "TranscriptUpstreamUnavailable",
+      diagnostic: { stage: "watch", classification: "timeout", attempts: 2 },
+    });
+    expect(JSON.stringify(failure)).not.toContain("secret");
+  });
+
   it("reuses an owned proxy dispatcher across sequential transcript fetches", async () => {
     const service = new YouTubeTranscriptService({
       proxy: { username: "test-user", password: "test-password" },
@@ -216,9 +508,9 @@ describe("YouTube transcript parsing and retrieval", () => {
       },
     });
 
-    await expect(service.fetchTranscript("dQw4w9WgXcQ")).rejects.toThrow(
-      "caption response contained no transcript segments",
-    );
+    await expect(service.fetchTranscript("dQw4w9WgXcQ")).rejects.toMatchObject({
+      diagnostic: { stage: "captions", classification: "upstream", attempts: 3 },
+    });
   });
 });
 
