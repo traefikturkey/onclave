@@ -110,6 +110,7 @@ export async function startCore(options: StartCoreOptions = {}): Promise<CoreRun
       deliveries.onChannelReady(channel);
     },
   });
+  services.createRegistrationChannel = () => broker.createRegistrationChannel();
 
   let vault: VaultService | undefined;
   let healthServer: Server | undefined;

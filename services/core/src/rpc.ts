@@ -28,6 +28,7 @@ export type AuditFn = (event: AuditEventName, metadata?: AuditMetadata) => Promi
 export type CoreServices = {
   config: CoreConfig;
   registry: Registry;
+  createRegistrationChannel?: () => Promise<AmqpChannel>;
   channels?: ChannelStore;
   tasks?: TaskStore;
   audit: AuditFn;
@@ -219,11 +220,24 @@ async function handleRegister(
     return { ok: false, error: "protocol_version_mismatch", expected: PROTOCOL_VERSION };
   }
   const queue = agentQueueName(request.card.agent_id);
-  await channel.assertQueue(queue, { durable: true, arguments: agentQueueArguments(services.config) });
-  await channel.bindQueue(queue, EXCHANGE_AGENTS, request.card.agent_id);
-  const agent = await services.registry.register(request.card, keyId);
-  await services.audit("agent_register", { agent_id: agent.agent_id, host: agent.host, queue });
-  return { ok: true, agent, queue, protocol_version: PROTOCOL_VERSION };
+  if (services.createRegistrationChannel === undefined) throw new Error("registration_channel_unavailable");
+  const registrationChannel = await services.createRegistrationChannel();
+  let registrationChannelClosed = false;
+  registrationChannel.on("error", (error) => {
+    log("warn", "rpc.registration_channel_error", { message: error.message });
+  });
+  registrationChannel.once("close", () => {
+    registrationChannelClosed = true;
+  });
+  try {
+    await registrationChannel.assertQueue(queue, { durable: true, arguments: agentQueueArguments(services.config) });
+    await registrationChannel.bindQueue(queue, EXCHANGE_AGENTS, request.card.agent_id);
+    const agent = await services.registry.register(request.card, keyId);
+    await services.audit("agent_register", { agent_id: agent.agent_id, host: agent.host, queue });
+    return { ok: true, agent, queue, protocol_version: PROTOCOL_VERSION };
+  } finally {
+    if (!registrationChannelClosed) await registrationChannel.close().catch(() => undefined);
+  }
 }
 
 async function handleSimpleOps(services: CoreServices, request: SimpleRpcRequest): Promise<object> {

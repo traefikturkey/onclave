@@ -31,6 +31,7 @@ type AmqpConnection = Awaited<ReturnType<typeof connect>>;
 export type BrokerClient = {
   status(): BrokerStatus;
   channel(): Channel | undefined;
+  createRegistrationChannel(): Promise<Channel>;
   close(): Promise<void>;
 };
 
@@ -116,6 +117,10 @@ export function startBroker(options: BrokerOptions): BrokerClient {
   return {
     status: () => ({ ...status }),
     channel: () => channel,
+    createRegistrationChannel: async () => {
+      if (connection === undefined || !status.connected) throw new Error("Broker unavailable");
+      return connection.createChannel();
+    },
     close: async () => {
       closing = true;
       if (retryTimer !== undefined) {
