@@ -26,6 +26,24 @@ describe("Onclave HTTP channel boundary", () => {
     expect(result).toMatchObject({ message, duplicate: false });
   });
 
+  it("reads the current live peer count from empty and delivered poll responses", async () => {
+    const fetchFn = vi.fn(async () => new Response(null, { status: 204, headers: { "x-onclave-live-peers": "3" } }));
+    const http = client(fetchFn);
+    expect(await http.next("receiver", 25_000)).toBeUndefined();
+    expect(http.getLivePeerCount()).toBe(3);
+
+    fetchFn.mockResolvedValueOnce(Response.json({ delivery_id: "delivery", kind: "task-status", status: status() }, { headers: { "x-onclave-live-peers": "1" } }));
+    await http.next("receiver", 25_000);
+    expect(http.getLivePeerCount()).toBe(1);
+  });
+
+  it("ignores malformed live peer counts", async () => {
+    const fetchFn = vi.fn(async () => new Response(null, { status: 204, headers: { "x-onclave-live-peers": "-1" } }));
+    const http = client(fetchFn);
+    expect(await http.next("receiver", 0)).toBeUndefined();
+    expect(http.getLivePeerCount()).toBeUndefined();
+  });
+
   it("parses a channel delivery through the shared validator", async () => {
     const message = createChannelMessage({ channel_id: ulid(), kind: "note", origin: { instance_id: "origin", name: "Origin", host: "host" }, participants: ["origin", "receiver"], body: "done" });
     const fetchFn = vi.fn(async () => Response.json({ delivery_id: "delivery", kind: "message", message }));

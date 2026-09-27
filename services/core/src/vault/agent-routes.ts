@@ -149,14 +149,17 @@ export function createAgentRouteHandlers(deps: AgentRouteDependencies): VaultHan
       const keyId = requestKeyId(request.keyId);
       const agentId = requiredAgentId(request.query.agent_id);
       requireKnownAgentKey(deps.services, agentId, keyId);
+      await deps.services.registry.heartbeat(agentId);
       let delivered;
       try {
         delivered = await deps.deliveries.next(agentId, keyId, waitMs(request.query.wait_ms));
       } catch {
         throw new HttpError(503, "Broker unavailable");
       }
-      if (delivered === undefined) return rawResponse("", undefined, 204);
-      return jsonResponse({ delivery_id: delivered.deliveryId, kind: delivered.kind, ...(delivered.kind === "message" ? { message: delivered.message, ...(delivered.satisfaction === undefined ? {} : { satisfaction: delivered.satisfaction }) } : { status: delivered.status }) });
+      const livePeers = String(deps.services.registry.list().filter((agent) => agent.agent_id !== agentId).length);
+      const headers = { "x-onclave-live-peers": livePeers };
+      if (delivered === undefined) return rawResponse("", undefined, 204, headers);
+      return jsonResponse({ delivery_id: delivered.deliveryId, kind: delivered.kind, ...(delivered.kind === "message" ? { message: delivered.message, ...(delivered.satisfaction === undefined ? {} : { satisfaction: delivered.satisfaction }) } : { status: delivered.status }) }, 200, headers);
     },
     agentsMessageDisposition: (request) => {
       const keyId = requestKeyId(request.keyId);

@@ -50,6 +50,17 @@ describe("Registry", () => {
     expect(registry.list()[0].alive).toBe(true);
   });
 
+  it("keeps an idle agent alive when its authenticated delivery poll renews the lease", async () => {
+    let currentMs = Date.parse("2026-07-18T10:00:00Z");
+    const registry = makeRegistry(() => new Date(currentMs));
+    await registry.register(card, "agent-key");
+    currentMs += 91_000;
+    expect(registry.list()).toEqual([]);
+
+    expect(await registry.heartbeat(card.agent_id)).toBe(true);
+    expect(registry.list()).toMatchObject([{ agent_id: card.agent_id, alive: true, key_id: "agent-key" }]);
+  });
+
   it("rejects heartbeats for unknown agents", async () => {
     const registry = makeRegistry(() => new Date());
     expect(await registry.heartbeat("ghost")).toBe(false);

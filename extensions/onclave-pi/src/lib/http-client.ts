@@ -23,6 +23,7 @@ export type ChannelPostResult = {
   duplicate: boolean;
 };
 export type Delivery = { deliveryId: string; kind: "message" | "task-status"; message?: ChannelMessage; satisfaction?: ChannelSatisfaction; status?: TaskStatusEvent };
+const LIVE_PEERS_HEADER = "x-onclave-live-peers";
 type JsonRecord = Record<string, unknown>;
 
 function record(value: unknown): value is JsonRecord { return value !== null && typeof value === "object" && !Array.isArray(value); }
@@ -89,6 +90,7 @@ function parseChannelPostResponse(payload: unknown): ChannelPostResult {
 export class OnclaveHttpClient {
   private readonly apiBase: URL;
   private readonly fetchFn: FetchFn;
+  private livePeerCount: number | undefined;
   constructor(private readonly options: OnclaveHttpClientOptions) { this.apiBase = normalizeApiBase(options.apiBase); this.fetchFn = options.fetchFn ?? fetch; }
 
   async call(request: object, signal?: AbortSignal): Promise<JsonRecord> { return this.json("POST", `${AGENTS_PATH}/rpc`, request, signal); }
@@ -99,10 +101,14 @@ export class OnclaveHttpClient {
     return parseChannelPostResponse(await response.json());
   }
 
+  getLivePeerCount(): number | undefined { return this.livePeerCount; }
+
   async next(instanceId: string, waitMs: number, signal?: AbortSignal): Promise<Delivery | undefined> {
     if (!Number.isSafeInteger(waitMs) || waitMs < 0) throw new Error("Onclave delivery wait must be a non-negative safe integer");
     const query = new URLSearchParams({ agent_id: instanceId, wait_ms: String(waitMs) });
     const response = await this.request("GET", `${AGENTS_PATH}/messages/next?${query}`, undefined, signal);
+    const peerCount = response.headers.get(LIVE_PEERS_HEADER);
+    if (peerCount !== null && /^(0|[1-9]\d*)$/.test(peerCount) && Number.isSafeInteger(Number(peerCount))) this.livePeerCount = Number(peerCount);
     if (response.status === 204) return undefined;
     if (!response.ok) throw errorFor(response.status, await response.text());
     const payload: unknown = await response.json();

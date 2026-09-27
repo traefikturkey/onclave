@@ -11,7 +11,9 @@ provider-neutral communication between independent Pi instances.
   durable broker delivery, persistence, authentication, audit, and task APIs.
 - `extensions/onclave-pi` is the supported Pi adapter. It exposes peer
   discovery and one explicit channel-message tool, and delivers inbound events
-  into Pi.
+  into Pi. Its authenticated 25-second message long polls renew the instance
+  presence lease and return the live-peer count; immediate empty responses are
+  briefly paced instead of starting a tight request loop.
 - `deploy` and `infra` contain provider-neutral deployment assets.
 
 Onclave is not a general A2A server. It uses a bounded A2A-derived subset for

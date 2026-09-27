@@ -1,4 +1,5 @@
 import { performance } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { Type } from "typebox";
@@ -21,8 +22,9 @@ import { registerPresentation } from "./lib/presentation";
 
 export { isPiSubagent, resolveApiBase };
 const MAX_MESSAGE_LENGTH = 100_000;
-const HEARTBEAT_INTERVAL_MS = 30_000;
 const DELIVERY_WAIT_MS = 25_000;
+const IMMEDIATE_EMPTY_POLL_THRESHOLD_MS = 1_000;
+const EMPTY_POLL_BACKOFF_MS = 250;
 const BOOTSTRAP_INITIAL_ATTEMPTS = 3;
 const BOOTSTRAP_INITIAL_RETRY_DELAYS_MS = [1_000, 2_000] as const;
 const BOOTSTRAP_BACKGROUND_RETRY_MS = 60_000;
@@ -81,7 +83,6 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
   const auditPath = join(dir, "v2-audit.jsonl");
   const audit: Audit = (event, metadata = {}) => appendAdapterAuditEvent(auditPath, event, metadata);
   let runtime: Runtime | null = null;
-  let heartbeat: NodeJS.Timeout | null = null;
   let generation = 0;
   let runtimeGeneration: number | undefined;
   let startupAbort: AbortController | null = null;
@@ -119,7 +120,6 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
     const previousRuntime = runtime;
     runtime = null;
     runtimeGeneration = undefined;
-    if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; }
     restoreExposedIdentity();
     if (previousRuntime !== null) void shutdownAdapter(previousRuntime, audit, false).catch(() => undefined);
     void initializeAdapter(pi, ctx, {
@@ -161,8 +161,6 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
       runtimeGeneration = currentGeneration;
       bootstrapState = "ready";
       startupAbort = startupAbort === currentStartupAbort ? null : startupAbort;
-      heartbeat = setInterval(() => { void heartbeatTick(runtime).catch(() => undefined); }, HEARTBEAT_INTERVAL_MS);
-      heartbeat.unref?.();
       options.recordStartup?.({ reason, durationMs: nowMs() - startedAt, status: "ok" });
     }).catch((error) => {
       const stale = error instanceof StaleAdapterStartError || currentStartupAbort.signal.aborted || generation !== currentGeneration;
@@ -176,7 +174,7 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
       }
     });
   });
-  pi.on("session_shutdown", async () => { generation += 1; startupAbort?.abort(); startupAbort = null; bootstrapState = "closed"; if (bootstrapUi !== undefined) refreshBootstrapFooter(bootstrapUi, bootstrapState, bootstrapUsesBws); bootstrapUi = undefined; setAdapterToolsActive(pi, false); if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; } const activeRuntime = runtime; runtime = null; runtimeGeneration = undefined; if (activeRuntime !== null) await shutdownAdapter(activeRuntime, audit); restoreExposedIdentity(); });
+  pi.on("session_shutdown", async () => { generation += 1; startupAbort?.abort(); startupAbort = null; bootstrapState = "closed"; if (bootstrapUi !== undefined) refreshBootstrapFooter(bootstrapUi, bootstrapState, bootstrapUsesBws); bootstrapUi = undefined; setAdapterToolsActive(pi, false); const activeRuntime = runtime; runtime = null; runtimeGeneration = undefined; if (activeRuntime !== null) await shutdownAdapter(activeRuntime, audit); restoreExposedIdentity(); });
   registerAdapterTools(pi, () => runtime, audit);
   registerPresentation(pi);
   // Vault tools are schema-only at discovery time. They reuse the endpoint
@@ -304,7 +302,24 @@ async function onHttpReady(runtime: Runtime, options: StartOptions, signal: Abor
   if (response.ok !== true) throw new Error(`register rejected: ${String(response.error ?? "unknown")}`);
   runtime.registered = true; options.onRegistered?.(runtime.card.agent_id); await updateAliveInstances(runtime); await options.audit("adapter_register", { instance_id: runtime.card.agent_id });
 }
-async function receive(runtime: Runtime, options: StartOptions, signal: AbortSignal): Promise<void> { const delivery = await runtime.client.next(runtime.card.agent_id, DELIVERY_WAIT_MS, signal); if (delivery === undefined) return; await consume(runtime, delivery, options); }
+export async function waitAfterImmediateEmptyPoll(startedAtMs: number, signal: AbortSignal, now: () => number = Date.now): Promise<void> {
+  if (now() - startedAtMs < IMMEDIATE_EMPTY_POLL_THRESHOLD_MS) await delay(EMPTY_POLL_BACKOFF_MS, undefined, { signal });
+}
+
+async function receive(runtime: Runtime, options: StartOptions, signal: AbortSignal): Promise<void> {
+  const startedAt = Date.now();
+  const delivery = await runtime.client.next(runtime.card.agent_id, DELIVERY_WAIT_MS, signal);
+  const peerCount = runtime.client.getLivePeerCount();
+  if (peerCount !== undefined && runtime.aliveInstances !== peerCount) {
+    runtime.aliveInstances = peerCount;
+    refreshFooterStatus(runtime);
+  }
+  if (delivery === undefined) {
+    await waitAfterImmediateEmptyPoll(startedAt, signal);
+    return;
+  }
+  await consume(runtime, delivery, options);
+}
 export async function consume(runtime: Runtime, delivery: Delivery, options: StartOptions): Promise<void> {
   const delivered: Delivered = delivery.kind === "message" && delivery.message !== undefined ? {
     kind: "message",
@@ -357,7 +372,6 @@ function buildDeliveryDeps(runtime: Runtime, options: StartOptions) {
 }
 function runtimeSend(runtime: Runtime, message: { customType: string; content: string; display: boolean; details: Record<string, unknown> }, triggerTurn: boolean): void { runtime.sendMessage(message, { triggerTurn, deliverAs: "followUp" }); }
 
-async function heartbeatTick(runtime: Runtime | null): Promise<void> { if (runtime === null || !runtime.registered || runtime.state !== "connected") return; await runtime.client.call({ op: "heartbeat", agent_id: runtime.card.agent_id }); await updateAliveInstances(runtime); }
 async function updateAliveInstances(runtime: Runtime): Promise<void> { const response = await runtime.client.call({ op: "list_agents" }); if (response.ok === true && Array.isArray(response.agents)) runtime.aliveInstances = (response.agents as Array<{ agent_id?: unknown; alive?: unknown }>).filter((item) => item.alive === true && item.agent_id !== runtime.card.agent_id).length; refreshFooterStatus(runtime); }
 async function shutdownAdapter(runtime: Runtime, audit: Audit, clearStatus = true): Promise<void> {
   const registered = runtime.registered;

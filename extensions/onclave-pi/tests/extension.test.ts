@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import onclavePi, { buildAgentCard, isPiSubagent, refreshFooterStatus, resolveInstanceAlias, setAdapterToolsActive, shortInstanceId, validateMessageParams } from "../src/onclave-pi";
+import onclavePi, { buildAgentCard, isPiSubagent, refreshFooterStatus, resolveInstanceAlias, setAdapterToolsActive, shortInstanceId, validateMessageParams, waitAfterImmediateEmptyPoll } from "../src/onclave-pi";
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({ getAgentDir: () => ".test-profile" }));
 vi.mock("../src/lib/audit", () => ({ appendAdapterAuditEvent: vi.fn(async () => undefined) }));
@@ -220,6 +220,25 @@ describe("Onclave Pi T2 adapter", () => {
     expect(registered.pi.setActiveTools).not.toHaveBeenCalled();
     expect(heartbeat).not.toHaveBeenCalled();
     heartbeat.mockRestore();
+  });
+
+  it("paces unexpectedly immediate empty polls but not normal long polls", async () => {
+    vi.useFakeTimers();
+    try {
+      const controller = new AbortController();
+      let finished = false;
+      const immediate = waitAfterImmediateEmptyPoll(100, controller.signal, () => 200).then(() => { finished = true; });
+      await vi.advanceTimersByTimeAsync(249);
+      expect(finished).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await immediate;
+      expect(finished).toBe(true);
+
+      const startedAt = Date.now();
+      await expect(waitAfterImmediateEmptyPoll(startedAt - 1000, controller.signal)).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("identifies a tree subagent", () => {
