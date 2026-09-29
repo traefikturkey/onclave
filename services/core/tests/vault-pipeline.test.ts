@@ -467,6 +467,7 @@ describe("vault unified pipeline and jobs", () => {
     expect(notifications[0]).toMatchObject({ agentId: "caller-agent", delivery: { kind: "notification", schema: "onclave.job.terminal.v1" } });
     const notificationBody = notifications[0]?.delivery.body;
     if (notificationBody === undefined) throw new Error("completion notification was not captured");
+    expect(JSON.parse(notificationBody)).not.toHaveProperty("error_message");
     expect(JSON.parse(notificationBody)).toMatchObject({
       schema: "onclave.job.terminal.v1",
       version: 1,
@@ -723,7 +724,10 @@ describe("vault unified pipeline and jobs", () => {
     expect(storage.statuses.map((item) => item.status)).toContain(JobStatus.FAILED);
     expect(notifications).toHaveLength(1);
     expect(notifications[0]).toMatchObject({ delivery: { kind: "notification", schema: "onclave.job.terminal.v1" } });
-    expect(JSON.parse(notifications[0]?.body ?? "")).toMatchObject({ schema: "onclave.job.terminal.v1", event: "job_terminal", status: "failed", title: "Race", trust: "untrusted_data" });
+    expect(JSON.parse(notifications[0]?.body ?? "")).toMatchObject({
+      schema: "onclave.job.terminal.v1", event: "job_terminal", status: "failed", title: "Race", trust: "untrusted_data",
+      error_code: "LLM_CALL_ERROR", error_message: "provider unavailable", error_stage: "llm_call",
+    });
   });
 
   it("does not cancel after the processing CAS wins", async () => {

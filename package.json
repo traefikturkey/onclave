@@ -10,10 +10,10 @@
     "setup": "pnpm install",
     "check": "pnpm typecheck && pnpm test"
   },
-  "dependencies": {},
   "devDependencies": {
     "@earendil-works/pi-ai": "^0.85.0",
     "@earendil-works/pi-coding-agent": "^0.85.0",
+    "@electric-sql/pglite": "^0.5.8",
     "@types/node": "^24.10.1",
     "tsx": "^4.20.6",
     "typebox": "^1.1.38",

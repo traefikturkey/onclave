@@ -206,7 +206,7 @@ describe("vault storage repository", () => {
     const result = await new PostgresRepository(client).transition_pipeline_job_stage("job-1", "llm_call", "processing", [startedAt, undefined], [undefined, undefined], ["pending"]);
     expect(result?.id).toBe("job-1");
     expect(client.calls[0]?.text).toContain("metadata=jsonb_set");
-    expect(client.calls[0]?.text).toContain("coalesce(metadata->'stages'->>$2,'pending')=ANY($5)");
+    expect(client.calls[0]?.text).toContain("coalesce(metadata->'stages'->$2->>'status','pending')=ANY($5)");
     expect(client.calls[0]?.text).toContain("($6::text IS NULL OR claim_token=$6)");
     expect(client.calls[0]?.values).toEqual(["job-1", "llm_call", expect.stringContaining('"status":"processing"'), [JobStatus.PENDING, JobStatus.PROCESSING], ["pending"], null]);
   });
@@ -498,7 +498,7 @@ describe("vault storage repository", () => {
     expect(committed).toBe(false);
     expect(calls.map(({ text }) => text)).toEqual(["BEGIN", expect.stringContaining("UPDATE pipeline_job"), "ROLLBACK"]);
     expect(calls[1]?.text).toContain("content_id=$2 AND claim_token=$3 AND status=$5");
-    expect(calls[1]?.text).toContain("metadata->'stages'->>'persist'");
+    expect(calls[1]?.text).toContain("metadata->'stages'->'persist'->>'status'");
     expect(calls.some(({ text }) => text.includes("tag_alias") || text.includes("DELETE FROM chunk") || text.startsWith("UPDATE content SET"))).toBe(false);
     expect(released).toBe(true);
   });

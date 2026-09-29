@@ -77,7 +77,8 @@ unread cursor, deadline, cancellation workflow, or synchronous wait.
 Vault terminal notifications use schema `onclave.job.terminal.v1` and carry
 `version`, `event: "job_terminal"`, `job_id`, `content_id`, terminal `status`,
 optional `title`, timing, `summary`, concise `summary_coverage` and `filtering`
-state, and `trust: "untrusted_data"`. These additions are optional so v1
+state, failure `error_code`, `error_message`, and `error_stage`, and
+`trust: "untrusted_data"`. These additions are optional so v1
 payloads without them remain valid. The callback contains no transcript,
 outline, or duplicate structured summary. Completed, failed, and cancelled
 asynchronous work uses this one-way callback path; it does not ask the Pi to

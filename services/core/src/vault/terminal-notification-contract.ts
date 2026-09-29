@@ -21,6 +21,10 @@ export type JobTerminalNotification = {
   started_at?: string;
   finished_at?: string;
   duration_seconds: number | null;
+  /** Failure diagnostics are optional for compatibility with older callbacks. */
+  error_code?: string;
+  error_message?: string;
+  error_stage?: string;
   summary?: string;
   summary_coverage?: TerminalSummaryCoverage;
   filtering?: TerminalFilteringState;

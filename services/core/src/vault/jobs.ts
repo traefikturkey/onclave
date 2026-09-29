@@ -89,12 +89,12 @@ export type JobStatusResponse = {
   started_at?: string;
   finished_at?: string;
   stages: PipelineStages;
-};
-
-export type JobDetailResponse = JobStatusResponse & {
   error_code?: string | null;
   error_message?: string | null;
   error_stage?: string | null;
+};
+
+export type JobDetailResponse = JobStatusResponse & {
   resource_key?: string;
   pipeline_version?: string;
   metadata?: PipelineJob["metadata"];
@@ -218,6 +218,18 @@ function timestamp(value: Date | null | undefined): string | undefined {
   return value === undefined || value === null ? undefined : value.toISOString();
 }
 
+function terminalFailure(job: PipelineJob): Pick<JobTerminalNotification, "error_code" | "error_message" | "error_stage"> {
+  if (job.status !== JobStatus.FAILED) return {};
+  const code = nonEmptyText(job.error_code)?.slice(0, 100);
+  const message = nonEmptyText(job.error_message)?.slice(0, 500);
+  const stage = nonEmptyText(job.error_stage)?.slice(0, 100);
+  return {
+    ...(code === undefined ? {} : { error_code: code }),
+    ...(message === undefined ? {} : { error_message: message }),
+    ...(stage === undefined ? {} : { error_stage: stage }),
+  };
+}
+
 function statusResponse(job: PipelineJob, requestedId = job.id ?? ""): JobStatusResponse {
   return {
     job_id: job.id ?? requestedId,
@@ -227,6 +239,7 @@ function statusResponse(job: PipelineJob, requestedId = job.id ?? ""): JobStatus
     started_at: timestamp(job.started_at),
     finished_at: timestamp(job.finished_at),
     stages: pipelineStages(job.stages),
+    ...terminalFailure(job),
   };
 }
 
@@ -351,9 +364,6 @@ export class PipelineOrchestrator {
     if (job === undefined) return undefined;
     return {
       ...statusResponse(job, jobId),
-      error_code: job.error_code,
-      error_message: job.error_message,
-      error_stage: job.error_stage,
       resource_key: job.resource_key,
       pipeline_version: job.pipeline_version,
       metadata: job.metadata,
@@ -592,6 +602,7 @@ export class PipelineOrchestrator {
       ...(startedAt === undefined ? {} : { started_at: startedAt }),
       ...(finishedAt === undefined ? {} : { finished_at: finishedAt }),
       duration_seconds: durationSeconds,
+      ...terminalFailure(job),
       ...(summary === undefined ? {} : { summary }),
       ...(resultCoverage === undefined && storedMetadata.coverage === undefined ? {} : { summary_coverage: resultCoverage ?? storedMetadata.coverage }),
       ...(resultFiltering === undefined && storedMetadata.filtering === undefined ? {} : { filtering: resultFiltering ?? storedMetadata.filtering }),

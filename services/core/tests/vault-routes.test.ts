@@ -88,6 +88,7 @@ describe("vault routes", () => {
   let activeTranscriptService: VaultTranscriptService | undefined;
   let jobDeliveries: JobDelivery[];
   let providerUnavailable: boolean;
+  let pipelineError: string | undefined;
 
   beforeEach(async () => {
     key = testKey();
@@ -104,6 +105,7 @@ describe("vault routes", () => {
     activeTranscriptService = undefined;
     jobDeliveries = [];
     providerUnavailable = false;
+    pipelineError = undefined;
     const pipelineJobs = new Map<string, PipelineJob>();
     const entities = new Map<string, EntityModel>([
       ["topic-typescript", { id: "topic-typescript", entity_type: EntityType.TOPIC, name: "TypeScript", normalized_name: "typescript", hierarchy: ["Engineering", "TypeScript"] }],
@@ -232,6 +234,7 @@ describe("vault routes", () => {
     jobs = new PipelineOrchestrator(new UnifiedPipeline({
       model: "test-model",
       async generate(): Promise<string> {
+        if (pipelineError !== undefined) throw new Error(pipelineError);
         return JSON.stringify({
           tags: ["typescript"], tier: "A", quality_score: 82, summary: "A concise summary.",
           structured_summary: { version: 1, overview: "A concise overview.", key_points: ["Point one", "Point two"] },
@@ -409,6 +412,18 @@ describe("vault routes", () => {
     expect((await request(`/api/v1/jobs/${duplicate.job_id}`)).status).toBe(200);
     await jobs.waitForIdle();
     await expect((await request(`/api/v1/jobs/${duplicate.job_id}`)).json()).resolves.toMatchObject({ job_id: duplicate.job_id, status: JobStatus.COMPLETED });
+  });
+
+  it("includes failure diagnostics in compact job reads and lists without verbose metadata", async () => {
+    pipelineError = "provider unavailable";
+    const submitted = await (await request("/api/v1/content/video-1/reprocess?force=true", "POST")).json() as Record<string, unknown>;
+    await jobs.waitForIdle();
+    const compact = await (await request(`/api/v1/jobs/${String(submitted.job_id)}`)).json() as Record<string, unknown>;
+    expect(compact).toMatchObject({ status: "failed", error_code: "LLM_CALL_ERROR", error_message: "provider unavailable", error_stage: "llm_call" });
+    expect(compact).not.toHaveProperty("metadata");
+    await expect((await request("/api/v1/jobs?status=failed")).json()).resolves.toMatchObject({
+      jobs: [expect.objectContaining({ job_id: submitted.job_id, error_code: "LLM_CALL_ERROR", error_message: "provider unavailable", error_stage: "llm_call" })],
+    });
   });
 
   it("persists an authorized notification identity for explicit reprocessing", async () => {

@@ -3,6 +3,8 @@ import { renderInboundMessage, renderVaultResult, inboundCollapsedText, vaultCol
 
 const theme = {
   bg: (_name: string, value: string) => value,
+  fg: (color: string, value: string) => `<${color}>${value}</${color}>`,
+  bold: (value: string) => `**${value}**`,
 } as never;
 
 function rendered(component: { render: (width: number) => string[] }, width = 120): string {
@@ -38,10 +40,13 @@ describe("Onclave TUI presentation", () => {
       output: "a large terminal payload that should not be dumped into the collapsed view",
     });
     const content = framed.replace("hello from Alice", envelope);
-    const collapsed = inboundCollapsedText({ content });
-    expect(collapsed).toContain("Job terminal: failed · A video about OCR · job job-1234567890 · content content-abcdef");
-    expect(collapsed).toContain("coverage full · filtering filtered (2 removed)");
-    expect(collapsed).toContain("OCR completed for the uploaded document");
+    const collapsed = rendered(renderInboundMessage({ content }, { expanded: false }, theme));
+    expect(collapsed).toContain("<error>**FAILED**</error> · A video about OCR");
+    expect(collapsed).toContain("coverage full · filtering");
+    expect(collapsed).toContain("filtered (2 removed)");
+    expect(collapsed).toContain("Failure reason not supplied");
+    expect(collapsed).not.toContain("job-1234567890");
+    expect(collapsed).not.toContain("content-abcdef");
     expect(collapsed).not.toContain("onclave.job.terminal.v1");
     expect(collapsed).not.toContain("2026-01-02T03:04:05.000Z");
     expect(collapsed).not.toContain("large terminal payload");
@@ -49,6 +54,44 @@ describe("Onclave TUI presentation", () => {
     const expanded = rendered(renderInboundMessage({ content }, { expanded: true }, theme), 1000);
     expect(expanded).toBe(content);
     expect(expanded).toContain(envelope);
+  });
+
+  it("styles cancellation and success, and explains when a failed callback has no reason", () => {
+    const terminal = (status: string, extra = {}) => framed.replace("hello from Alice", JSON.stringify({
+      schema: "onclave.job.terminal.v1", version: 1, event: "job_terminal", status, ...extra,
+    }));
+    expect(rendered(renderInboundMessage({ content: terminal("failed", { filtering: { outcome: "filtered" } }) }, { expanded: false }, theme)))
+      .toContain("Failure reason not supplied");
+    expect(rendered(renderInboundMessage({ content: terminal("cancelled") }, { expanded: false }, theme)))
+      .toContain("<warning>**CANCELLED**</warning>");
+    expect(rendered(renderInboundMessage({ content: terminal("completed") }, { expanded: false }, theme)))
+      .toContain("<success>**SUCCEEDED**</success>");
+  });
+
+  it("shows the actual failure reason separately from unavailable SponsorBlock filtering", () => {
+    const body = JSON.stringify({
+      schema: "onclave.job.terminal.v1", version: 1, event: "job_terminal", status: "failed",
+      error_code: "PIPELINE_EXCEPTION", error_message: "JOB_CLAIM_LOST", error_stage: "unknown",
+      filtering: { outcome: "unchanged", lookup_state: "unavailable", excluded_segment_count: 0 },
+    });
+    const message = { content: framed.replace("hello from Alice", body) };
+    const output = rendered(renderInboundMessage(message, { expanded: false }, theme), 1000);
+    expect(output).toContain("<error>JOB_CLAIM_LOST [PIPELINE_EXCEPTION] (stage: unknown)</error>");
+    expect(output).toContain("SponsorBlock unavailable");
+    expect(output).not.toContain("Failure reason not supplied");
+    const oldMessage = { content: framed.replace("hello from Alice", JSON.stringify({
+      schema: "onclave.job.terminal.v1", version: 1, event: "job_terminal", status: "failed",
+      filtering: { outcome: "unchanged", lookup_state: "unavailable" },
+    })) };
+    expect(inboundCollapsedText(oldMessage)).toContain("Failure reason not supplied · SponsorBlock unavailable");
+  });
+
+  it("bounds long notification fields and wraps at narrow widths", () => {
+    const envelope = JSON.stringify({ schema: "onclave.job.terminal.v1", version: 1, event: "job_terminal", status: "failed", title: "T".repeat(500), error_message: "R".repeat(500) });
+    const output = renderInboundMessage({ content: framed.replace("hello from Alice", envelope) }, { expanded: false }, theme).render(24);
+    expect(output.every((line) => line.length <= 24)).toBe(true);
+    expect(output.join(" ")).toContain("FAILED");
+    expect(output.join(" ").length).toBeLessThan(1000);
   });
 
   it("leaves malformed and non-terminal bodies unchanged", () => {

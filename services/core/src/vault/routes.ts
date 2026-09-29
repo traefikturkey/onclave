@@ -759,6 +759,7 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
       return jsonResponse(request.query.verbose === "true" ? job : {
         job_id: job.job_id, content_id: job.content_id, status: job.status,
         created_at: job.created_at, started_at: job.started_at, finished_at: job.finished_at, stages: job.stages,
+        error_code: job.error_code, error_message: job.error_message, error_stage: job.error_stage,
       });
     },
     jobDeliveries: async (request) => {

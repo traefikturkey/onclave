@@ -614,7 +614,7 @@ export class PostgresRepository {
         const fence = await client.query(`UPDATE pipeline_job
           SET metadata=jsonb_set(coalesce(metadata,'{}'::jsonb), ARRAY['stages','persist'], coalesce(metadata->'stages'->'persist','{}'::jsonb) || $4::jsonb, true)
           WHERE id=$1 AND content_id=$2 AND claim_token=$3 AND status=$5
-            AND coalesce(metadata->'stages'->>'persist','pending')='processing'
+            AND coalesce(metadata->'stages'->'persist'->>'status','pending')='processing'
           RETURNING id`, [finalization.jobId, contentId, finalization.claimToken, stageState, JobStatus.PROCESSING]);
         if (fence.rowCount !== 1) {
           await client.query("ROLLBACK");
@@ -824,7 +824,7 @@ export class PostgresRepository {
     return (await this.database.query(`UPDATE pipeline_job
       SET metadata=jsonb_set(coalesce(metadata,'{}'::jsonb), ARRAY['stages',$2], coalesce(metadata->'stages'->$2, '{}'::jsonb) || $3::jsonb, true)
       WHERE id=$1 AND (status=ANY($4) OR (status='failed' AND $3::jsonb->>'status'=ANY(ARRAY['failed','skipped'])))
-        AND coalesce(metadata->'stages'->>$2,'pending')=ANY($5) AND ($6::text IS NULL OR claim_token=$6)
+        AND coalesce(metadata->'stages'->$2->>'status','pending')=ANY($5) AND ($6::text IS NULL OR claim_token=$6)
       RETURNING *`, [jobId, stage, JSON.stringify(state), [JobStatus.PENDING, JobStatus.PROCESSING], expectedStatuses, claimToken ?? null])).rows[0];
   }
   async list_pipeline_jobs(contentId: string | undefined, status: JobStatus | undefined, limit: number, offset: number): Promise<[Row[], number]> { const clauses: string[] = []; const params: unknown[] = []; if (contentId !== undefined) { params.push(contentId); clauses.push(`content_id=$${params.length}`); } if (status !== undefined) { params.push(status); clauses.push(`status=$${params.length}`); } const where = clauses.length === 0 ? "" : ` WHERE ${clauses.join(" AND ")}`; const count = await this.database.query(`SELECT count(*) AS count FROM pipeline_job${where}`, params); const rows = await this.database.query(`SELECT * FROM pipeline_job${where} ORDER BY created_at DESC,id LIMIT $${params.length + 1} OFFSET $${params.length + 2}`, [...params, limit, offset]); return [rows.rows, numberValue(count.rows[0]?.count) || 0]; }

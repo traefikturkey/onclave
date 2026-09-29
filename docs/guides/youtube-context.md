@@ -163,6 +163,18 @@ summary. Pi reports the callback directly, does not reply through
 callbacks without these optional fields remain valid; content is fetched only
 when the requested report needs missing detail.
 
+Failed callbacks also carry optional `error_code`, `error_message`, and
+`error_stage` diagnostics, bounded to 100, 500, and 100 characters respectively.
+Compact job detail and list reads expose these fields too, without requiring
+verbose metadata. Filtering limits such as an unavailable SponsorBlock lookup
+are independent of the job error and must not be presented as its cause.
+
+Pi renders failed notifications with a bold, error-colored `FAILED` heading,
+title, and failure reason. Cancelled and completed callbacks use warning and
+success colors. Older failed callbacks without a reason say so explicitly.
+Internal IDs and the complete protocol payload remain in the expanded view;
+model-visible callback data is unchanged by presentation.
+
 ## Download and resolver contract
 
 `TranscriptDownloadVariant` is either `original` or `analysis`. The raw HTTP
