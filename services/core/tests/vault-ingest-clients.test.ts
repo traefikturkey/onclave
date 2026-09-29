@@ -1,5 +1,5 @@
 import type { Dispatcher } from "undici";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DoclingClient } from "../src/vault/docling";
 import {
   UrlDetector,
@@ -367,9 +367,16 @@ describe("YouTube transcript parsing and retrieval", () => {
       maxAttempts: 3, overallTimeoutMs: 30, retryDelayMs: 1_000,
       fetcher: async () => { attempts += 1; return new Response("", { status: 429 }); },
     });
-    const failure = await service.fetchTranscript("dQw4w9WgXcQ").catch((error: unknown) => error);
-    expect(attempts).toBe(1);
-    expect(failure).toMatchObject({ diagnostic: { classification: "rate_limited", httpStatus: 429, attempts: 1 } });
+    vi.useFakeTimers();
+    try {
+      const pending = service.fetchTranscript("dQw4w9WgXcQ").catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(30);
+      const failure = await pending;
+      expect(attempts).toBe(1);
+      expect(failure).toMatchObject({ diagnostic: { classification: "rate_limited", httpStatus: 429, attempts: 1 } });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not retry permanent content errors", async () => {
