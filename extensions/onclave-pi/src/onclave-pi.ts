@@ -408,10 +408,41 @@ function statusText(runtime: Runtime | null, bootstrapState: BootstrapState, use
   }
   return `state: ${runtime.state}\ninstance_id: ${runtime.card.agent_id}\nregistered: ${runtime.registered}\ninstances alive: ${runtime.aliveInstances}`;
 }
-function textResult(text: string, details: Record<string, unknown>) { return { content: [{ type: "text" as const, text }], details }; }
+type StructuredJson = null | boolean | number | string | StructuredJson[] | { [key: string]: StructuredJson };
+function structuredJson(value: unknown): StructuredJson {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) return value.map(structuredJson);
+  if (value !== null && typeof value === "object") {
+    const result: { [key: string]: StructuredJson } = {};
+    for (const [key, item] of Object.entries(value)) {
+      if (item === undefined) continue;
+      result[key] = structuredJson(item);
+    }
+    return result;
+  }
+  throw new Error("Onclave tool result contains a non-JSON value");
+}
+function textResult(text: string, details: Record<string, unknown>, structuredContent: Record<string, unknown> = details) { return { content: [{ type: "text" as const, text }], details, structuredContent: structuredJson(structuredContent) }; }
+
+const InstanceSchema = Type.Object({ agent_id: Type.String(), name: Type.String(), host: Type.String(), project: Type.Optional(Type.String()), model: Type.Optional(Type.String()), alive: Type.Boolean() });
+const InstancesOutputSchema = Type.Object({ instances: Type.Array(InstanceSchema) });
+const ChannelMessageOutputSchema = Type.Object({
+  message: Type.Object({
+    protocol_version: Type.Number(), channel_id: Type.String(), message_id: Type.String(), sequence: Type.Number(),
+    kind: Type.String({ enum: ["request", "response", "note", "notification"] }),
+    origin: Type.Object({ instance_id: Type.String(), name: Type.String(), host: Type.String(), project: Type.Optional(Type.String()) }),
+    participants: Type.Array(Type.String()), body: Type.String(), sent_at: Type.String(),
+    response_requested_from: Type.Optional(Type.Array(Type.String())), response_policy: Type.Optional(Type.String({ enum: ["any", "all"] })),
+    in_reply_to: Type.Optional(Type.String()), usage: Type.Optional(Type.Object({ input_tokens: Type.Number(), output_tokens: Type.Number() })), schema: Type.Optional(Type.String()),
+
+  }),
+  satisfaction: Type.Optional(Type.Object({ channel_id: Type.String(), request_message_id: Type.String(), response_requested_from: Type.Array(Type.String()), response_policy: Type.String({ enum: ["any", "all"] }), responders_received: Type.Array(Type.String()), state: Type.String() })),
+  duplicate: Type.Boolean(),
+});
 
 function registerAdapterTools(pi: ExtensionAPI, getRuntime: RuntimeGetter, audit: Audit): void { registerInstancesTool(pi, getRuntime); registerMessageTool(pi, getRuntime, audit); }
-function registerInstancesTool(pi: ExtensionAPI, getRuntime: RuntimeGetter): void { pi.registerTool({ name: "onclave_instances", label: "Onclave Instances", description: "List live independent Pi instances with short aliases and full routing ids only for user-directed Onclave communication.", promptGuidelines: [...INSTANCES_PROMPT_GUIDELINES], parameters: Type.Object({}), async execute() { const runtime = requireRuntime(getRuntime); const response = await runtime.client.call({ op: "list_agents" }); if (response.ok !== true) throw new Error(`list_agents failed: ${String(response.error)}`); const instances = Array.isArray(response.agents) ? response.agents : []; return textResult(instances.map((item) => { const agent = item as Record<string, unknown>; const id = String(agent.agent_id); return `${shortInstanceId(id)} (${String(agent.name)}) full=${id} host=${String(agent.host)} alive=${String(agent.alive)}`; }).join("\n") || "no instances registered", { instances }); } }); }
+function registerInstancesTool(pi: ExtensionAPI, getRuntime: RuntimeGetter): void { pi.registerTool({ name: "onclave_instances", label: "Onclave Instances", description: "List live independent Pi instances with short aliases and full routing ids only for user-directed Onclave communication.", promptGuidelines: [...INSTANCES_PROMPT_GUIDELINES], parameters: Type.Object({}), outputSchema: InstancesOutputSchema, async execute() { const runtime = requireRuntime(getRuntime); const response = await runtime.client.call({ op: "list_agents" }); if (response.ok !== true) throw new Error(`list_agents failed: ${String(response.error)}`); const instances = Array.isArray(response.agents) ? response.agents : []; const publicInstances = instances.map((item) => { const agent = item as Record<string, unknown>; return { agent_id: String(agent.agent_id), name: String(agent.name), host: String(agent.host), ...(typeof agent.project === "string" ? { project: agent.project } : {}), ...(typeof agent.model === "string" ? { model: agent.model } : {}), alive: agent.alive === true }; }); return textResult(publicInstances.map((agent) => `${shortInstanceId(agent.agent_id)} (${agent.name}) full=${agent.agent_id} host=${agent.host} alive=${agent.alive}`).join("\n") || "no instances registered", { instances }, { instances: publicInstances }); } }); }
 type MessageToolParams = {
   kind?: unknown;
   to?: unknown;
@@ -437,6 +468,7 @@ function registerMessageTool(pi: ExtensionAPI, getRuntime: RuntimeGetter, audit:
       in_reply_to: Type.Optional(Type.String({ description: "Advanced response correlation; inferred during an inbound request turn" })),
       schema: Type.Optional(Type.String()),
     }),
+    outputSchema: ChannelMessageOutputSchema,
     async execute(_callId, params, signal) {
       const runtime = requireRuntime(getRuntime);
       const active = runtime.correlation.activeInboundRequest();
@@ -462,11 +494,12 @@ function registerMessageTool(pi: ExtensionAPI, getRuntime: RuntimeGetter, audit:
         kind: result.message.kind,
         recipient_count: result.message.participants.length - 1,
       });
-      return textResult(`${type} posted to channel ${result.message.channel_id}`, {
+      const details = {
         message: result.message,
         ...(result.satisfaction === undefined ? {} : { satisfaction: result.satisfaction }),
         duplicate: result.duplicate,
-      });
+      };
+      return textResult(`${type} posted to channel ${result.message.channel_id}`, details, details);
     },
   });
 }

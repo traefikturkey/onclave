@@ -2,6 +2,7 @@ import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { Value } from "typebox/value";
 import { createVaultToolDefinitions } from "../src/lib/vault-tools";
 
 const PRIVATE_TEMP_PREFIX = "onclave-pi-vault-";
@@ -10,10 +11,14 @@ async function privateTempEntries(): Promise<string[]> {
 }
 
 describe("Onclave vault tools", () => {
-  it("is discoverable without resolving credentials or making requests", () => {
+  it("is discoverable without resolving credentials or making requests and uses native deferred contracts", () => {
     const client = vi.fn();
     const tools = createVaultToolDefinitions({ client });
     expect(tools.map((tool) => tool.name)).toEqual(["onclave_vault_search", "onclave_vault_content", "onclave_vault_ingest", "onclave_vault_jobs"]);
+    for (const tool of tools) {
+      expect(tool.exposure).toBe("deferred");
+      expect(tool.outputSchema).toBeDefined();
+    }
     expect(client).not.toHaveBeenCalled();
   });
 
@@ -32,6 +37,8 @@ describe("Onclave vault tools", () => {
     const result = await (tool.execute as Function)("call", { query: "test", limit: 5 }, signal);
     expect(search).toHaveBeenCalledOnce();
     expect(result.details).toMatchObject({ total: 1 });
+    expect(result.structuredContent).toEqual(result.details);
+    expect(Value.Check(tool.outputSchema as never, result.structuredContent)).toBe(true);
   });
 
   it("maps content and job action variants with cancellation and validates required arguments", async () => {
@@ -52,6 +59,8 @@ describe("Onclave vault tools", () => {
     const jobs = createVaultToolDefinitions({ client: async () => ({ jobStats: vi.fn(async () => ({ pending: 1 })) }) as never }).find((item) => item.name === "onclave_vault_jobs")!;
     const stats = await (jobs.execute as Function)("call", { operation: "stats" }, signal);
     expect(stats.details).toEqual({ pending: 1 });
+    expect(stats.structuredContent).toEqual({ operation: "stats", result: { pending: 1 } });
+    expect(Value.Check(jobs.outputSchema as never, stats.structuredContent)).toBe(true);
     await expect((content.execute as Function)("call", { operation: "list_annotations" }, signal)).rejects.toThrow("requires content_id");
     await expect((content.execute as Function)("call", { operation: "create_annotation", content_id: "c" }, signal)).rejects.toThrow("text");
   });
@@ -64,6 +73,8 @@ describe("Onclave vault tools", () => {
     const result = await (tool.execute as Function)("call", { url: "https://example.test/video" });
     expect(ingest).toHaveBeenCalledWith({ url: "https://example.test/video", notify_agent_id: "pi-test" }, expect.anything());
     expect(result.details).toEqual({ content_id: "content-1", job_id: "job-1", status: "pending" });
+    expect(result.structuredContent).toEqual(result.details);
+    expect(Value.Check(tool.outputSchema as never, result.structuredContent)).toBe(true);
     const jobs = createVaultToolDefinitions({ client, notifyAgentId: () => "pi-test" }).find((item) => item.name === "onclave_vault_jobs")!;
     await (jobs.execute as Function)("call", { operation: "reprocess", content_id: "c" });
     expect(reprocess).toHaveBeenCalledWith("c", false, undefined, "pi-test");

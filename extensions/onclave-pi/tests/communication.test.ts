@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { Value } from "typebox/value";
 import { createChannelMessage, ulid, type ChannelMessage, type ChannelSatisfaction } from "@onclave/envelope";
 import onclavePi, { consume, type Runtime, validateMessageParams } from "../src/onclave-pi";
 import { CorrelationStore, INBOUND_CUSTOM_TYPE } from "../src/lib/correlation";
@@ -133,7 +134,7 @@ describe("onclave_message tool boundary", () => {
   it("has no agent-settled publication hook and posts a group request once", async () => {
     const { rt, client } = runtime();
     const hooks = new Map<string, (...args: unknown[]) => unknown>();
-    const tools: Array<{ name: string; execute: (...args: unknown[]) => Promise<unknown> }> = [];
+    const tools: Array<{ name: string; outputSchema?: unknown; execute: (...args: unknown[]) => Promise<unknown> }> = [];
     const pi = {
       registerFlag() {},
       getFlag: vi.fn(),
@@ -151,7 +152,8 @@ describe("onclave_message tool boundary", () => {
     hooks.get("session_start")?.({}, { ui: { notify: vi.fn() } });
     await vi.waitFor(() => expect(tools.some((tool) => tool.name === "onclave_message")).toBe(true));
     const tool = tools.find((candidate) => candidate.name === "onclave_message");
-    await tool?.execute("call", { kind: "request", to: ["pi-c", "pi-a"], response_policy: "all", body: "report" }, new AbortController().signal);
+    const result = await tool?.execute("call", { kind: "request", to: ["pi-c", "pi-a"], response_policy: "all", body: "report" }, new AbortController().signal);
+    expect(Value.Check(tool?.outputSchema as never, (result as { structuredContent?: unknown } | undefined)?.structuredContent)).toBe(true);
     expect(client.postChannelMessage).toHaveBeenCalledWith(expect.objectContaining({ kind: "request", to: ["pi-c", "pi-a"], response_policy: "all", body: "report" }), expect.anything());
     expect(client.postChannelMessage).toHaveBeenCalledOnce();
   });

@@ -1,10 +1,11 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { Value } from "typebox/value";
 import onclavePi, { buildAgentCard, isPiSubagent, refreshFooterStatus, resolveInstanceAlias, setAdapterToolsActive, shortInstanceId, validateMessageParams } from "../src/onclave-pi";
 
 vi.mock("@earendil-works/pi-coding-agent", () => ({ getAgentDir: () => ".test-profile" }));
 vi.mock("../src/lib/audit", () => ({ appendAdapterAuditEvent: vi.fn(async () => undefined) }));
 
-type Tool = { name: string; parameters?: unknown; promptGuidelines?: string[] };
+type Tool = { name: string; parameters?: unknown; outputSchema?: unknown; promptGuidelines?: string[] };
 function fakePi() {
   const tools: Tool[] = [];
   let activeTools = ["read", "onclave_instances", "onclave_message", "onclave_vault_search", "onclave_vault_content", "onclave_vault_ingest", "onclave_vault_jobs"];
@@ -228,6 +229,17 @@ describe("Onclave Pi T2 adapter", () => {
 
   it("does not identify an unmarked Pi process as a subagent", () => {
     expect(isPiSubagent({})).toBe(false);
+  });
+
+  it("declares valid structured contracts for the communication tools", () => {
+    const registered = fakePi();
+    onclavePi(registered.pi as never);
+    const instances = registered.tools.find((tool) => tool.name === "onclave_instances")!;
+    const message = registered.tools.find((tool) => tool.name === "onclave_message")!;
+    expect(Value.Check(instances.outputSchema as never, { instances: [{ agent_id: "pi-peer", name: "Peer", host: "host", alive: true }] })).toBe(true);
+    expect(Value.Check(message.outputSchema as never, { message: { protocol_version: 3, channel_id: "channel", message_id: "message", sequence: 1, kind: "request", origin: { instance_id: "pi-self", name: "Self", host: "host" }, participants: ["pi-self", "pi-peer"], body: "task", sent_at: "2026-09-30T00:00:00Z" }, duplicate: false })).toBe(true);
+    expect(instances.outputSchema).toBeDefined();
+    expect(message.outputSchema).toBeDefined();
   });
 
   it("registers only parameterless instance discovery and the unified message tool", () => {
