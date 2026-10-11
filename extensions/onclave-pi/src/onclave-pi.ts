@@ -45,7 +45,7 @@ export type Runtime = { lifetime: AbortController; card: AgentCard; link: HttpLi
 type Audit = (event: AdapterAuditEventName, metadata?: AdapterAuditMetadata) => Promise<void>;
 type RuntimeGetter = () => Runtime | null;
 type SessionStartHandler = (event: { reason?: string }, ctx: ExtensionContext) => void | Promise<void>;
-export type BootstrapState = "retrying" | "degraded" | "ready" | "closed";
+export type BootstrapState = "retrying" | "degraded" | "failed" | "ready" | "closed";
 export type BootstrapRecoveryOptions = {
   signal?: AbortSignal;
   isCurrent?: () => boolean;
@@ -168,11 +168,12 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
       const stale = error instanceof StaleAdapterStartError || currentStartupAbort.signal.aborted || generation !== currentGeneration;
       options.recordStartup?.({ reason, durationMs: nowMs() - startedAt, status: stale ? "cancelled" : "error" });
       if (!stale) {
-        if (bootstrapState !== "ready") {
-          bootstrapState = "degraded";
-          refreshBootstrapFooter(ctx.ui, bootstrapState, bootstrapUsesBws);
-        }
-        ctx.ui.notify(`Onclave initialization failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+        // A rejected startup has ended. Only the live recovery loop may
+        // advertise degraded/background retry status.
+        startupAbort = startupAbort === currentStartupAbort ? null : startupAbort;
+        bootstrapState = "failed";
+        refreshBootstrapFooter(ctx.ui, bootstrapState, bootstrapUsesBws);
+        ctx.ui.notify(`Onclave initialization failed: ${error instanceof Error ? error.message : String(error)}. Fix configuration and restart Pi to try again.`, "error");
       }
     });
   });
@@ -392,7 +393,8 @@ export function resolveInstanceAlias(target: string, agentIds: string[]): string
 function refreshFooterStatus(runtime: Pick<Runtime, "aliveInstances" | "card" | "state" | "ui">): void { const color = runtime.state === "connected" ? ANSI_GREEN : ANSI_RED; runtime.ui.setStatus?.(FOOTER_STATUS_KEY, `Onclave[${runtime.aliveInstances}]: ${color}${shortInstanceId(runtime.card.agent_id)}${ANSI_RESET}`); }
 function refreshBootstrapFooter(ui: ExtensionContext["ui"], state: BootstrapState, usesBws: boolean): void {
   if (state === "closed") { ui.setStatus?.(FOOTER_STATUS_KEY, undefined); return; }
-  const label = state === "degraded"
+  const label = state === "failed" ? "initialization failed"
+    : state === "degraded"
     ? usesBws ? "Bitwarden degraded; retrying" : "initialization degraded"
     : state === "ready" ? "starting"
     : usesBws ? "Bitwarden retrying" : "starting";
@@ -401,6 +403,7 @@ function refreshBootstrapFooter(ui: ExtensionContext["ui"], state: BootstrapStat
 export { refreshFooterStatus };
 function statusText(runtime: Runtime | null, bootstrapState: BootstrapState, usesBws: boolean): string {
   if (runtime === null) {
+    if (bootstrapState === "failed") return "state: failed\nbootstrap: stopped\nFix configuration and restart Pi to try again.";
     if (bootstrapState === "degraded") return usesBws ? "state: degraded\nbootstrap: Bitwarden retrying in background" : "state: degraded\nbootstrap: retrying in background";
     if (bootstrapState === "retrying") return usesBws ? "state: starting\nbootstrap: Bitwarden retrying" : "state: starting\nbootstrap: resolving";
     if (bootstrapState === "ready") return "state: starting\nbootstrap: ready";
