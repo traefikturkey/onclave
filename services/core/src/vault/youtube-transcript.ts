@@ -73,6 +73,7 @@ export type TranscriptAttemptEvent = Readonly<{
   classification?: TranscriptFailureClassification;
   durationMs: number;
   httpStatus?: number;
+  freshProxyAgent?: boolean;
 }>;
 
 export type TranscriptProxyDiagnostic = Readonly<{
@@ -350,7 +351,6 @@ export type YouTubeTranscriptServiceOptions = {
 export class YouTubeTranscriptService {
   private readonly fetcher: TranscriptFetcher;
   private readonly dispatcher: Dispatcher | undefined;
-  private readonly ownedDispatcher: ProxyAgent | undefined;
   private readonly maxAttempts: number;
   private readonly requestTimeoutMs: number;
   private readonly overallTimeoutMs: number;
@@ -369,9 +369,6 @@ export class YouTubeTranscriptService {
     this.random = options.random ?? Math.random;
     this.onAttempt = options.onAttempt;
     this.proxyCredentials = options.proxy;
-    this.ownedDispatcher = options.dispatcher === undefined && options.proxy !== undefined
-      ? createWebshareProxyDispatcher(options.proxy)
-      : undefined;
   }
 
   extractVideoId(urlOrId: string): string {
@@ -379,7 +376,7 @@ export class YouTubeTranscriptService {
   }
 
   async close(): Promise<void> {
-    await this.ownedDispatcher?.close();
+    // Webshare agents are scoped to individual request attempts and closed there.
   }
 
   /** Static configuration inspection only; connectivity is never probed. */
@@ -391,7 +388,8 @@ export class YouTubeTranscriptService {
       mode,
       configured: mode === "custom" || (mode === "webshare" && usernamePresent && passwordPresent),
       credentialStatus: mode !== "webshare" ? "not_applicable" : usernamePresent && passwordPresent ? "present" : "missing",
-      dispatcherStatus: this.ownedDispatcher !== undefined ? "owned" : this.dispatcher !== undefined ? "injected" : "none",
+      dispatcherStatus: this.proxyCredentials !== undefined && this.dispatcher === undefined
+        ? "owned" : this.dispatcher !== undefined ? "injected" : "none",
       connectivity: "not_checked",
     });
   }
@@ -408,7 +406,7 @@ export class YouTubeTranscriptService {
   private async request<T>(
     stage: TranscriptFailureDiagnostic["stage"],
     deadline: number,
-    operation: (signal: AbortSignal) => Promise<T>,
+    operation: (signal: AbortSignal, dispatcher: Dispatcher | undefined) => Promise<T>,
   ): Promise<T> {
     let attempts = 0;
     let lastFailure: RequestFailure = { classification: "network" };
@@ -417,6 +415,11 @@ export class YouTubeTranscriptService {
       const startedAt = Date.now();
       const remaining = deadline - startedAt;
       const controller = new AbortController();
+      const ownedAttemptDispatcher = this.dispatcher === undefined && this.proxyCredentials !== undefined
+        ? createWebshareProxyDispatcher(this.proxyCredentials)
+        : undefined;
+      const dispatcher = this.dispatcher ?? ownedAttemptDispatcher;
+      const freshProxyAgent = ownedAttemptDispatcher !== undefined;
       let timedOut = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
       const timeoutMs = Math.min(this.requestTimeoutMs, remaining);
@@ -428,8 +431,14 @@ export class YouTubeTranscriptService {
         }, timeoutMs);
       });
       try {
-        const value = await Promise.race([operation(controller.signal), timeout]);
-        this.emitAttempt({ stage, attempt: attempts, outcome: "success", durationMs: Math.max(0, Date.now() - startedAt) });
+        const value = await Promise.race([operation(controller.signal, dispatcher), timeout]);
+        this.emitAttempt({
+          stage,
+          attempt: attempts,
+          outcome: "success",
+          durationMs: Math.max(0, Date.now() - startedAt),
+          ...(freshProxyAgent ? { freshProxyAgent } : {}),
+        });
         return value;
       } catch (error) {
         if (error instanceof TranscriptRequestFailure) lastFailure = error.failure;
@@ -448,6 +457,7 @@ export class YouTubeTranscriptService {
           classification: lastFailure.classification,
           durationMs: Math.max(0, Date.now() - startedAt),
           ...(lastFailure.httpStatus === undefined ? {} : { httpStatus: lastFailure.httpStatus }),
+          ...(freshProxyAgent ? { freshProxyAgent } : {}),
         });
         if (!willRetry) break;
         const random = Math.max(0, Math.min(1, this.random()));
@@ -456,6 +466,7 @@ export class YouTubeTranscriptService {
         await new Promise((resolve) => setTimeout(resolve, Math.min(delay, Math.max(0, deadline - Date.now()))));
       } finally {
         if (timer !== undefined) clearTimeout(timer);
+        ownedAttemptDispatcher?.destroy();
       }
     }
     const diagnostic: TranscriptFailureDiagnostic = {
@@ -472,11 +483,10 @@ export class YouTubeTranscriptService {
   }
 
   async fetchTranscript(videoId: string, languages: readonly string[] = ["en"]): Promise<YouTubeTranscript> {
-    const dispatcher = this.dispatcher ?? this.ownedDispatcher;
     const deadline = Date.now() + this.overallTimeoutMs;
     let currentStage: TranscriptFailureDiagnostic["stage"] = "watch";
     try {
-      const apiKey = await this.request("watch", deadline, async (signal) => {
+      const apiKey = await this.request("watch", deadline, async (signal, dispatcher) => {
         const response = await this.fetcher(`${YOUTUBE_WATCH_URL}${encodeURIComponent(videoId)}`, {
           headers: { "user-agent": "Mozilla/5.0" }, dispatcher, signal,
         });
@@ -494,7 +504,7 @@ export class YouTubeTranscriptService {
         return apiKey;
       });
       currentStage = "player";
-      const playerResponse = await this.request("player", deadline, async (signal) => {
+      const playerResponse = await this.request("player", deadline, async (signal, dispatcher) => {
         const response = await this.fetcher(`${YOUTUBE_PLAYER_URL}${encodeURIComponent(apiKey)}`, {
           method: "POST",
           headers: { "content-type": "application/json", origin: "https://www.youtube.com", "user-agent": "Mozilla/5.0" },
@@ -520,7 +530,7 @@ export class YouTubeTranscriptService {
 
       currentStage = "captions";
       const captionUrl = track.baseUrl.replace("&fmt=srv3", "");
-      const segments = await this.request("captions", deadline, async (signal) => {
+      const segments = await this.request("captions", deadline, async (signal, dispatcher) => {
         const captionResponse = await this.fetcher(captionUrl, { dispatcher, signal });
         if (!captionResponse.ok) {
           const classification = captionResponse.status === 429 ? "rate_limited" : captionResponse.status === 403 ? "blocked" : "upstream";

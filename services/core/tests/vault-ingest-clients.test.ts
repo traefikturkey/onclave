@@ -444,10 +444,49 @@ describe("YouTube transcript parsing and retrieval", () => {
     expect(JSON.stringify(failure)).not.toContain("secret");
   });
 
-  it("reuses an owned proxy dispatcher across sequential transcript fetches", async () => {
+  it("destroys a rate-limited attempt dispatcher before retrying with a fresh one", async () => {
+    const calls: FetchCall[] = [];
+    let attempts = 0;
     const service = new YouTubeTranscriptService({
       proxy: { username: "test-user", password: "test-password" },
-      fetcher: async (url) => {
+      maxAttempts: 2,
+      retryDelayMs: 0,
+      random: () => 0,
+      fetcher: async (url, init = {}) => {
+        calls.push({ url, init });
+        if (url.includes("watch")) {
+          attempts += 1;
+          if (attempts === 1) {
+            return new Response(new ReadableStream({ start() {} }), { status: 429, headers: { "retry-after": "0" } });
+          }
+          return new Response('<script>var ytcfg = {"INNERTUBE_API_KEY":"test-key"};</script>');
+        }
+        if (url.includes("youtubei")) {
+          return responseJson({
+            playabilityStatus: { status: "OK" },
+            captions: { playerCaptionsTracklistRenderer: { captionTracks: [{ baseUrl: "https://captions.example/en", languageCode: "en" }] } },
+          });
+        }
+        return new Response('<transcript><text start="0" dur="1">Hello</text></transcript>');
+      },
+    });
+
+    await expect(Promise.race([
+      service.fetchTranscript("dQw4w9WgXcQ"),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("retry cleanup timed out")), 1_000)),
+    ])).resolves.toMatchObject({ fullText: "Hello" });
+    const watchCalls = calls.filter((call) => call.url.includes("watch"));
+    expect(watchCalls).toHaveLength(2);
+    expect(watchCalls[0]?.init.dispatcher).not.toBe(watchCalls[1]?.init.dispatcher);
+    expect(watchCalls[0]?.init.dispatcher).toMatchObject({ destroyed: true });
+  });
+
+  it("uses attempt-scoped owned proxy dispatchers across sequential transcript fetches", async () => {
+    const calls: FetchCall[] = [];
+    const service = new YouTubeTranscriptService({
+      proxy: { username: "test-user", password: "test-password" },
+      fetcher: async (url, init = {}) => {
+        calls.push({ url, init });
         if (url.includes("watch")) {
           return new Response('<script>var ytcfg = {"INNERTUBE_API_KEY":"test-key"};</script>');
         }
@@ -464,6 +503,10 @@ describe("YouTube transcript parsing and retrieval", () => {
     try {
       await expect(service.fetchTranscript("dQw4w9WgXcQ")).resolves.toMatchObject({ fullText: "Hello" });
       await expect(service.fetchTranscript("dQw4w9WgXcQ")).resolves.toMatchObject({ fullText: "Hello" });
+      expect(calls).toHaveLength(6);
+      const dispatchers = calls.map((call) => call.init.dispatcher);
+      expect(dispatchers.every((dispatcher) => dispatcher !== undefined)).toBe(true);
+      expect(new Set(dispatchers).size).toBe(6);
     } finally {
       await service.close();
     }
