@@ -69,7 +69,8 @@ function output(value: unknown, _label = "vault response", structuredContent: un
   return { content: [{ type: "text" as const, text }], details: value, structuredContent: structuredJson(structuredContent) };
 }
 function operationOutput(operation: string, value: unknown, label = "vault response") {
-  return output(value, label, { operation, result: value ?? null });
+  const result = operation === "find_video_id" && value === undefined ? null : value;
+  return output(result, label, { operation, result: result ?? null });
 }
 type ByteReader = {
   read: () => Promise<{ done: boolean; value?: Uint8Array }>;

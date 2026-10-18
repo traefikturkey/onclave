@@ -65,6 +65,15 @@ describe("Onclave vault tools", () => {
     await expect((content.execute as Function)("call", { operation: "create_annotation", content_id: "c" }, signal)).rejects.toThrow("text");
   });
 
+  it("serializes a missing video match as a valid null result", async () => {
+    const tool = createVaultToolDefinitions({ client: async () => ({ findByVideoId: vi.fn(async () => undefined) } as never) }).find((item) => item.name === "onclave_vault_content")!;
+    const result = await (tool.execute as Function)("call", { operation: "find_video_id", video_id: "missing" });
+    expect(result.content).toEqual([{ type: "text", text: "null" }]);
+    expect(result.details).toBeNull();
+    expect(result.structuredContent).toEqual({ operation: "find_video_id", result: null });
+    expect(Value.Check(tool.outputSchema as never, result.structuredContent)).toBe(true);
+  });
+
   it("returns useful ingest identity and requires identity for ingest and reprocess", async () => {
     const ingest = vi.fn(async () => ({ content_id: "content-1", job_id: "job-1", content_type: "youtube", title: "T" }));
     const reprocess = vi.fn(async () => ({ content_id: "c", job_id: "j" }));
