@@ -11,7 +11,7 @@ const sourceSchema = Type.Object({
   project: Type.Union([Type.String(), Type.Null()]), parent_session_id: Type.Union([Type.String(), Type.Null()]), parent_source_path: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 });
 const summaryProperties = { id: Type.String(), source: sourceSchema, byte_length: Type.Integer(), created_at: Type.String() };
-const statusSchema = Type.Object({ running: Type.Boolean(), scheduled: Type.Optional(Type.Boolean()), reason: Type.Optional(Type.String()), scanned: Type.Optional(Type.Integer()), committed: Type.Optional(Type.Integer()), unchanged: Type.Optional(Type.Integer()), busy: Type.Optional(Type.Integer()), errors: Type.Optional(Type.Integer()), last_error: Type.Optional(Type.Union([Type.String(), Type.Null()])) });
+const statusSchema = Type.Object({ running: Type.Boolean(), owner: Type.Optional(Type.Boolean()), scheduled: Type.Optional(Type.Boolean()), reason: Type.Optional(Type.String()), scanned: Type.Optional(Type.Integer()), committed: Type.Optional(Type.Integer()), unchanged: Type.Optional(Type.Integer()), busy: Type.Optional(Type.Integer()), errors: Type.Optional(Type.Integer()), last_error: Type.Optional(Type.Union([Type.String(), Type.Null()])) });
 const outputSchema = Type.Union([
   Type.Object({ operation: Type.Literal("list"), data: Type.Object({ items: Type.Array(Type.Object({ ...summaryProperties, chunk_count: Type.Integer() })), next_after: Type.Union([Type.String(), Type.Null()]) }) }),
   Type.Object({ operation: Type.Literal("get"), data: Type.Object({ ...summaryProperties, chunks: Type.Array(Type.Object({ sha256: Type.String(), size: Type.Integer() })) }) }),

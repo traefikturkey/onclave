@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, opendir, readFile, realpath, rename, rm, stat } from "node:fs/promises";
+import { lstat, mkdir, open, opendir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join, relative, sep } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { ARCHIVE_CHUNK_BYTES, ARCHIVE_MAX_CHUNKS, ARCHIVE_SOURCE_TYPES, archiveManifestId, type ArchiveChunk, type ArchiveManifest, type ArchiveSource, type ArchiveSourceType, type OnclaveClient } from "@onclave/client";
@@ -10,7 +10,7 @@ type ArchiveClient = Pick<OnclaveClient, "uploadArchiveChunk" | "commitArchiveMa
 export type ArchiveClientProvider = () => ArchiveClient | undefined | Promise<ArchiveClient | undefined>;
 type Candidate = { path: string; sourcePath: string; type: ArchiveSourceType };
 type Checkpoint = { version: 1; observed: string; manifest: ArchiveManifest };
-export type ArchiveUploadStatus = { running: boolean; scanned: number; committed: number; unchanged: number; busy: number; errors: number; last_error: string | null };
+export type ArchiveUploadStatus = { running: boolean; owner: boolean; scanned: number; committed: number; unchanged: number; busy: number; errors: number; last_error: string | null };
 export type ArchiveUploaderOptions = {
   profileDir: string;
   runtimeDir?: string;
@@ -173,7 +173,7 @@ export class ArchiveUploader {
   private wake: (() => void) | undefined;
   private requested = false;
   private readonly options: ArchiveUploaderOptions;
-  private readonly current: ArchiveUploadStatus = { running: false, scanned: 0, committed: 0, unchanged: 0, busy: 0, errors: 0, last_error: null };
+  private readonly current: ArchiveUploadStatus = { running: false, owner: false, scanned: 0, committed: 0, unchanged: 0, busy: 0, errors: 0, last_error: null };
   constructor(options: ArchiveUploaderOptions) { this.options = options; }
   status(): ArchiveUploadStatus { return { ...this.current }; }
   start(): void {
@@ -192,14 +192,72 @@ export class ArchiveUploader {
     this.options.onStatus?.(this.status());
   }
   private async loop(signal: AbortSignal): Promise<void> {
+    const interval = this.options.intervalMs ?? 60_000;
+    const pollMs = Math.min(interval, 5_000);
+    let claim: SourceLock | undefined;
+    let coordination: { lock: string; request: string } | undefined;
+    let nextScan = 0;
+    let lastRequest: string | undefined;
     try {
       while (!signal.aborted) {
+        const requested = this.requested;
         this.requested = false;
-        try { await this.scan(signal); this.options.onStatus?.(this.status()); }
-        catch (error) { if (signal.aborted) break; this.report(error); }
+        const wasOwner = this.current.owner;
+        let scanned = false;
+        try {
+          if (!coordination) {
+            if (isLegacy(this.options.profileDir)) throw new Error("legacy profiles are not archive sources");
+            const root = await realpath(this.options.profileDir);
+            if (isLegacy(root)) throw new Error("legacy profiles are not archive sources");
+            // Canonical profile identity shares one local owner across sessions,
+            // including different spellings of the same profile path.
+            const runtimeDir = this.options.runtimeDir ?? onclaveRuntimeDir(root);
+            await mkdir(runtimeDir, { recursive: true });
+            const key = hash(root);
+            coordination = { lock: join(runtimeDir, `archive-worker-${key}.lock`), request: join(runtimeDir, `archive-worker-${key}.request`) };
+          }
+          // A sync requested from a standby must wake the shared worker too.
+          // This coordination file is outside the approved archive sources.
+          if (requested) {
+            const token = randomUUID();
+            const temporary = `${coordination.request}.${token}.tmp`;
+            try {
+              await writeFile(temporary, token, { flag: "wx", mode: 0o600 });
+              await rename(temporary, coordination.request);
+            } finally { await rm(temporary, { force: true }); }
+          }
+          if (await this.options.client()) {
+            claim ??= await lockSource(coordination.lock);
+            this.current.owner = claim !== undefined;
+            if (claim) {
+              await claim.check();
+              const request = await readFile(coordination.request, "utf8").catch((error: unknown) => { if (isMissing(error)) return undefined; throw error; });
+              if (Date.now() >= nextScan || requested || request !== lastRequest) {
+                lastRequest = request;
+                await this.scan(signal);
+                scanned = true;
+                nextScan = Date.now() + interval;
+              }
+            }
+          } else {
+            await claim?.release();
+            claim = undefined;
+            this.current.owner = false;
+            nextScan = 0;
+          }
+          if (scanned || wasOwner !== this.current.owner) this.options.onStatus?.(this.status());
+        } catch (error) {
+          if (signal.aborted) break;
+          await claim?.release();
+          claim = undefined;
+          this.current.owner = false;
+          nextScan = 0;
+          this.report(error);
+        }
         if (this.requested) continue;
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(done, this.options.intervalMs ?? 60_000);
+          const waitMs = claim ? Math.min(pollMs, Math.max(0, nextScan - Date.now())) : pollMs;
+          const timer = setTimeout(done, waitMs);
           timer.unref?.();
           const self = this;
           function done() { clearTimeout(timer); signal.removeEventListener("abort", done); self.wake = undefined; resolve(); }
@@ -209,8 +267,14 @@ export class ArchiveUploader {
         });
       }
     } catch (error) { if (!signal.aborted) this.report(error); }
+    finally {
+      try { await claim?.release(); }
+      catch (error) { if (!signal.aborted) this.report(error); }
+      this.current.owner = false;
+    }
   }
-  /** Also used by focused offline fixture tests. No logging or session writes. */
+  /** Direct, uncoordinated scan for offline fixtures. Production uses start(),
+   * whose loop holds worker ownership across scans. No logging or session writes. */
   async scan(signal: AbortSignal = new AbortController().signal): Promise<void> {
     signal.throwIfAborted();
     if (isLegacy(this.options.profileDir)) throw new Error("legacy profiles are not archive sources");
