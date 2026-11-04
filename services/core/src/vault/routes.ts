@@ -40,7 +40,13 @@ export type VaultObjectStorage = {
   delete(filePath: string): Promise<void>;
 };
 
+export type ImprovementKind = "feedback" | "failure" | "knowledge" | "analysis" | "classification" | "review" | "note";
+export type ImprovementRecord = { id: string; kind: ImprovementKind; project: string | null; body: string; source_ids: string[]; source_paths: string[]; provenance: Record<string, unknown>; revision: number; created_at: Date; updated_at: Date };
 export type VaultRepository = UsageStorage & {
+  create_improvement(record: Omit<ImprovementRecord, "revision" | "created_at" | "updated_at">): Promise<ImprovementRecord>;
+  get_improvement(id: string): Promise<ImprovementRecord | undefined>;
+  list_improvements(options: { limit: number; offset: number; query?: string; kind?: ImprovementKind; project?: string }): Promise<[ImprovementRecord[], number]>;
+  update_improvement(id: string, expectedRevision: number, changes: Pick<ImprovementRecord, "kind" | "project" | "body" | "source_ids" | "source_paths">): Promise<ImprovementRecord | undefined>;
   get_content(contentId: string): Promise<ContentMetadata | undefined>;
   list_content(options?: {
     offset?: number;
@@ -173,6 +179,12 @@ function booleanQuery(value: string | undefined, name: string, fallback = false)
 
 function record(value: JsonValue | undefined): Record<string, JsonValue> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value !== null && typeof value === "object") return `{${Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(",")}}`;
+  return JSON.stringify(value) ?? "null";
 }
 
 function toJsonValue(value: unknown): JsonValue {
@@ -451,6 +463,44 @@ export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHan
       return jsonResponse({ status: "reloaded", keys: deps.keyStore.listKeyIds() });
     },
     authWhoami: (request) => jsonResponse({ key_id: request.keyId }),
+    improvementsCreate: async (request) => {
+      const body = parseJsonObject(request.body);
+      const kind = requiredText(body, "kind") as ImprovementKind;
+      if (!["feedback", "failure", "knowledge", "analysis", "classification", "review", "note"].includes(kind)) throw bodyValidationError("kind", "Invalid record kind");
+      if (body.provenance !== undefined && (body.provenance === null || typeof body.provenance !== "object" || Array.isArray(body.provenance))) throw bodyValidationError("provenance", "Input should be a valid dictionary", "dict_type");
+      const provenance = body.provenance === undefined ? {} : body.provenance as Record<string, unknown>;
+      const input = { id: requiredText(body, "id"), kind, project: optionalText(body, "project") ?? null, body: requiredText(body, "body"), source_ids: optionalStringList(body, "source_ids") ?? [], source_paths: optionalStringList(body, "source_paths") ?? [], provenance };
+      const saved = await deps.repository.create_improvement(input);
+      if (saved.kind !== input.kind || saved.project !== input.project || saved.body !== input.body || JSON.stringify(saved.source_ids) !== JSON.stringify(input.source_ids) || JSON.stringify(saved.source_paths) !== JSON.stringify(input.source_paths) || stableJson(saved.provenance) !== stableJson(input.provenance)) {
+        return jsonResponse({ error: "record_id_conflict", id: input.id }, 409);
+      }
+      return jsonResponse(saved, 201);
+    },
+    improvementsGet: async (request) => {
+      const found = await deps.repository.get_improvement(request.params.record_id ?? "");
+      if (found === undefined) throw new HttpError(404, "Improvement record not found");
+      return jsonResponse(found);
+    },
+    improvementsList: async (request) => {
+      const limit = integerQuery(request.query.limit, "limit", 50, 1, 100);
+      const offset = integerQuery(request.query.offset, "offset", 0, 0, Number.MAX_SAFE_INTEGER);
+      const kind = optionalQueryText(request.query, "kind");
+      if (kind !== undefined && !["feedback", "failure", "knowledge", "analysis", "classification", "review", "note"].includes(kind)) throw validationError("kind", "Invalid record kind");
+      const [items, total] = await deps.repository.list_improvements({ limit, offset, query: optionalQueryText(request.query, "q"), kind: kind as ImprovementKind | undefined, project: optionalQueryText(request.query, "project") });
+      return jsonResponse({ items, total, limit, offset });
+    },
+    improvementsUpdate: async (request) => {
+      const body = parseJsonObject(request.body);
+      const expected = body.expected_revision;
+      if (typeof expected !== "number" || !Number.isInteger(expected) || expected < 1) throw bodyValidationError("expected_revision", "Expected a positive integer");
+      const kind = requiredText(body, "kind") as ImprovementKind;
+      if (!["feedback", "failure", "knowledge", "analysis", "classification", "review", "note"].includes(kind)) throw bodyValidationError("kind", "Invalid record kind");
+      const saved = await deps.repository.update_improvement(request.params.record_id ?? "", expected, { kind, project: optionalText(body, "project") ?? null, body: requiredText(body, "body"), source_ids: optionalStringList(body, "source_ids") ?? [], source_paths: optionalStringList(body, "source_paths") ?? [] });
+      if (saved !== undefined) return jsonResponse(saved);
+      const exists = await deps.repository.get_improvement(request.params.record_id ?? "");
+      if (exists === undefined) throw new HttpError(404, "Improvement record not found");
+      return jsonResponse({ error: "revision_conflict", expected_revision: expected, current_revision: exists.revision }, 409);
+    },
     contentList: async (request) => {
       const limit = integerQuery(request.query.limit, "limit", 50, 1, 100);
       const offset = integerQuery(request.query.offset, "offset", 0, 0, Number.MAX_SAFE_INTEGER);

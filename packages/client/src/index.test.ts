@@ -28,6 +28,34 @@ describe("Onclave vault client", () => {
     expect(signer.signRequest).toHaveBeenCalledWith("GET", "/api/v1/content/unsafe%2Fid/download?variant=analysis", "localhost", undefined);
   });
 
+  it("signs improvement capture, get, list, and revision-checked update routes", async () => {
+    const saved = { id: "record", kind: "knowledge", body: "fact", project: "repo", source_ids: [], source_paths: [], provenance: { machine_id: "machine" }, revision: 2 };
+    const fetchFn = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST") return response(saved, 201);
+      if (init?.method === "PATCH") return response(saved);
+      if (url.includes("?")) return response({ items: [saved], total: 1, limit: 5, offset: 0 });
+      return response(saved);
+    });
+    const client = new OnclaveClient({ endpoint: "https://vault.example", signer, fetchFn });
+    await client.createImprovement({ id: "record", kind: "knowledge", body: "fact", provenance: { machine_id: "machine" } });
+    await client.getImprovement("record/unsafe");
+    await client.listImprovements({ q: "durable fact", kind: "knowledge", project: "repo", limit: 5, offset: 10 });
+    await client.updateImprovement("record/unsafe", { expected_revision: 2, kind: "knowledge", body: "fact" });
+    expect(fetchFn.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+      ["https://vault.example/api/v1/improvements", "POST"],
+      ["https://vault.example/api/v1/improvements/record%2Funsafe", "GET"],
+      ["https://vault.example/api/v1/improvements?q=durable+fact&kind=knowledge&project=repo&limit=5&offset=10", "GET"],
+      ["https://vault.example/api/v1/improvements/record%2Funsafe", "PATCH"],
+    ]);
+    expect(JSON.parse(String(fetchFn.mock.calls[0]?.[1]?.body))).toEqual({ id: "record", kind: "knowledge", body: "fact", provenance: { machine_id: "machine" } });
+    expect(JSON.parse(String(fetchFn.mock.calls[3]?.[1]?.body))).toEqual({ expected_revision: 2, kind: "knowledge", body: "fact" });
+  });
+
+  it("preserves improvement revision conflict details", async () => {
+    const client = new OnclaveClient({ endpoint: "https://vault.example", signer, fetchFn: async () => response({ error: "revision_conflict", expected_revision: 2, current_revision: 3 }, 409) });
+    await expect(client.updateImprovement("record", { expected_revision: 2, kind: "note", body: "changed" })).rejects.toThrow("revision_conflict (expected revision 2, current revision 3)");
+  });
+
   it("requires HTTPS for the workstation S3 endpoint while allowing HTTP for core", () => {
     expect(() => new AuthenticatedS3Client({ endpoint: "http://s3.example.internal", bucket: "menos", region: "us-east-1", accessKey: "access-key", secretKey: "secret-key" })).toThrow("https");
     expect(() => new OnclaveClient({ endpoint: "http://core.example.internal", signer })).not.toThrow();

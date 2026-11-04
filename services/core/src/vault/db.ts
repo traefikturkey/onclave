@@ -21,10 +21,12 @@ export async function checkVaultDatabase(pool: Pool): Promise<void> {
 
 export async function migrateVaultDurability(pool: Pool): Promise<void> {
   const migration = await readFile(new URL("./migrations/20260722_job_durability.sql", import.meta.url), "utf8");
+  const improvementsMigration = await readFile(new URL("./migrations/20260723_improvement_records.sql", import.meta.url), "utf8");
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     await client.query(migration);
+    await client.query(improvementsMigration);
     await client.query("COMMIT");
   } catch (error: unknown) {
     await client.query("ROLLBACK");

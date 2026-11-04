@@ -72,6 +72,11 @@ export type JobResponse = JsonObject & { job_id: string; content_id: string; sta
 export type JobListResponse = { jobs: JobResponse[]; total: number };
 export type SearchResponse = { results: JsonObject[]; total: number };
 export type ChannelResponse = { source: string; videos: JsonObject[] };
+export const IMPROVEMENT_KINDS = ["feedback", "failure", "knowledge", "analysis", "classification", "review", "note"] as const;
+export type ImprovementKind = typeof IMPROVEMENT_KINDS[number];
+export type ImprovementDraft = { id: string; kind: ImprovementKind; body: string; project?: string; source_ids?: string[]; source_paths?: string[]; provenance?: JsonObject };
+export type ImprovementRecord = { id: string; kind: ImprovementKind; body: string; project: string | null; source_ids: string[]; source_paths: string[]; provenance: JsonObject; revision: number; created_at?: string; updated_at?: string };
+export type ImprovementListResponse = { items: ImprovementRecord[]; total: number; limit: number; offset: number };
 
 export type AuthenticatedS3ClientOptions = {
   endpoint: string;
@@ -220,6 +225,10 @@ export class OnclaveClient {
     return this.json("POST", `/content/${encodeURIComponent(contentId)}/reprocess${query({ force: force ? "true" : undefined, notify_agent_id: notificationAgent })}`, undefined, signal);
   }
   reindexEmbeddings(contentId: string, signal?: AbortSignal): Promise<ReindexResponse> { return this.json("POST", `/content/${encodeURIComponent(contentId)}/reindex-embeddings`, undefined, signal); }
+  createImprovement(draft: ImprovementDraft, signal?: AbortSignal): Promise<ImprovementRecord> { return this.json("POST", "/improvements", draft, signal); }
+  getImprovement(id: string, signal?: AbortSignal): Promise<ImprovementRecord> { return this.json("GET", `/improvements/${encodeURIComponent(id)}`, undefined, signal); }
+  listImprovements(options: { q?: string; kind?: ImprovementKind; project?: string; limit?: number; offset?: number } = {}, signal?: AbortSignal): Promise<ImprovementListResponse> { return this.json("GET", `/improvements${query(options)}`, undefined, signal); }
+  updateImprovement(id: string, draft: Omit<ImprovementDraft, "id" | "provenance"> & { expected_revision: number }, signal?: AbortSignal): Promise<ImprovementRecord> { return this.json("PATCH", `/improvements/${encodeURIComponent(id)}`, draft, signal); }
   createAnnotation(contentId: string, annotation: { text: string; title?: string; source_type?: string; tags?: string[] }, signal?: AbortSignal): Promise<AnnotationResponse> { return this.json("POST", `/content/${encodeURIComponent(contentId)}/annotations`, annotation, signal); }
   listAnnotations(contentId: string, signal?: AbortSignal): Promise<AnnotationResponse[]> { return this.json("GET", `/content/${encodeURIComponent(contentId)}/annotations`, undefined, signal); }
   private async json<T extends JsonObject | JsonObject[] = JsonObject>(method: string, path: string, body: object | undefined, signal?: AbortSignal): Promise<T> { const response = await this.request(method, path, body, signal); const parsed: unknown = await response.json(); if (!object(parsed) && !Array.isArray(parsed)) throw new Error("Onclave API returned invalid JSON"); return parsed as T; }
@@ -230,7 +239,7 @@ export class OnclaveClient {
     const timer = setTimeout(() => controller.abort(new Error("Onclave request deadline exceeded")), this.timeoutMs);
     const finalSignal = combined ? AbortSignal.any([combined, controller.signal]) : controller.signal;
     finalSignal.throwIfAborted(); const url = new URL(path.replace(/^\//, ""), this.base); const bytes = body === undefined ? undefined : Buffer.from(JSON.stringify(body)); const signer = await this.signerPromise;
-    try { const response = await this.fetchFn(url.toString(), { method, headers: { ...(bytes ? { "content-type": "application/json" } : {}), ...signer.signRequest(method, `${url.pathname}${url.search}`, url.host, bytes) }, ...(bytes ? { body: bytes } : {}), signal: finalSignal }); if (!response.ok) { const bodyText = await response.text(); let detail: string | undefined; try { const parsed: unknown = JSON.parse(bodyText); if (object(parsed) && typeof parsed.detail === "string") detail = parsed.detail; } catch { /* retain raw body */ } throw new OnclaveApiError(response.status, detail, bodyText); }
+    try { const response = await this.fetchFn(url.toString(), { method, headers: { ...(bytes ? { "content-type": "application/json" } : {}), ...signer.signRequest(method, `${url.pathname}${url.search}`, url.host, bytes) }, ...(bytes ? { body: bytes } : {}), signal: finalSignal }); if (!response.ok) { const bodyText = await response.text(); let detail: string | undefined; try { const parsed: unknown = JSON.parse(bodyText); if (object(parsed)) { if (typeof parsed.detail === "string") detail = parsed.detail; else if (typeof parsed.error === "string") detail = `${parsed.error}${typeof parsed.expected_revision === "number" ? ` (expected revision ${parsed.expected_revision}` : ""}${typeof parsed.current_revision === "number" ? `${typeof parsed.expected_revision === "number" ? ", " : " ("}current revision ${parsed.current_revision}` : ""}${typeof parsed.expected_revision === "number" || typeof parsed.current_revision === "number" ? ")" : ""}`; } } catch { /* retain raw body */ } throw new OnclaveApiError(response.status, detail, bodyText); }
       return response;
     } finally { clearTimeout(timer); }
   }

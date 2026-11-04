@@ -235,6 +235,10 @@ function youtubeTranscriptVersionFromRow(row: Row): YoutubeTranscriptVersion {
   };
 }
 
+function improvementFromRow(row: Row): import("./routes").ImprovementRecord {
+  return { id: String(row.id), kind: row.kind as import("./routes").ImprovementKind, project: row.project === null ? null : String(row.project), body: String(row.body), source_ids: Array.isArray(row.source_ids) ? row.source_ids.map(String) : [], source_paths: Array.isArray(row.source_paths) ? row.source_paths.map(String) : [], provenance: row.provenance !== null && typeof row.provenance === "object" ? row.provenance as Record<string, unknown> : {}, revision: numberValue(row.revision), created_at: row.created_at instanceof Date ? row.created_at : new Date(String(row.created_at)), updated_at: row.updated_at instanceof Date ? row.updated_at : new Date(String(row.updated_at)) };
+}
+
 export class PostgresRepository {
   private readonly database: SqlClient;
 
@@ -831,6 +835,28 @@ export class PostgresRepository {
   async get_pipeline_job_stats(): Promise<{ total_jobs: number; completed_jobs: number; failed_jobs: number; cancelled_jobs: number; average_completion_seconds: number | null }> { const result = await this.database.query("SELECT count(*) AS total_jobs,count(*) FILTER (WHERE status='completed') AS completed_jobs,count(*) FILTER (WHERE status='failed') AS failed_jobs,count(*) FILTER (WHERE status='cancelled') AS cancelled_jobs,avg(extract(epoch FROM (finished_at-started_at))) FILTER (WHERE status='completed' AND started_at IS NOT NULL AND finished_at IS NOT NULL) AS average_completion_seconds FROM pipeline_job"); const row = result.rows[0] ?? {}; const average = row.average_completion_seconds; return { total_jobs: numberValue(row.total_jobs), completed_jobs: numberValue(row.completed_jobs), failed_jobs: numberValue(row.failed_jobs), cancelled_jobs: numberValue(row.cancelled_jobs), average_completion_seconds: average === null || average === undefined ? null : numberValue(average) }; }
   async purge_expired_jobs(): Promise<{ compact: number; full: number }> { const compact = await this.database.query("DELETE FROM pipeline_job WHERE data_tier='compact' AND finished_at < now()-interval '180 days'"); const full = await this.database.query("DELETE FROM pipeline_job WHERE data_tier='full' AND finished_at < now()-interval '60 days'"); return { compact: compact.rowCount ?? 0, full: full.rowCount ?? 0 }; }
 
+  async create_improvement(record: { id: string; kind: string; project: string | null; body: string; source_ids: string[]; source_paths: string[]; provenance: Record<string, unknown> }): Promise<import("./routes").ImprovementRecord> {
+    const row = (await this.database.query("INSERT INTO improvement_record(id,kind,project,body,source_ids,source_paths,provenance) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET id=excluded.id RETURNING *", [record.id, record.kind, record.project, record.body, record.source_ids, record.source_paths, JSON.stringify(record.provenance)])).rows[0];
+    return improvementFromRow(row);
+  }
+  async get_improvement(id: string): Promise<import("./routes").ImprovementRecord | undefined> {
+    const row = (await this.database.query("SELECT * FROM improvement_record WHERE id=$1", [id])).rows[0];
+    return row === undefined ? undefined : improvementFromRow(row);
+  }
+  async list_improvements(options: { limit: number; offset: number; query?: string; kind?: string; project?: string }): Promise<[import("./routes").ImprovementRecord[], number]> {
+    const values: unknown[] = []; const where: string[] = [];
+    if (options.query !== undefined) { values.push(options.query); where.push(`to_tsvector('simple',body) @@ plainto_tsquery('simple',$${values.length})`); }
+    if (options.kind !== undefined) { values.push(options.kind); where.push(`kind=$${values.length}`); }
+    if (options.project !== undefined) { values.push(options.project); where.push(`project=$${values.length}`); }
+    const clause = where.length ? ` WHERE ${where.join(" AND ")}` : "";
+    const count = await this.database.query(`SELECT count(*) AS count FROM improvement_record${clause}`, values);
+    const rows = await this.database.query(`SELECT * FROM improvement_record${clause} ORDER BY updated_at DESC,id LIMIT $${values.length+1} OFFSET $${values.length+2}`, [...values, options.limit, options.offset]);
+    return [rows.rows.map(improvementFromRow), numberValue(count.rows[0]?.count)];
+  }
+  async update_improvement(id: string, expectedRevision: number, changes: { kind: string; project: string | null; body: string; source_ids: string[]; source_paths: string[] }): Promise<import("./routes").ImprovementRecord | undefined> {
+    const row = (await this.database.query("UPDATE improvement_record SET kind=$3,project=$4,body=$5,source_ids=$6,source_paths=$7,revision=revision+1,updated_at=now() WHERE id=$1 AND revision=$2 RETURNING *", [id, expectedRevision, changes.kind, changes.project, changes.body, changes.source_ids, changes.source_paths])).rows[0];
+    return row === undefined ? undefined : improvementFromRow(row);
+  }
   async record_llm_usage(usage: LlmUsage): Promise<void> { await this.database.query("INSERT INTO llm_usage(id,provider,model,input_tokens,output_tokens,input_price_per_million, output_price_per_million,estimated_cost,context,duration_ms,pricing_snapshot_refreshed_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)", [newId(), usage.provider, usage.model, usage.input_tokens, usage.output_tokens, usage.input_price_per_million, usage.output_price_per_million, usage.estimated_cost, usage.context, usage.duration_ms, usage.pricing_snapshot_refreshed_at ?? null]); }
   async get_pricing_snapshot(snapshotId: string): Promise<Row | undefined> { return (await this.database.query("SELECT id,pricing,refreshed_at,source FROM llm_pricing_snapshot WHERE id=$1", [snapshotId])).rows[0]; }
   async upsert_pricing_snapshot(snapshotId: string, pricing: JsonObject, refreshedAt: Date, source: string): Promise<void> { await this.database.query("INSERT INTO llm_pricing_snapshot(id,pricing,refreshed_at,source) VALUES($1,$2,$3,$4) ON CONFLICT(id) DO UPDATE SET pricing=excluded.pricing,refreshed_at=excluded.refreshed_at,source=excluded.source", [snapshotId, pricing, refreshedAt, source]); }

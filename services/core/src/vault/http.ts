@@ -110,6 +110,10 @@ export const VAULT_ROUTE_TABLE = [
     public: false,
   },
   { name: "search", method: "POST", path: "/api/v1/search", public: false },
+  { name: "improvementsList", method: "GET", path: "/api/v1/improvements", public: false },
+  { name: "improvementsCreate", method: "POST", path: "/api/v1/improvements", public: false },
+  { name: "improvementsGet", method: "GET", path: "/api/v1/improvements/{record_id}", public: false },
+  { name: "improvementsUpdate", method: "PATCH", path: "/api/v1/improvements/{record_id}", public: false },
   { name: "usage", method: "GET", path: "/api/v1/usage", public: false },
   { name: "youtubeChannel", method: "GET", path: "/api/v1/youtube/channel", public: false },
 ] as const satisfies readonly RouteDefinition[];

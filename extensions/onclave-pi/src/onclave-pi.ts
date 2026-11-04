@@ -15,8 +15,9 @@ import { OnclaveHttpClient, resolveApiBase, type Delivery } from "./lib/http-cli
 import { loadDefaultRequestSigner } from "./lib/http-signer";
 import { resolveProjectLabel } from "./lib/project-label";
 import { isPiSubagent } from "./lib/subagent-eligibility";
-import { createAuthenticatedS3Client } from "@onclave/client";
+import { createAuthenticatedS3Client, createOnclaveClient } from "@onclave/client";
 import { registerVaultTools, type NotificationAgentProvider, type VaultToolOptions } from "./lib/vault-tools";
+import { registerImprovementTools } from "./lib/improvement-tools";
 import { registerPresentation } from "./lib/presentation";
 
 export { isPiSubagent, resolveApiBase };
@@ -188,6 +189,16 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
     if (runtime === null || runtimeGeneration !== generation || !runtime.registered || runtime.state !== "connected") return undefined;
     return runtime.card.agent_id;
   };
+  let improvementsClient: ReturnType<typeof createOnclaveClient> | undefined;
+  let improvementsEndpoint: string | undefined;
+  registerImprovementTools(pi, { client: async () => {
+    if (runtime === null) return undefined;
+    if (improvementsClient === undefined || improvementsEndpoint !== runtime.apiBase) {
+      improvementsEndpoint = runtime.apiBase;
+      improvementsClient = createOnclaveClient({ endpoint: runtime.apiBase });
+    }
+    return improvementsClient;
+  } });
   registerVaultTools(pi, {
     ...(options.vaultClient === undefined ? {} : { client: options.vaultClient }),
     endpoint: () => {
