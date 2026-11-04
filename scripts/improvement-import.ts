@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 import { createOnclaveClient, resolveEndpoint, type ImprovementDraft, type OnclaveClient } from "../packages/client/src/index";
 
 export type ImportRecord = ImprovementDraft & { provenance: Record<string, unknown> };
@@ -75,7 +76,7 @@ export async function applyImport(client: Pick<OnclaveClient, "createImprovement
   for (const draft of records) {
     await client.createImprovement(draft);
     const stored = await client.getImprovement(draft.id);
-    if (stored.id !== draft.id || stored.kind !== draft.kind || stored.body !== draft.body || JSON.stringify(stored.source_ids) !== JSON.stringify(draft.source_ids) || JSON.stringify(stored.source_paths) !== JSON.stringify(draft.source_paths) || JSON.stringify(stored.provenance) !== JSON.stringify(draft.provenance)) throw new Error(`Stored improvement verification failed for ${draft.id}`);
+    if (stored.id !== draft.id || stored.kind !== draft.kind || stored.body !== draft.body || JSON.stringify(stored.source_ids) !== JSON.stringify(draft.source_ids) || JSON.stringify(stored.source_paths) !== JSON.stringify(draft.source_paths) || !isDeepStrictEqual(stored.provenance, draft.provenance)) throw new Error(`Stored improvement verification failed for ${draft.id}`);
   }
 }
 

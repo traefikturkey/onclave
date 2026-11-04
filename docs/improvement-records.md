@@ -20,7 +20,7 @@ pnpm exec tsx scripts/improvement-import.ts --source-root ../../pi/profiles/defa
 
 After deployment and signed endpoint access are verified, add `--apply` to upload and GET-verify each record. Endpoint and signing credentials use the existing Onclave client configuration. Source files are never modified by the importer. Reruns cannot silently replace conflicting content.
 
-Only after successful import and verification should the active skills switch from Markdown paths to the Pi tool and the migrated data files leave Git tracking. Preserve Git history. Do not switch active instructions before service availability and data migration are established.
+Only after successful import and verification should the active skills switch from Markdown paths to the Pi tool and the migrated data files leave Git tracking. Preserve Git history. Do not switch active instructions before service availability and data migration are established. The initial deployment imported and verified 206 records and switched the default-profile skills. Historical local copies remain ignored, not active storage. Fresh Pi processes load the new tool and skill routing; existing processes need a settled reload or restart.
 
 ## Deployment boundary
 
