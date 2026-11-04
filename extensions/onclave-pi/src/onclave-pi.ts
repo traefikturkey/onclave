@@ -18,6 +18,8 @@ import { isPiSubagent } from "./lib/subagent-eligibility";
 import { createAuthenticatedS3Client, createOnclaveClient } from "@onclave/client";
 import { registerVaultTools, type NotificationAgentProvider, type VaultToolOptions } from "./lib/vault-tools";
 import { registerImprovementTools } from "./lib/improvement-tools";
+import { ArchiveUploader } from "./lib/archive-uploader";
+import { registerArchiveTools } from "./lib/archive-tools";
 import { registerPresentation } from "./lib/presentation";
 
 export { isPiSubagent, resolveApiBase };
@@ -84,6 +86,7 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
   const auditPath = join(dir, "v2-audit.jsonl");
   const audit: Audit = (event, metadata = {}) => appendAdapterAuditEvent(auditPath, event, metadata);
   let runtime: Runtime | null = null;
+  let archiveUploader: ArchiveUploader | undefined;
   let heartbeat: NodeJS.Timeout | null = null;
   let generation = 0;
   let runtimeGeneration: number | undefined;
@@ -112,6 +115,8 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
     const startedAt = nowMs();
     const reason = event.reason ?? "startup";
     startupAbort?.abort();
+    archiveUploader?.stop();
+    archiveUploader = undefined;
     const currentStartupAbort = new AbortController();
     startupAbort = currentStartupAbort;
     bootstrapUi = ctx.ui;
@@ -148,6 +153,7 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
         exposed = id;
         process.env.ONCLAVE_AGENT_ID = id;
         setAdapterToolsActive(pi, true);
+        archiveUploader?.sync();
       },
       onDisconnected: () => {
         if (generation !== currentGeneration) return;
@@ -163,6 +169,17 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
       runtime = startedRuntime;
       runtimeGeneration = currentGeneration;
       bootstrapState = "ready";
+      archiveUploader = new ArchiveUploader({
+        profileDir: getAgentDir(),
+        client: sharedClient,
+        onStatus: (status) => {
+          if (generation !== currentGeneration) return;
+          // Footer-only reporting avoids writing upload observations into the
+          // very session/audit files being archived.
+          ctx.ui.setStatus?.("onclave-archive", status.last_error === null ? undefined : `Archive pending: ${status.last_error}`);
+        },
+      });
+      archiveUploader.start();
       startupAbort = startupAbort === currentStartupAbort ? null : startupAbort;
       heartbeat = setInterval(() => { void heartbeatTick(runtime).catch(() => undefined); }, HEARTBEAT_INTERVAL_MS);
       heartbeat.unref?.();
@@ -180,7 +197,7 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
       }
     });
   });
-  pi.on("session_shutdown", async () => { generation += 1; startupAbort?.abort(); startupAbort = null; bootstrapState = "closed"; if (bootstrapUi !== undefined) refreshBootstrapFooter(bootstrapUi, bootstrapState, bootstrapUsesBws); bootstrapUi = undefined; setAdapterToolsActive(pi, false); if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; } const activeRuntime = runtime; runtime = null; runtimeGeneration = undefined; if (activeRuntime !== null) await shutdownAdapter(activeRuntime, audit); restoreExposedIdentity(); });
+  pi.on("session_shutdown", async () => { archiveUploader?.stop(); archiveUploader = undefined; generation += 1; startupAbort?.abort(); startupAbort = null; bootstrapState = "closed"; if (bootstrapUi !== undefined) refreshBootstrapFooter(bootstrapUi, bootstrapState, bootstrapUsesBws); bootstrapUi = undefined; setAdapterToolsActive(pi, false); if (heartbeat !== null) { clearInterval(heartbeat); heartbeat = null; } const activeRuntime = runtime; runtime = null; runtimeGeneration = undefined; if (activeRuntime !== null) await shutdownAdapter(activeRuntime, audit); restoreExposedIdentity(); });
   registerAdapterTools(pi, () => runtime, audit);
   registerPresentation(pi);
   // Vault tools are schema-only at discovery time. They reuse the endpoint
@@ -191,14 +208,16 @@ export default function onclavePi(pi: ExtensionAPI, options: OnclavePiOptions = 
   };
   let improvementsClient: ReturnType<typeof createOnclaveClient> | undefined;
   let improvementsEndpoint: string | undefined;
-  registerImprovementTools(pi, { client: async () => {
+  const sharedClient = async (): Promise<Awaited<ReturnType<typeof createOnclaveClient>> | undefined> => {
     if (runtime === null) return undefined;
     if (improvementsClient === undefined || improvementsEndpoint !== runtime.apiBase) {
       improvementsEndpoint = runtime.apiBase;
       improvementsClient = createOnclaveClient({ endpoint: runtime.apiBase });
     }
     return improvementsClient;
-  } });
+  };
+  registerImprovementTools(pi, { client: sharedClient });
+  registerArchiveTools(pi, { client: sharedClient, uploader: () => archiveUploader });
   registerVaultTools(pi, {
     ...(options.vaultClient === undefined ? {} : { client: options.vaultClient }),
     endpoint: () => {

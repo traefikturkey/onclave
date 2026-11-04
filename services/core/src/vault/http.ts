@@ -114,6 +114,12 @@ export const VAULT_ROUTE_TABLE = [
   { name: "improvementsCreate", method: "POST", path: "/api/v1/improvements", public: false },
   { name: "improvementsGet", method: "GET", path: "/api/v1/improvements/{record_id}", public: false },
   { name: "improvementsUpdate", method: "PATCH", path: "/api/v1/improvements/{record_id}", public: false },
+  { name: "archiveChunkUpload", method: "POST", path: "/api/v1/archive/chunks", public: false },
+  { name: "archiveManifestCommit", method: "POST", path: "/api/v1/archive/manifests", public: false },
+  { name: "archiveManifestList", method: "GET", path: "/api/v1/archive/manifests", public: false },
+  { name: "archiveManifestGet", method: "GET", path: "/api/v1/archive/manifests/{manifest_id}", public: false },
+  { name: "archiveDownload", method: "GET", path: "/api/v1/archive/manifests/{manifest_id}/download", public: false },
+  { name: "archiveSearch", method: "GET", path: "/api/v1/archive/manifests/{manifest_id}/search", public: false },
   { name: "usage", method: "GET", path: "/api/v1/usage", public: false },
   { name: "youtubeChannel", method: "GET", path: "/api/v1/youtube/channel", public: false },
 ] as const satisfies readonly RouteDefinition[];

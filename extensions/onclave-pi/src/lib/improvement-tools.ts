@@ -16,7 +16,12 @@ type ClientProvider = () => OnclaveClient | undefined | Promise<OnclaveClient | 
 type IdentityOptions = { runtimeDir?: string; machineId?: () => Promise<string>; git?: (cwd: string, args: string[]) => Promise<string> };
 export type ImprovementToolOptions = IdentityOptions & { client?: ClientProvider; timeoutMs?: number };
 
-async function persistentMachineId(runtimeDir: string): Promise<string> {
+export function onclaveRuntimeDir(activeProfile = getAgentDir()): string {
+  const profileKey = createHash("sha256").update(activeProfile).digest("hex").slice(0, 24);
+  return join(homedir(), ".pi", "runtime", profileKey, "onclave");
+}
+
+export async function persistentMachineId(runtimeDir: string): Promise<string> {
   await mkdir(runtimeDir, { recursive: true });
   const path = join(runtimeDir, "machine-identity");
   try {
@@ -52,8 +57,7 @@ function recordSummary(item: ImprovementRecord): string { return `${item.kind}: 
 
 export function createImprovementToolDefinitions(options: ImprovementToolOptions = {}): Array<Record<string, unknown>> {
   const activeProfile = getAgentDir();
-  const profileKey = createHash("sha256").update(activeProfile).digest("hex").slice(0, 24);
-  const runtimeDir = options.runtimeDir ?? join(homedir(), ".pi", "runtime", profileKey, "onclave");
+  const runtimeDir = options.runtimeDir ?? onclaveRuntimeDir(activeProfile);
   const git = options.git ?? (async (cwd: string, args: string[]) => (await execFileAsync("git", args, { cwd, windowsHide: true, timeout: 5_000, maxBuffer: 64 * 1024 })).stdout);
   const getClient = options.client ?? (() => undefined);
   const timeoutMs = options.timeoutMs ?? 10_000;

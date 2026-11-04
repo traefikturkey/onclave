@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createArchiveHandlers, type ArchiveService } from "./archive";
 import { Readable } from "node:stream";
 import { HttpError } from "./errors";
 import { log } from "../log";
@@ -87,6 +88,7 @@ export type VaultDoclingClient = {
 };
 
 export type VaultRouteDependencies = {
+  archive?: ArchiveService;
   keyStore: KeyStore;
   storage: VaultObjectStorage;
   repository: VaultRepository;
@@ -447,6 +449,7 @@ function usageDate(value: string | undefined, name: string): Date | undefined {
 /** Builds all keep and keep-thin Menos route handlers. Dropped routes are intentionally absent. */
 export function createVaultRouteHandlers(deps: VaultRouteDependencies): VaultHandlers {
   return {
+    ...(deps.archive === undefined ? {} : createArchiveHandlers(deps.archive)),
     live: () => jsonResponse({ status: "ok" }),
     health: async () => {
       const result = await deps.health();

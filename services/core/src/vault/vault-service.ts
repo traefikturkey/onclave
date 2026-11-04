@@ -1,4 +1,5 @@
 import { Client as MinioClient } from "minio";
+import { ArchiveRepository, ArchiveService } from "./archive";
 import type { Pool } from "pg";
 import { createVaultPool, migrateVaultDurability } from "./db";
 import { EmbeddingReindexService, type VaultEmbeddingReindexer } from "./embedding-reindex";
@@ -48,6 +49,7 @@ export type VaultService = Omit<VaultRouteDependencies, "health" | "ready" | "me
 
 export type VaultServiceOverrides = {
   keyStore?: KeyStore;
+  archive?: ArchiveService;
   storage?: VaultObjectStorage;
   repository?: VaultRuntimeRepository;
   embeddings?: EmbeddingClient;
@@ -146,6 +148,7 @@ export async function createVaultService(
     : configuredReadinessChecks(pool, storage, config));
 
   return {
+    archive: overrides.archive ?? (pool === undefined ? undefined : new ArchiveService(new ArchiveRepository(pool), storage)),
     keyStore,
     storage,
     repository,

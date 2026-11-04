@@ -11,6 +11,8 @@ COPY services/core/package.json services/core/
 RUN pnpm install --filter onclave-core --frozen-lockfile
 
 COPY packages/envelope/src packages/envelope/src
+# Shared dependency-free native archive wire contract used by core and client.
+COPY packages/client/src/archive.ts packages/client/src/archive.ts
 COPY services/core/src services/core/src
 
 WORKDIR /app/services/core

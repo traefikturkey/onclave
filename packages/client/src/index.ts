@@ -3,6 +3,8 @@ import { readFile } from "node:fs/promises";
 import { DEFAULT_SIGNING_KEY_PATH, loadRequestSigner, type RequestSigner } from "./http-signer";
 
 export * from "./http-signer";
+export * from "./archive";
+import { ARCHIVE_CHUNK_BYTES, archiveManifestId, type ArchiveChunk, type ArchiveManifest, type ArchiveManifestRecord, type ArchiveListOptions, type ArchiveListResponse, type ArchiveSearchResponse } from "./archive";
 
 export type JsonObject = Record<string, unknown>;
 export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
@@ -225,6 +227,23 @@ export class OnclaveClient {
     return this.json("POST", `/content/${encodeURIComponent(contentId)}/reprocess${query({ force: force ? "true" : undefined, notify_agent_id: notificationAgent })}`, undefined, signal);
   }
   reindexEmbeddings(contentId: string, signal?: AbortSignal): Promise<ReindexResponse> { return this.json("POST", `/content/${encodeURIComponent(contentId)}/reindex-embeddings`, undefined, signal); }
+  async uploadArchiveChunk(bytes: Uint8Array, signal?: AbortSignal): Promise<ArchiveChunk> {
+    if (bytes.byteLength < 1 || bytes.byteLength > ARCHIVE_CHUNK_BYTES) throw new Error("Archive chunk must contain 1 to 1048576 bytes");
+    const data = Buffer.from(bytes);
+    const sha256 = createHash("sha256").update(data).digest("hex");
+    return this.json("POST", "/archive/chunks", { sha256, data_base64: data.toString("base64") }, signal);
+  }
+  async commitArchiveManifest(manifest: ArchiveManifest, signal?: AbortSignal): Promise<ArchiveManifestRecord> {
+    if (archiveManifestId(manifest) !== manifest.id) throw new Error("Archive manifest hash mismatch");
+    return this.json("POST", "/archive/manifests", manifest, signal);
+  }
+  listArchiveManifests(options: ArchiveListOptions = {}, signal?: AbortSignal): Promise<ArchiveListResponse> { return this.json("GET", `/archive/manifests${query(options)}`, undefined, signal); }
+  getArchiveManifest(id: string, signal?: AbortSignal): Promise<ArchiveManifestRecord> { return this.json("GET", `/archive/manifests/${encodeURIComponent(id)}`, undefined, signal); }
+  async downloadArchive(id: string, options: { offset?: number; limit?: number } = {}, signal?: AbortSignal): Promise<Buffer> {
+    const response = await this.request("GET", `/archive/manifests/${encodeURIComponent(id)}/download${query(options)}`, undefined, signal);
+    return Buffer.from(await response.arrayBuffer());
+  }
+  searchArchive(id: string, options: { q: string; offset?: number }, signal?: AbortSignal): Promise<ArchiveSearchResponse> { return this.json("GET", `/archive/manifests/${encodeURIComponent(id)}/search${query(options)}`, undefined, signal); }
   createImprovement(draft: ImprovementDraft, signal?: AbortSignal): Promise<ImprovementRecord> { return this.json("POST", "/improvements", draft, signal); }
   getImprovement(id: string, signal?: AbortSignal): Promise<ImprovementRecord> { return this.json("GET", `/improvements/${encodeURIComponent(id)}`, undefined, signal); }
   listImprovements(options: { q?: string; kind?: ImprovementKind; project?: string; limit?: number; offset?: number } = {}, signal?: AbortSignal): Promise<ImprovementListResponse> { return this.json("GET", `/improvements${query(options)}`, undefined, signal); }
