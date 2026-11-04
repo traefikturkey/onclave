@@ -76,6 +76,9 @@ async function* candidates(root: string, signal?: AbortSignal): AsyncGenerator<C
 type Observation = Awaited<ReturnType<typeof observe>>;
 async function observe(path: string) { return stat(path, { bigint: true }); }
 function fingerprint(s: Observation): string { return [s.dev, s.ino, s.size, s.mtimeNs, s.ctimeNs, s.birthtimeNs].join(":"); }
+function unchanged(previous: Checkpoint | undefined, observed: Observation, machine: string, sourcePath: string): boolean {
+  return observed.isFile() && previous?.observed === fingerprint(observed) && previous.manifest.source.uploader_machine_id === machine && previous.manifest.source.source_path === sourcePath;
+}
 
 function sourceAttribution(candidate: Candidate, profile: string, machine: string, first: Buffer): ArchiveSource {
   const source: ArchiveSource = { source_type: candidate.type, uploader_machine_id: machine, profile, source_path: candidate.sourcePath, origin_machine_id: null, session_id: null, project: null, parent_session_id: null, parent_source_path: null };
@@ -248,6 +251,17 @@ export class ArchiveUploader {
   private async *upload(root: string, candidate: Candidate, profile: string, machine: string, checkpointDir: string, client: ArchiveClient, signal: AbortSignal): AsyncGenerator<void> {
     const key = hash(`${machine}\0${root}\0${candidate.sourcePath}`);
     const checkpointPath = join(checkpointDir, `${key}.json`);
+    signal.throwIfAborted();
+    await safePath(root, candidate.path);
+    // Most sources are unchanged. Avoid creating a claim or opening the source
+    // unless its committed checkpoint differs. Changed sources are checked again
+    // under the claim so another uploader's progress is observed before uploading.
+    const observed = await observe(candidate.path);
+    if (unchanged(await readCheckpoint(checkpointPath), observed, machine, candidate.sourcePath)) {
+      this.current.scanned++;
+      this.current.unchanged++;
+      return;
+    }
     const claim = await lockSource(join(checkpointDir, `${key}.lock`));
     if (!claim) { this.current.busy++; return; }
     try {
@@ -260,7 +274,7 @@ export class ArchiveUploader {
         if (!before.isFile() || fingerprint(before) !== fingerprint(await observe(candidate.path))) throw new Error("archive source changed before reading");
         this.current.scanned++;
         const previous = await readCheckpoint(checkpointPath);
-        if (previous?.observed === fingerprint(before) && previous.manifest.source.uploader_machine_id === machine && previous.manifest.source.source_path === candidate.sourcePath) { this.current.unchanged++; return; }
+        if (unchanged(previous, before, machine, candidate.sourcePath)) { this.current.unchanged++; return; }
         const size = Number(before.size);
         if (size > ARCHIVE_MAX_CHUNKS * ARCHIVE_CHUNK_BYTES) throw new Error(`archive source exceeds ${ARCHIVE_MAX_CHUNKS} chunks: ${candidate.sourcePath}`);
         const chunks: ArchiveChunk[] = [];

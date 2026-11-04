@@ -115,6 +115,33 @@ describe("native archive uploader", () => {
     expect(await readFile(join(f.runtimeDir, "archive-checkpoints", saved), "utf8")).not.toContain("partial");
   });
 
+  it("skips unchanged sources before claiming them, but still requires a claim for changes", async () => {
+    const f = await fixture();
+    const path = await f.file("sessions/unchanged.jsonl", "original");
+    await f.uploader.scan();
+    const checkpointDir = join(f.runtimeDir, "archive-checkpoints");
+    const checkpoint = (await readdir(checkpointDir)).find((name) => name.endsWith(".json"))!;
+    const lock = join(checkpointDir, checkpoint.replace(/\.json$/, ".lock"));
+    const marker = join(lock, `${process.pid}-active-owner`);
+    await mkdir(lock);
+    await writeFile(marker, "existing claim");
+
+    const restarted = new ArchiveUploader(f.options);
+    await restarted.scan();
+    expect(restarted.status()).toMatchObject({ scanned: 1, unchanged: 1, busy: 0, errors: 0 });
+    expect(await readFile(marker, "utf8")).toBe("existing claim");
+    expect(f.client.commitArchiveManifest).toHaveBeenCalledTimes(1);
+
+    await writeFile(path, "modified");
+    await restarted.scan();
+    expect(restarted.status()).toMatchObject({ unchanged: 1, busy: 1, errors: 0 });
+    expect(f.client.commitArchiveManifest).toHaveBeenCalledTimes(1);
+    await rm(lock, { recursive: true });
+    await restarted.scan();
+    expect(f.client.commitArchiveManifest).toHaveBeenCalledTimes(2);
+    expect(restored(f.manifests.at(-1)!, f.chunks).toString()).toBe("modified");
+  });
+
   it("serializes concurrent instances of the same source and commits one immutable snapshot", async () => {
     const f = await fixture();
     await f.file("sessions/shared.jsonl");
